@@ -1,0 +1,67 @@
+import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
+import { Link, Outlet, useLoaderData, useRouteError } from "@remix-run/react";
+import { boundary } from "@shopify/shopify-app-remix/server";
+import { AppProvider } from "@shopify/shopify-app-remix/react";
+import { NavMenu } from "@shopify/app-bridge-react";
+import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
+
+import { authenticate } from "../shopify.server";
+
+export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
+
+export const loader = async ({ request }: LoaderFunctionArgs) => {
+  await authenticate.admin(request);
+
+  return Response.json(
+    { apiKey: process.env.SHOPIFY_API_KEY || "" },
+    {
+      headers: {
+        "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+      },
+    },
+  );
+};
+
+export default function App() {
+  const { apiKey } = useLoaderData<typeof loader>();
+
+  return (
+    <AppProvider isEmbeddedApp apiKey={apiKey}>
+      {/* Navigation renders in the Shopify admin sidebar */}
+      <NavMenu>
+        <Link to="/app/dashboard" rel="home">Dashboard</Link>
+        <Link to="/app/settings">Settings</Link>
+
+        {/* Cost Config */}
+        <Link to="/app/materials">Materials</Link>
+        <Link to="/app/equipment">Equipment</Link>
+        <Link to="/app/templates">Cost Templates</Link>
+        <Link to="/app/variants">Variants</Link>
+
+        {/* Donation Setup */}
+        <Link to="/app/causes">Causes</Link>
+        <Link to="/app/products">Products</Link>
+
+        {/* Finance */}
+        <Link to="/app/reporting">Reporting</Link>
+        <Link to="/app/expenses">Expenses</Link>
+
+        {/* Operations */}
+        <Link to="/app/provider-connections">Provider Connections</Link>
+        <Link to="/app/order-history">Order History</Link>
+      </NavMenu>
+      <Outlet />
+    </AppProvider>
+  );
+}
+
+// Shopify needs Remix to catch some thrown responses, so that their headers are included in the response.
+export function ErrorBoundary() {
+  return boundary.error(useRouteError());
+}
+
+export const headers: HeadersFunction = (headersArgs) => {
+  return boundary.headers(headersArgs);
+};

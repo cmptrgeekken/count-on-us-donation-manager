@@ -1,0 +1,246 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Shopify session storage — managed by @shopify/shopify-app-session-storage-prisma
+model Session {
+  id                  String    @id
+  shop                String
+  state               String
+  isOnline            Boolean   @default(false)
+  scope               String?
+  expires             DateTime?
+  accessToken         String
+  userId              BigInt?
+  firstName           String?
+  lastName            String?
+  email               String?
+  accountOwner        Boolean   @default(false)
+  locale              String?
+  collaborator        Boolean?  @default(false)
+  emailVerified       Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+// Phase 1 tables
+
+model Shop {
+  id            String       @id @default(cuid())
+  shopId        String       @unique
+  shopifyDomain String       @unique
+  planTier      String?
+  paymentRate   Decimal?     @db.Decimal(5, 4)
+  planOverride  Boolean      @default(false)
+  mistakeBuffer Decimal?     @db.Decimal(5, 4)
+  wizardStep    Int          @default(0)
+  catalogSynced Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  wizardState   WizardState?
+  auditLogs     AuditLog[]
+}
+
+model WizardState {
+  id             String   @id @default(cuid())
+  shopId         String   @unique
+  shop           Shop     @relation(fields: [shopId], references: [shopId])
+  currentStep    Int      @default(0)
+  completedSteps Int[]
+  skippedSteps   Int[]
+  updatedAt      DateTime @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  shopId    String
+  shop      Shop     @relation(fields: [shopId], references: [shopId])
+  entity    String
+  entityId  String?
+  action    String
+  actor     String
+  payload   Json?
+  createdAt DateTime @default(now())
+
+  @@index([shopId, createdAt])
+}
+
+// No FK to Shop — DeletionJob must outlive the Shop row it references
+model DeletionJob {
+  id           String   @id @default(cuid())
+  shopId       String   @unique
+  scheduledFor DateTime
+  status       String   @default("pending")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+// Phase 2 tables
+
+model MaterialLibraryItem {
+  id               String   @id @default(cuid())
+  shopId           String
+  name             String
+  type             String   // "production" | "shipping"
+  costingModel     String?  // "yield" | "uses" — null for shipping materials
+  purchasePrice    Decimal  @db.Decimal(10, 4)
+  purchaseQty      Decimal  @db.Decimal(10, 4)
+  perUnitCost      Decimal  @db.Decimal(10, 6)  // derived: purchasePrice ÷ purchaseQty
+  totalUsesPerUnit Decimal? @db.Decimal(10, 4)  // uses-based only
+  unitDescription  String?
+  status           String   @default("active")  // "active" | "inactive"
+  notes            String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  templateLines CostTemplateMaterialLine[]
+  variantLines  VariantMaterialLine[]
+
+  @@index([shopId, status])
+}
+
+model EquipmentLibraryItem {
+  id         String   @id @default(cuid())
+  shopId     String
+  name       String
+  hourlyRate Decimal? @db.Decimal(10, 4)
+  perUseCost Decimal? @db.Decimal(10, 4)
+  status     String   @default("active")
+  notes      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  templateLines CostTemplateEquipmentLine[]
+  variantLines  VariantEquipmentLine[]
+
+  @@index([shopId, status])
+}
+
+model CostTemplate {
+  id          String   @id @default(cuid())
+  shopId      String
+  name        String
+  description String?
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  materialLines  CostTemplateMaterialLine[]
+  equipmentLines CostTemplateEquipmentLine[]
+  variantConfigs VariantCostConfig[]
+
+  @@index([shopId, status])
+}
+
+model CostTemplateMaterialLine {
+  id             String              @id @default(cuid())
+  templateId     String
+  template       CostTemplate        @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  materialId     String
+  material       MaterialLibraryItem @relation(fields: [materialId], references: [id])
+  yield          Decimal?            @db.Decimal(10, 4)
+  quantity       Decimal             @db.Decimal(10, 4)
+  usesPerVariant Decimal?            @db.Decimal(10, 4)
+}
+
+model CostTemplateEquipmentLine {
+  id          String               @id @default(cuid())
+  templateId  String
+  template    CostTemplate         @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  equipmentId String
+  equipment   EquipmentLibraryItem @relation(fields: [equipmentId], references: [id])
+  minutes     Decimal?             @db.Decimal(10, 4)
+  uses        Decimal?             @db.Decimal(10, 4)
+}
+
+model Product {
+  id        String   @id @default(cuid())
+  shopId    String
+  shopifyId String   // full GID: "gid://shopify/Product/123"
+  title     String
+  handle    String
+  status    String   // "active" | "archived" | "draft"
+  syncedAt  DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  variants Variant[]
+
+  @@unique([shopId, shopifyId])
+  @@index([shopId])
+}
+
+model Variant {
+  id        String   @id @default(cuid())
+  shopId    String
+  shopifyId String   // full GID: "gid://shopify/ProductVariant/456"
+  productId String
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  title     String
+  sku       String?
+  price     Decimal  @db.Decimal(10, 2)
+  syncedAt  DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  costConfig VariantCostConfig?
+
+  @@unique([shopId, shopifyId])
+  @@index([shopId])
+}
+
+model VariantCostConfig {
+  id            String        @id @default(cuid())
+  shopId        String
+  variantId     String        @unique
+  variant       Variant       @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  templateId    String?
+  template      CostTemplate? @relation(fields: [templateId], references: [id])
+  laborMinutes  Decimal?      @db.Decimal(10, 4)
+  laborRate     Decimal?      @db.Decimal(10, 4)
+  mistakeBuffer Decimal?      @db.Decimal(5, 4)  // overrides Shop.mistakeBuffer when set
+  lineItemCount Int           @default(0)         // maintained on insert/delete of material+equipment lines (ADR-004)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  materialLines  VariantMaterialLine[]
+  equipmentLines VariantEquipmentLine[]
+
+  @@index([shopId])
+}
+
+model VariantMaterialLine {
+  id             String              @id @default(cuid())
+  shopId         String
+  configId       String
+  config         VariantCostConfig   @relation(fields: [configId], references: [id], onDelete: Cascade)
+  materialId     String
+  material       MaterialLibraryItem @relation(fields: [materialId], references: [id])
+  yield          Decimal?            @db.Decimal(10, 4)
+  quantity       Decimal             @db.Decimal(10, 4)
+  usesPerVariant Decimal?            @db.Decimal(10, 4)
+
+  @@index([shopId])
+}
+
+model VariantEquipmentLine {
+  id          String               @id @default(cuid())
+  shopId      String
+  configId    String
+  config      VariantCostConfig    @relation(fields: [configId], references: [id], onDelete: Cascade)
+  equipmentId String
+  equipment   EquipmentLibraryItem @relation(fields: [equipmentId], references: [id])
+  minutes     Decimal?             @db.Decimal(10, 4)
+  uses        Decimal?             @db.Decimal(10, 4)
+
+  @@index([shopId])
+}
