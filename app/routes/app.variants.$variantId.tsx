@@ -21,6 +21,7 @@ import { Prisma } from "@prisma/client";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
+import l10n from "../utils/localization";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
@@ -28,6 +29,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
   const { variantId } = params;
+
+  const shop = await prisma.shop.findUnique({
+    where: { shopId },
+    select: { mistakeBuffer: true, defaultLaborRate: true },
+  });
 
   const variant = await prisma.variant.findFirst({
     where: { id: variantId, shopId },
@@ -80,8 +86,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           id: config.id,
           templateId: config.templateId,
           templateName: config.template?.name ?? null,
+          defaultLaborRate: shop?.defaultLaborRate,
           laborMinutes: config.laborMinutes?.toString() ?? "",
           laborRate: config.laborRate?.toString() ?? "",
+          defaultMistakeBuffer: shop?.mistakeBuffer
+            ? (Number(shop.mistakeBuffer) * 100).toFixed(2)
+            : "",
           mistakeBuffer: config.mistakeBuffer
             ? (Number(config.mistakeBuffer) * 100).toFixed(2)
             : "",
@@ -305,12 +315,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return Response.json({
       ok: true,
       preview: {
-        laborCost: result.laborCost.toFixed(4),
-        materialCost: result.materialCost.toFixed(4),
-        packagingCost: result.packagingCost.toFixed(4),
-        equipmentCost: result.equipmentCost.toFixed(4),
-        mistakeBufferAmount: result.mistakeBufferAmount.toFixed(4),
-        totalCost: result.totalCost.toFixed(4),
+        laborCost: result.laborCost.toFixed(2),
+        materialCost: result.materialCost.toFixed(2),
+        packagingCost: result.packagingCost.toFixed(2),
+        equipmentCost: result.equipmentCost.toFixed(2),
+        mistakeBufferAmount: result.mistakeBufferAmount.toFixed(2),
+        totalCost: result.totalCost.toFixed(2),
       },
     });
   }
@@ -365,10 +375,16 @@ export default function VariantDetailPage() {
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string; preview?: Record<string, string> }>();
 
+  const { formatMoney, formatPct, getCurrencySymbol } = l10n();
+
+  const defaultLaborRate = config?.defaultLaborRate;
+  const defaultMistakeBuffer = config?.defaultMistakeBuffer;
+
   const [assignTemplateOpen, setAssignTemplateOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState(templates[0]?.id ?? "");
 
   const [editingLabor, setEditingLabor] = useState(false);
+
   const [laborMinutes, setLaborMinutes] = useState(config?.laborMinutes ?? "");
   const [laborRate, setLaborRate] = useState(config?.laborRate ?? "");
 
@@ -418,7 +434,7 @@ export default function VariantDetailPage() {
           <BlockStack gap="200">
             <InlineStack gap="400">
               <Text as="p" variant="bodyMd" tone="subdued">SKU: {variant.sku || "—"}</Text>
-              <Text as="p" variant="bodyMd" tone="subdued">Price: ${Number(variant.price).toFixed(2)}</Text>
+              <Text as="p" variant="bodyMd" tone="subdued">Price: {formatMoney(variant.price)}</Text>
             </InlineStack>
           </BlockStack>
         </Card>
@@ -478,7 +494,8 @@ export default function VariantDetailPage() {
                     </div>
                     <div style={{ flex: 1 }}>
                       <TextField
-                        label="Hourly rate ($)"
+                        label={`Hourly rate (${getCurrencySymbol()})`}
+                        placeholder={`${formatMoney(config.defaultLaborRate)}/hr (Shop default)`}
                         name="laborRate"
                         type="number"
                         min={0}
@@ -486,6 +503,7 @@ export default function VariantDetailPage() {
                         value={laborRate}
                         onChange={setLaborRate}
                         autoComplete="off"
+                        helpText="Leave blank to use the global default from Settings"
                       />
                     </div>
                   </InlineStack>
@@ -498,7 +516,7 @@ export default function VariantDetailPage() {
                   {config?.laborMinutes ? `${config.laborMinutes} min` : "Not set"}
                 </Text>
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  {config?.laborRate ? `$${Number(config.laborRate).toFixed(2)}/hr` : ""}
+                  {config?.laborRate ? `${formatMoney(config.laborRate)}/hr` : `${formatMoney(config.defaultLaborRate)}/hr (Shop Default)`}
                 </Text>
               </InlineStack>
             )}
@@ -526,6 +544,7 @@ export default function VariantDetailPage() {
                   <input type="hidden" name="intent" value="update-mistake-buffer" />
                   <TextField
                     label="Mistake buffer (%)"
+                    placeholder={`${formatPct(defaultMistakeBuffer / 100)} (Shop Default)`}
                     name="mistakeBuffer"
                     type="number"
                     min={0}
@@ -541,7 +560,7 @@ export default function VariantDetailPage() {
               </fetcher.Form>
             ) : (
               <Text as="p" variant="bodyMd" tone="subdued">
-                {config?.mistakeBuffer ? `${config.mistakeBuffer}%` : "Using global default"}
+                {config?.mistakeBuffer ? `${formatPct(config.mistakeBuffer / 100)}` : `${formatPct(defaultMistakeBuffer / 100)} (Shop Default)`}
               </Text>
             )}
           </BlockStack>
@@ -552,7 +571,14 @@ export default function VariantDetailPage() {
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
               <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Material Lines</Text>
+                <InlineStack gap="200" blockAlign="center">
+                  <Text as="h2" variant="headingMd">Material Lines</Text>
+                  {config && config.materialLines.length > 0 && (
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {config.materialLines.length}
+                    </Text>
+                  )}
+                </InlineStack>
                 <Text as="p" variant="bodyMd" tone="subdued">
                   Override template lines or add variant-specific materials.
                 </Text>
@@ -571,10 +597,8 @@ export default function VariantDetailPage() {
                     <BlockStack gap="100">
                       <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
                       <Text as="p" variant="bodyMd" tone="subdued">
-                        {line.materialType === "shipping"
-                          ? `Qty: ${line.quantity}`
-                          : line.costingModel === "yield"
-                          ? `Yield: ${line.yield} — Qty: ${line.quantity}`
+                        {line.costingModel === "yield"
+                          ? `Qty: ${line.quantity} — Yield: ${line.yield}`
                           : `Uses: ${line.usesPerVariant}`}
                       </Text>
                     </BlockStack>
@@ -595,7 +619,14 @@ export default function VariantDetailPage() {
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
               <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Equipment Lines</Text>
+                <InlineStack gap="200" blockAlign="center">
+                  <Text as="h2" variant="headingMd">Equipment Lines</Text>
+                  {config && config.equipmentLines.length > 0 && (
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {config.equipmentLines.length}
+                    </Text>
+                  )}
+                </InlineStack>
                 <Text as="p" variant="bodyMd" tone="subdued">
                   Override template lines or add variant-specific equipment.
                 </Text>
@@ -644,28 +675,28 @@ export default function VariantDetailPage() {
               <BlockStack gap="200">
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Labor</Text>
-                  <Text as="p" variant="bodyMd">${preview.laborCost}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.laborCost)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Materials (production)</Text>
-                  <Text as="p" variant="bodyMd">${preview.materialCost}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.materialCost)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Packaging (shipping materials)</Text>
-                  <Text as="p" variant="bodyMd">${preview.packagingCost}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.packagingCost)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Equipment</Text>
-                  <Text as="p" variant="bodyMd">${preview.equipmentCost}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.equipmentCost)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Mistake buffer</Text>
-                  <Text as="p" variant="bodyMd">${preview.mistakeBufferAmount}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.mistakeBufferAmount)}</Text>
                 </InlineStack>
                 <Divider />
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd" fontWeight="semibold">Total cost</Text>
-                  <Text as="p" variant="bodyMd" fontWeight="semibold">${preview.totalCost}</Text>
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">{formatMoney(preview.totalCost)}</Text>
                 </InlineStack>
               </BlockStack>
             )}
@@ -713,9 +744,13 @@ export default function VariantDetailPage() {
             const fd = new FormData();
             fd.append("intent", "add-material-line");
             fd.append("materialId", selectedMaterialId);
-            fd.append("quantity", matQty);
-            if (selectedMaterial?.costingModel === "yield" && matYield) fd.append("yield", matYield);
-            if (selectedMaterial?.costingModel === "uses" && matUses) fd.append("usesPerVariant", matUses);
+            
+            if (selectedMaterial?.costingModel === "yield" && matYield) {
+              fd.append("quantity", matQty);
+              fd.append("yield", matYield);
+            }
+            if (selectedMaterial?.costingModel === "uses" && matUses)
+              fd.append("usesPerVariant", matUses);
             fetcher.submit(fd, { method: "post" });
             setAddMaterialOpen(false);
             setMatQty("1"); setMatYield(""); setMatUses("");
@@ -731,14 +766,37 @@ export default function VariantDetailPage() {
               value={selectedMaterialId}
               onChange={(v) => { setSelectedMaterialId(v); setMatYield(""); setMatUses(""); }}
             />
-            {selectedMaterial?.type !== "shipping" && (
-              <TextField label="Quantity" type="number" min={0} step={0.001} value={matQty} onChange={setMatQty} autoComplete="off" />
-            )}
             {selectedMaterial?.costingModel === "yield" && (
-              <TextField label="Yield" type="number" min={0} step={0.001} value={matYield} onChange={setMatYield} autoComplete="off" />
+              <>
+                <TextField
+                  label="Material Quantity" 
+                  type="number" 
+                  min={0} step={1}
+                  value={matQty} 
+                  onChange={setMatQty} 
+                  autoComplete="off"
+                  helpText="Number of pieces of this material required to produce this variant." />
+                <TextField 
+                  label="Yield Per Piece"
+                  type="number" 
+                  min={0} 
+                  step={1}
+                  value={matYield}
+                  onChange={setMatYield}
+                  autoComplete="off"
+                  helpText="Number of variants produced from one piece of this material." />
+              </>
             )}
             {selectedMaterial?.costingModel === "uses" && (
-              <TextField label="Uses per variant" type="number" min={0} step={1} value={matUses} onChange={setMatUses} autoComplete="off" />
+              <TextField 
+                label="Uses per variant"
+                type="number"
+                min={0}
+                step={1}
+                value={matUses}
+                onChange={setMatUses}
+                autoComplete="off"
+                helpText="Number of uses of the material this variant requires." />
             )}
           </BlockStack>
         </Modal.Section>

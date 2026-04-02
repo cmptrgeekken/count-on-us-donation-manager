@@ -34,20 +34,22 @@ model Session {
 // Phase 1 tables
 
 model Shop {
-  id            String       @id @default(cuid())
-  shopId        String       @unique
-  shopifyDomain String       @unique
-  planTier      String?
-  paymentRate   Decimal?     @db.Decimal(5, 4)
-  planOverride  Boolean      @default(false)
-  mistakeBuffer Decimal?     @db.Decimal(5, 4)
-  wizardStep    Int          @default(0)
-  catalogSynced Boolean      @default(false)
-  createdAt     DateTime     @default(now())
-  updatedAt     DateTime     @updatedAt
+  id               String       @id @default(cuid())
+  shopId           String       @unique
+  shopifyDomain    String       @unique
+  planTier         String?
+  paymentRate      Decimal?     @db.Decimal(5, 4)
+  planOverride     Boolean      @default(false)
+  currency         String       @default("USD")
+  mistakeBuffer    Decimal?     @db.Decimal(5, 4)
+  defaultLaborRate Decimal? @db.Decimal(10, 4)
+  wizardStep       Int          @default(0)
+  catalogSynced    Boolean      @default(false)
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
 
-  wizardState   WizardState?
-  auditLogs     AuditLog[]
+  wizardState      WizardState?
+  auditLogs        AuditLog[]
 }
 
 model WizardState {
@@ -206,7 +208,7 @@ model VariantCostConfig {
   templateId    String?
   template      CostTemplate? @relation(fields: [templateId], references: [id])
   laborMinutes  Decimal?      @db.Decimal(10, 4)
-  laborRate     Decimal?      @db.Decimal(10, 4)
+  laborRate     Decimal?      @db.Decimal(10, 4) // overrides Shop.defaultLaborRate when set
   mistakeBuffer Decimal?      @db.Decimal(5, 4)  // overrides Shop.mistakeBuffer when set
   lineItemCount Int           @default(0)         // maintained on insert/delete of material+equipment lines (ADR-004)
   createdAt     DateTime      @default(now())

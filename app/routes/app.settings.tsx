@@ -18,6 +18,7 @@ import { TitleBar } from "@shopify/app-bridge-react";
 
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
+import l10n from "../utils/localization";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -30,6 +31,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       paymentRate: true,
       planOverride: true,
       mistakeBuffer: true,
+      defaultLaborRate: true
     },
   });
 
@@ -42,6 +44,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     mistakeBuffer: shop?.mistakeBuffer
       ? (Number(shop.mistakeBuffer) * 100).toFixed(2)
       : "",
+    defaultLaborRate: shop?.defaultLaborRate
+      ? Number(shop.defaultLaborRate).toFixed(2)
+      : ""
   });
 };
 
@@ -114,26 +119,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: true, message: "Payment rate updated." });
   }
 
-  if (intent === "update-mistake-buffer") {
+  if (intent === "update-cost-defaults") {
     const rateStr = formData.get("mistakeBuffer")?.toString() ?? "";
     const rate = parseFloat(rateStr);
+
+    const defaultLaborRateStr = formData.get("defaultLaborRate")?.toString() ?? "";
+    const defaultLaborRate = parseFloat(defaultLaborRateStr);
 
     if (isNaN(rate) || rate < 0 || rate > 100) {
       return Response.json({ ok: false, message: "Mistake buffer must be a number between 0 and 100." }, { status: 400 });
     }
 
+    if (isNaN(defaultLaborRate) || defaultLaborRate < 0) {
+      return Response.json({ ok: false, message: "Labor rate must be greater than 0." }, { status: 400 });
+    }
+
     await prisma.shop.update({
       where: { shopId },
-      data: { mistakeBuffer: rate / 100 },
+      data: {
+        mistakeBuffer: rate / 100,
+        defaultLaborRate 
+      },
     });
 
     await prisma.auditLog.create({
       data: {
         shopId,
         entity: "Shop",
-        action: "MISTAKE_BUFFER_UPDATED",
+        action: "COST_DEFAULTS_UPDATED",
         actor: "merchant",
-        payload: { mistakeBuffer: rate / 100 },
+        payload: { mistakeBuffer: rate / 100, defaultLaborRate },
       },
     });
 
@@ -144,14 +159,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Settings() {
-  const { planTier, paymentRate, planOverride, mistakeBuffer } = useLoaderData<typeof loader>();
+  const { planTier, paymentRate, planOverride, mistakeBuffer, defaultLaborRate } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const { formatMoney, formatPct, getCurrencySymbol } = l10n();
 
   // Accessible status announcement for screen readers
   const statusRef = useRef<HTMLDivElement>(null);
 
   const [rateInput, setRateInput] = useState(paymentRate ?? "");
   const [bufferInput, setBufferInput] = useState(mistakeBuffer ?? "");
+  const [laborRateInput, setLaborRateInput] = useState(defaultLaborRate ?? "");
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
@@ -205,7 +222,7 @@ export default function Settings() {
                 </Text>
               </BlockStack>
               <Text as="p" variant="bodyMd">
-                {paymentRate !== null ? `${paymentRate}%` : "Not detected"}
+                {paymentRate !== null ? `${formatPct(paymentRate / 100)}` : "Not detected"}
               </Text>
             </InlineStack>
 
@@ -261,7 +278,8 @@ export default function Settings() {
               Cost Defaults
             </Text>
             <Divider />
-            <InlineStack align="space-between" blockAlign="center">
+            
+            {/* <InlineStack align="space-between" blockAlign="center">
               <BlockStack gap="100">
                 <Text as="p" variant="bodyMd" fontWeight="semibold">
                   Mistake buffer
@@ -270,10 +288,10 @@ export default function Settings() {
                   Applied to production material costs on every variant. Can be overridden per variant.
                 </Text>
               </BlockStack>
-            </InlineStack>
+            </InlineStack> */}
             <fetcher.Form method="post">
-              <input type="hidden" name="intent" value="update-mistake-buffer" />
-              <InlineStack gap="200" blockAlign="end">
+              <input type="hidden" name="intent" value="update-cost-defaults" />
+              <div style={{ flex: 1 }}>
                 <TextField
                   label="Mistake buffer (%)"
                   name="mistakeBuffer"
@@ -284,14 +302,29 @@ export default function Settings() {
                   autoComplete="off"
                   value={bufferInput}
                   onChange={setBufferInput}
-                  helpText="e.g. 5 = 5% added to material costs to account for waste"
-                  connectedRight={
-                    <Button submit loading={isSubmitting}>
-                      Save
-                    </Button>
-                  }
-                />
-              </InlineStack>
+                  helpText={`e.g. 5 = ${formatPct(.05)}. Added to production material costs to account for waste.`}
+                 />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label={`Default Labor Rate (${getCurrencySymbol()}/hr)`}
+                    name="defaultLaborRate"
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={0.1}
+                    autoComplete="off"
+                    value={laborRateInput}
+                    onChange={setLaborRateInput}
+                    helpText={`e.g., ${formatMoney(15)}/hr. Used when calculating labor costs for producing product variants.`}
+                  />
+                </div>
+
+                <div style={{ flex: 1 }}>
+                  <Button submit loading={isSubmitting}>
+                    Save
+                  </Button>
+                </div>
             </fetcher.Form>
           </BlockStack>
         </Card>

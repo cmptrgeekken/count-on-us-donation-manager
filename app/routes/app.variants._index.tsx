@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useFetcher, useRouteError, Link } from "@remix-run/react";
+import { useLoaderData, useFetcher, useRouteError, useNavigate, useSearchParams, Link } from "@remix-run/react";
 import {
   Page,
   Card,
@@ -20,6 +20,7 @@ import {
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
+import l10n from "../utils/localization"
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
@@ -142,6 +143,11 @@ export default function VariantsPage() {
   const { variants, products, templates, filterProductId, filterConfigured } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const navigate = useNavigate();
+
+  const { formatMoney } = l10n();
+
+  const [searchParams] = useSearchParams();
 
   const [assignOpen, setAssignOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState(templates[0]?.id ?? "");
@@ -203,7 +209,7 @@ export default function VariantsPage() {
         <Text as="span" variant="bodyMd" tone="subdued">{v.sku || "—"}</Text>
       </IndexTable.Cell>
       <IndexTable.Cell>
-        <Text as="span" variant="bodyMd">${Number(v.price).toFixed(2)}</Text>
+        <Text as="span" variant="bodyMd">{formatMoney(v.price)}</Text>
       </IndexTable.Cell>
       <IndexTable.Cell>
         <Text as="span" variant="bodyMd" tone="subdued">{v.templateName ?? "—"}</Text>
@@ -221,12 +227,26 @@ export default function VariantsPage() {
     </IndexTable.Row>
   ));
 
+  function removeFilter(key: string) {
+    const params = new URLSearchParams(searchParams);
+    params.delete(key);
+    navigate(`?${params.toString()}`);
+  }
+
   const appliedFilters = [];
+  if (filterProductId) {
+    const productLabel = products.find((p: { id: string; title: string }) => p.id === filterProductId)?.title ?? filterProductId;
+    appliedFilters.push({
+      key: "product",
+      label: `Product: ${productLabel}`,
+      onRemove: () => removeFilter("product"),
+    });
+  }
   if (filterConfigured) {
     appliedFilters.push({
       key: "configured",
       label: filterConfigured === "yes" ? "Configured only" : "Not configured only",
-      onRemove: () => {},
+      onRemove: () => removeFilter("configured"),
     });
   }
 
@@ -282,10 +302,10 @@ export default function VariantsPage() {
                         ]}
                         value={filterProductId}
                         onChange={(v) => {
-                          const url = new URL(window.location.href);
-                          if (v) url.searchParams.set("product", v);
-                          else url.searchParams.delete("product");
-                          window.location.href = url.toString();
+                          const params = new URLSearchParams(searchParams);
+                          if (v) params.set("product", v);
+                          else params.delete("product");
+                          navigate(`?${params.toString()}`);
                         }}
                       />
                     ),
@@ -305,10 +325,10 @@ export default function VariantsPage() {
                         ]}
                         value={filterConfigured}
                         onChange={(v) => {
-                          const url = new URL(window.location.href);
-                          if (v) url.searchParams.set("configured", v);
-                          else url.searchParams.delete("configured");
-                          window.location.href = url.toString();
+                          const params = new URLSearchParams(searchParams);
+                          if (v) params.set("configured", v);
+                          else params.delete("configured");
+                          navigate(`?${params.toString()}`);
                         }}
                       />
                     ),
@@ -318,7 +338,12 @@ export default function VariantsPage() {
                 appliedFilters={appliedFilters}
                 onQueryChange={() => {}}
                 onQueryClear={() => {}}
-                onClearAll={() => {}}
+                onClearAll={() => {
+                  const params = new URLSearchParams(searchParams);
+                  params.delete("product");
+                  params.delete("configured");
+                  navigate(`?${params.toString()}`);
+                }}
               />
               <IndexTable
                 resourceName={{ singular: "variant", plural: "variants" }}

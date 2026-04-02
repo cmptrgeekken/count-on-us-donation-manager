@@ -74,12 +74,8 @@ function computeMaterialLineCost(params: {
   quantity: Prisma.Decimal;
   usesPerVariant: Prisma.Decimal | null;
 }): Prisma.Decimal {
-  const { type, costingModel, purchasePrice, purchaseQty, totalUsesPerUnit, yield_, quantity, usesPerVariant } = params;
+  const { costingModel, purchasePrice, purchaseQty, totalUsesPerUnit, yield_, quantity, usesPerVariant } = params;
   const perUnit = purchasePrice.div(purchaseQty);
-
-  if (type === "shipping") {
-    return perUnit.mul(quantity);
-  }
 
   if (costingModel === "yield" && yield_ && yield_.gt(ZERO)) {
     return perUnit.div(yield_).mul(quantity);
@@ -157,7 +153,7 @@ export async function resolveCosts(
   // Step 2: Load shop mistake buffer fallback
   const shop = await db.shop.findUnique({
     where: { shopId },
-    select: { mistakeBuffer: true },
+    select: { mistakeBuffer: true, defaultLaborRate: true },
   });
 
   // Step 3: Merge material lines — variant overrides take precedence over template
@@ -323,10 +319,12 @@ export async function resolveCosts(
   const mistakeBufferPct = decimalOrZero(config.mistakeBuffer ?? shop?.mistakeBuffer);
   const mistakeBufferAmount = materialCost.mul(mistakeBufferPct);
 
+  const laborRate = config.laborRate ?? shop?.defaultLaborRate;
+
   // Labor cost
   const laborCost =
-    config.laborMinutes && config.laborRate
-      ? config.laborRate.mul(config.laborMinutes).div(60)
+    config.laborMinutes && laborRate
+      ? laborRate.mul(config.laborMinutes).div(60)
       : ZERO;
 
   // Step 7: Return materialised cost structure

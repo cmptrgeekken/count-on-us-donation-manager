@@ -19,6 +19,7 @@ import {
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
+import l10n from "../utils/localization";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
@@ -140,6 +141,8 @@ export default function EquipmentPage() {
   const { equipment } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
 
+  const { formatMoney, getCurrencySymbol } = l10n();
+
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [deactivateTarget, setDeactivateTarget] = useState<EquipmentItem | null>(null);
@@ -177,12 +180,12 @@ export default function EquipmentPage() {
       </IndexTable.Cell>
       <IndexTable.Cell>
         <Text as="span" variant="bodyMd">
-          {e.hourlyRate ? `$${Number(e.hourlyRate).toFixed(2)}/hr` : "—"}
+          {e.hourlyRate ? `${formatMoney(e.hourlyRate)}/hr` : "—"}
         </Text>
       </IndexTable.Cell>
       <IndexTable.Cell>
         <Text as="span" variant="bodyMd">
-          {e.perUseCost ? `$${Number(e.perUseCost).toFixed(4)}/use` : "—"}
+          {e.perUseCost ? `${formatMoney(e.perUseCost)}/use` : "—"}
         </Text>
       </IndexTable.Cell>
       <IndexTable.Cell>
@@ -309,7 +312,7 @@ export default function EquipmentPage() {
             <InlineStack gap="400" wrap={false}>
               <div style={{ flex: 1 }}>
                 <TextField
-                  label="Hourly rate ($)"
+                  label={`Hourly rate (${getCurrencySymbol()})`}
                   type="number"
                   min={0}
                   step={0.01}
@@ -321,7 +324,7 @@ export default function EquipmentPage() {
               </div>
               <div style={{ flex: 1 }}>
                 <TextField
-                  label="Per-use cost ($)"
+                  label={`Per-use cost (${getCurrencySymbol()})`}
                   type="number"
                   min={0}
                   step={0.0001}

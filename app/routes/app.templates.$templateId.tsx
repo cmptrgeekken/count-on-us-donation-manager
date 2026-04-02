@@ -19,6 +19,7 @@ import {
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
+import l10n from "../utils/localization";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
@@ -228,6 +229,7 @@ type TemplateEquipmentLine = {
 export default function TemplateDetailPage() {
   const { template, availableMaterials, availableEquipment } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const { formatMoney } = l10n();
 
   const [editingMeta, setEditingMeta] = useState(false);
   const [metaName, setMetaName] = useState(template.name);
@@ -254,18 +256,16 @@ export default function TemplateDetailPage() {
     const qty = Number(matQty);
     if (!qty || qty <= 0) return null;
 
-    if (selectedMaterial.type === "shipping") return `$${(perUnit * qty).toFixed(4)}`;
-
     if (selectedMaterial.costingModel === "yield") {
       const y = Number(matYield);
       if (!y || y <= 0) return null;
-      return `$${((perUnit / y) * qty).toFixed(4)}`;
+      return formatMoney(perUnit / y * qty);
     }
     if (selectedMaterial.costingModel === "uses") {
       const total = Number(selectedMaterial.totalUsesPerUnit);
       const uses = Number(matUses);
       if (!total || total <= 0 || !uses || uses <= 0) return null;
-      return `$${((perUnit / total) * uses).toFixed(4)}`;
+      return formatMoney(perUnit / total * uses);
     }
     return null;
   }
@@ -276,7 +276,7 @@ export default function TemplateDetailPage() {
     let cost = 0;
     if (eq.hourlyRate && eqMinutes) cost += (Number(eq.hourlyRate) * Number(eqMinutes)) / 60;
     if (eq.perUseCost && eqUses) cost += Number(eq.perUseCost) * Number(eqUses);
-    return cost > 0 ? `$${cost.toFixed(4)}` : null;
+    return cost > 0 ? formatMoney(cost) : null;
   }
 
   return (
@@ -353,7 +353,7 @@ export default function TemplateDetailPage() {
                     <BlockStack gap="100">
                       <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
                       <Text as="p" variant="bodyMd" tone="subdued">
-                        {line.materialType === "shipping" ? "Shipping" : line.costingModel === "yield"
+                        {line.costingModel === "yield"
                           ? `Yield: ${line.yield} — Qty: ${line.quantity}`
                           : `Uses/variant: ${line.usesPerVariant}`}
                       </Text>
@@ -443,17 +443,15 @@ export default function TemplateDetailPage() {
               value={selectedMaterialId}
               onChange={(v) => { setSelectedMaterialId(v); setMatYield(""); setMatUses(""); }}
             />
-            {selectedMaterial?.type !== "shipping" && (
-              <TextField
-                label="Quantity"
-                type="number"
-                min={0}
-                step={0.001}
-                value={matQty}
-                onChange={setMatQty}
-                autoComplete="off"
-              />
-            )}
+            <TextField
+              label="Quantity"
+              type="number"
+              min={0}
+              step={0.001}
+              value={matQty}
+              onChange={setMatQty}
+              autoComplete="off"
+            />
             {selectedMaterial?.costingModel === "yield" && (
               <TextField
                 label="Yield (units produced per purchased unit)"

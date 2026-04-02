@@ -20,6 +20,7 @@ import {
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
+import l10n from "../utils/localization";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
@@ -66,8 +67,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "create" || intent === "update") {
     const name = formData.get("name")?.toString().trim() ?? "";
     const type = formData.get("type")?.toString() ?? "production";
-    const costingModel =
-      type === "shipping" ? null : (formData.get("costingModel")?.toString() ?? "yield");
+    const costingModel = formData.get("costingModel")?.toString() ?? "yield";
     const purchasePrice = parseFloat(formData.get("purchasePrice")?.toString() ?? "0");
     const purchaseQty = parseFloat(formData.get("purchaseQty")?.toString() ?? "1");
     const totalUsesPerUnit =
@@ -108,7 +108,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ ok: true, message: "Material created." });
     } else {
       const id = formData.get("id")?.toString() ?? "";
-      await prisma.materialLibraryItem.update({ where: { id }, data });
+      await prisma.materialLibraryItem.update({ where: { id, shopId }, data });
       await prisma.auditLog.create({
         data: { shopId, entity: "MaterialLibraryItem", entityId: id, action: "MATERIAL_UPDATED", actor: "merchant" },
       });
@@ -170,6 +170,7 @@ const EMPTY_FORM = {
 export default function MaterialsPage() {
   const { materials } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const { formatMoney, getCurrencySymbol } = l10n();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -200,7 +201,12 @@ export default function MaterialsPage() {
 
   const perUnitPreview =
     form.purchasePrice && form.purchaseQty && Number(form.purchaseQty) > 0
-      ? (Number(form.purchasePrice) / Number(form.purchaseQty)).toFixed(6)
+      ? (Number(form.purchasePrice) / Number(form.purchaseQty)).toFixed(2)
+      : null;
+
+  const perUsePreview = 
+    perUnitPreview && form.totalUsesPerUnit && Number(form.totalUsesPerUnit) > 0
+      ? (Number(perUnitPreview) / Number(form.totalUsesPerUnit)).toFixed(2)
       : null;
 
   const isSubmitting = fetcher.state !== "idle";
@@ -226,7 +232,7 @@ export default function MaterialsPage() {
         </Text>
       </IndexTable.Cell>
       <IndexTable.Cell>
-        <Text as="span" variant="bodyMd">${Number(m.perUnitCost).toFixed(4)}</Text>
+        <Text as="span" variant="bodyMd">{formatMoney(m.perUnitCost)}</Text>
       </IndexTable.Cell>
       <IndexTable.Cell>
         <Text as="span" variant="bodyMd" tone="subdued">
@@ -332,10 +338,10 @@ export default function MaterialsPage() {
             if (form.id) fd.append("id", form.id);
             fd.append("name", form.name);
             fd.append("type", form.type);
-            if (form.type === "production") fd.append("costingModel", form.costingModel);
+            fd.append("costingModel", form.costingModel);
             fd.append("purchasePrice", form.purchasePrice);
             fd.append("purchaseQty", form.purchaseQty);
-            if (form.costingModel === "uses" && form.type === "production")
+            if (form.costingModel === "uses")
               fd.append("totalUsesPerUnit", form.totalUsesPerUnit);
             fd.append("unitDescription", form.unitDescription);
             fd.append("notes", form.notes);
@@ -362,21 +368,19 @@ export default function MaterialsPage() {
               value={form.type}
               onChange={(v) => setForm((f) => ({ ...f, type: v }))}
             />
-            {form.type === "production" && (
-              <Select
-                label="Costing model"
-                options={[
-                  { label: "Yield-based (e.g. fabric by the metre)", value: "yield" },
-                  { label: "Uses-based (e.g. screen with 50 uses)", value: "uses" },
-                ]}
-                value={form.costingModel}
-                onChange={(v) => setForm((f) => ({ ...f, costingModel: v }))}
-              />
-            )}
+            <Select
+              label="Costing model"
+              options={[
+                { label: "Yield-based (e.g. fabric by the metre)", value: "yield" },
+                { label: "Uses-based (e.g. screen with 50 uses)", value: "uses" },
+              ]}
+              value={form.costingModel}
+              onChange={(v) => setForm((f) => ({ ...f, costingModel: v }))}
+            />
             <InlineStack gap="400" wrap={false}>
               <div style={{ flex: 1 }}>
                 <TextField
-                  label="Purchase price ($)"
+                  label={`Purchase price (${getCurrencySymbol()})`}
                   type="number"
                   min={0}
                   step={0.01}
@@ -399,20 +403,27 @@ export default function MaterialsPage() {
             </InlineStack>
             {perUnitPreview && (
               <Text as="p" variant="bodyMd" tone="subdued">
-                Per-unit cost: <strong>${perUnitPreview}</strong>
+                Per-unit cost: <strong>{formatMoney(perUnitPreview)}</strong>
               </Text>
             )}
-            {form.type === "production" && form.costingModel === "uses" && (
-              <TextField
-                label="Total uses per unit"
-                type="number"
-                min={0}
-                step={1}
-                value={form.totalUsesPerUnit}
-                onChange={(v) => setForm((f) => ({ ...f, totalUsesPerUnit: v }))}
-                autoComplete="off"
-                helpText="How many uses can be extracted from one purchased unit"
-              />
+            {form.costingModel === "uses" && (
+              <>
+                <TextField
+                  label="Total uses per unit"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={form.totalUsesPerUnit}
+                  onChange={(v) => setForm((f) => ({ ...f, totalUsesPerUnit: v }))}
+                  autoComplete="off"
+                  helpText="How many uses can be extracted from one purchased unit"
+                />
+                {perUsePreview && (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Per-use cost (rounded): <strong>{formatMoney(perUsePreview)}</strong>
+                  </Text>
+                )}
+              </>
             )}
             <TextField
               label="Unit description (optional)"
