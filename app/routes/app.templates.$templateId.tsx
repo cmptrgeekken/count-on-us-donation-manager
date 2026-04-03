@@ -335,16 +335,16 @@ export default function TemplateDetailPage() {
 
   const [addMaterialOpen, setAddMaterialOpen] = useState(false);
   const [editingMaterialLineId, setEditingMaterialLineId] = useState<string | null>(null);
-  const [selectedMaterialId, setSelectedMaterialId] = useState(availableMaterials[0]?.id ?? "");
-  const [materialSearchValue, setMaterialSearchValue] = useState(availableMaterials[0]?.name ?? "");
+  const [selectedMaterialId, setSelectedMaterialId] = useState("");
+  const [materialSearchValue, setMaterialSearchValue] = useState("");
   const [matQty, setMatQty] = useState("1");
   const [matYield, setMatYield] = useState("");
   const [matUses, setMatUses] = useState("");
 
   const [addEquipmentOpen, setAddEquipmentOpen] = useState(false);
   const [editingEquipmentLineId, setEditingEquipmentLineId] = useState<string | null>(null);
-  const [selectedEquipmentId, setSelectedEquipmentId] = useState(availableEquipment[0]?.id ?? "");
-  const [equipmentSearchValue, setEquipmentSearchValue] = useState(availableEquipment[0]?.name ?? "");
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
+  const [equipmentSearchValue, setEquipmentSearchValue] = useState("");
   const [eqMinutes, setEqMinutes] = useState("");
   const [eqUses, setEqUses] = useState("");
 
@@ -370,20 +370,18 @@ export default function TemplateDetailPage() {
     }));
 
   function resetMaterialModal() {
-    const initialMaterial = availableMaterials[0];
     setEditingMaterialLineId(null);
-    setSelectedMaterialId(initialMaterial?.id ?? "");
-    setMaterialSearchValue(initialMaterial?.name ?? "");
+    setSelectedMaterialId("");
+    setMaterialSearchValue("");
     setMatQty("1");
     setMatYield("");
     setMatUses("");
   }
 
   function resetEquipmentModal() {
-    const initialEquipment = availableEquipment[0];
     setEditingEquipmentLineId(null);
-    setSelectedEquipmentId(initialEquipment?.id ?? "");
-    setEquipmentSearchValue(initialEquipment?.name ?? "");
+    setSelectedEquipmentId("");
+    setEquipmentSearchValue("");
     setEqMinutes("");
     setEqUses("");
   }
@@ -607,6 +605,7 @@ export default function TemplateDetailPage() {
         title={editingMaterialLineId ? "Edit material line" : "Add material"}
         primaryAction={{
           content: editingMaterialLineId ? "Save" : "Add",
+          disabled: !selectedMaterialId,
           loading: isSubmitting,
           onAction: () => {
             const fd = new FormData();
@@ -697,6 +696,7 @@ export default function TemplateDetailPage() {
         title={editingEquipmentLineId ? "Edit equipment line" : "Add equipment"}
         primaryAction={{
           content: editingEquipmentLineId ? "Save" : "Add",
+          disabled: !selectedEquipmentId,
           loading: isSubmitting,
           onAction: () => {
             const fd = new FormData();
