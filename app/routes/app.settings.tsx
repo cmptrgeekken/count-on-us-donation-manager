@@ -123,22 +123,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const rateStr = formData.get("mistakeBuffer")?.toString() ?? "";
     const rate = parseFloat(rateStr);
 
-    const defaultLaborRateStr = formData.get("defaultLaborRate")?.toString() ?? "";
-    const defaultLaborRate = parseFloat(defaultLaborRateStr);
+    const defaultLaborRateStr = formData.get("defaultLaborRate")?.toString().trim() ?? "";
+    const defaultLaborRate = defaultLaborRateStr ? parseFloat(defaultLaborRateStr) : null;
 
     if (isNaN(rate) || rate < 0 || rate > 100) {
       return Response.json({ ok: false, message: "Mistake buffer must be a number between 0 and 100." }, { status: 400 });
     }
 
-    if (isNaN(defaultLaborRate) || defaultLaborRate < 0) {
-      return Response.json({ ok: false, message: "Labor rate must be greater than 0." }, { status: 400 });
+    if (defaultLaborRate !== null && (isNaN(defaultLaborRate) || defaultLaborRate < 0)) {
+      return Response.json({ ok: false, message: "Labor rate must be 0 or greater." }, { status: 400 });
     }
 
     await prisma.shop.update({
       where: { shopId },
       data: {
         mistakeBuffer: rate / 100,
-        defaultLaborRate 
+        defaultLaborRate
       },
     });
 
@@ -152,7 +152,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Mistake buffer updated." });
+    return Response.json({ ok: true, message: "Cost defaults updated." });
   }
 
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
@@ -316,7 +316,7 @@ export default function Settings() {
                     autoComplete="off"
                     value={laborRateInput}
                     onChange={setLaborRateInput}
-                    helpText={`e.g., ${formatMoney(15)}/hr. Used when calculating labor costs for producing product variants.`}
+                    helpText={`e.g., ${formatMoney(15)}/hr. Leave blank to remove the shop default labor rate.`}
                   />
                 </div>
 
