@@ -228,20 +228,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (intent === "update-material-line") {
     const lineId = formData.get("lineId")?.toString() ?? "";
-    const materialId = formData.get("materialId")?.toString() ?? "";
     const quantity = parseFloat(formData.get("quantity")?.toString() ?? "1");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
 
-    await requireMaterialLine(lineId);
-    await requireMaterial(materialId);
-    const duplicateMaterialResponse = await ensureMaterialNotAlreadyAdded(materialId, lineId);
-    if (duplicateMaterialResponse) return duplicateMaterialResponse;
+    const line = await requireMaterialLine(lineId);
 
     await prisma.costTemplateMaterialLine.updateMany({
       where: { id: lineId, templateId },
       data: {
-        materialId,
+        materialId: line.materialId,
         quantity,
         yield: yieldVal ? parseFloat(yieldVal) : null,
         usesPerVariant: usesPerVariant ? parseFloat(usesPerVariant) : null,
@@ -288,19 +284,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (intent === "update-equipment-line") {
     const lineId = formData.get("lineId")?.toString() ?? "";
-    const equipmentId = formData.get("equipmentId")?.toString() ?? "";
     const minutes = formData.get("minutes")?.toString();
     const uses = formData.get("uses")?.toString();
 
-    await requireEquipmentLine(lineId);
-    await requireEquipment(equipmentId);
-    const duplicateEquipmentResponse = await ensureEquipmentNotAlreadyAdded(equipmentId, lineId);
-    if (duplicateEquipmentResponse) return duplicateEquipmentResponse;
+    const line = await requireEquipmentLine(lineId);
 
     await prisma.costTemplateEquipmentLine.updateMany({
       where: { id: lineId, templateId },
       data: {
-        equipmentId,
+        equipmentId: line.equipmentId,
         minutes: minutes ? parseFloat(minutes) : null,
         uses: uses ? parseFloat(uses) : null,
       },
@@ -391,16 +383,8 @@ export default function TemplateDetailPage() {
   const [eqUses, setEqUses] = useState("");
 
   const isSubmitting = fetcher.state !== "idle";
-  const unavailableMaterialIds = new Set(
-    template.materialLines
-      .filter((line: TemplateMaterialLine) => line.id !== editingMaterialLineId)
-      .map((line: TemplateMaterialLine) => line.materialId),
-  );
-  const unavailableEquipmentIds = new Set(
-    template.equipmentLines
-      .filter((line: TemplateEquipmentLine) => line.id !== editingEquipmentLineId)
-      .map((line: TemplateEquipmentLine) => line.equipmentId),
-  );
+  const unavailableMaterialIds = new Set(template.materialLines.map((line: TemplateMaterialLine) => line.materialId));
+  const unavailableEquipmentIds = new Set(template.equipmentLines.map((line: TemplateEquipmentLine) => line.equipmentId));
 
   const selectedMaterial = availableMaterials.find((m: AvailableMaterial) => m.id === selectedMaterialId);
   const filteredMaterialOptions = availableMaterials
@@ -677,32 +661,41 @@ export default function TemplateDetailPage() {
       >
         <Modal.Section>
           <BlockStack gap="400">
-            <Autocomplete
-              options={filteredMaterialOptions}
-              selected={selectedMaterialId ? [selectedMaterialId] : []}
-              onSelect={(selected) => {
-                const nextId = selected[0] ?? "";
-                const nextMaterial = availableMaterials.find((item: AvailableMaterial) => item.id === nextId);
-                setSelectedMaterialId(nextId);
-                setMaterialSearchValue(nextMaterial?.name ?? "");
-                setMatYield("");
-                setMatUses("");
-              }}
-              textField={
-                <Autocomplete.TextField
-                  label="Material"
-                  value={materialSearchValue}
-                  onChange={setMaterialSearchValue}
-                  autoComplete="off"
-                  placeholder="Search materials"
-                />
-              }
-              emptyState={
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  No materials match that search.
-                </Text>
-              }
-            />
+            {editingMaterialLineId ? (
+              <TextField
+                label="Material"
+                value={selectedMaterial?.name ?? ""}
+                autoComplete="off"
+                disabled
+              />
+            ) : (
+              <Autocomplete
+                options={filteredMaterialOptions}
+                selected={selectedMaterialId ? [selectedMaterialId] : []}
+                onSelect={(selected) => {
+                  const nextId = selected[0] ?? "";
+                  const nextMaterial = availableMaterials.find((item: AvailableMaterial) => item.id === nextId);
+                  setSelectedMaterialId(nextId);
+                  setMaterialSearchValue(nextMaterial?.name ?? "");
+                  setMatYield("");
+                  setMatUses("");
+                }}
+                textField={
+                  <Autocomplete.TextField
+                    label="Material"
+                    value={materialSearchValue}
+                    onChange={setMaterialSearchValue}
+                    autoComplete="off"
+                    placeholder="Search materials"
+                  />
+                }
+                emptyState={
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    No materials match that search.
+                  </Text>
+                }
+              />
+            )}
             <TextField
               label="Quantity"
               type="number"
@@ -767,30 +760,39 @@ export default function TemplateDetailPage() {
       >
         <Modal.Section>
           <BlockStack gap="400">
-            <Autocomplete
-              options={filteredEquipmentOptions}
-              selected={selectedEquipmentId ? [selectedEquipmentId] : []}
-              onSelect={(selected) => {
-                const nextId = selected[0] ?? "";
-                const nextEquipment = availableEquipment.find((item: AvailableEquipment) => item.id === nextId);
-                setSelectedEquipmentId(nextId);
-                setEquipmentSearchValue(nextEquipment?.name ?? "");
-              }}
-              textField={
-                <Autocomplete.TextField
-                  label="Equipment"
-                  value={equipmentSearchValue}
-                  onChange={setEquipmentSearchValue}
-                  autoComplete="off"
-                  placeholder="Search equipment"
-                />
-              }
-              emptyState={
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  No equipment matches that search.
-                </Text>
-              }
-            />
+            {editingEquipmentLineId ? (
+              <TextField
+                label="Equipment"
+                value={availableEquipment.find((item: AvailableEquipment) => item.id === selectedEquipmentId)?.name ?? ""}
+                autoComplete="off"
+                disabled
+              />
+            ) : (
+              <Autocomplete
+                options={filteredEquipmentOptions}
+                selected={selectedEquipmentId ? [selectedEquipmentId] : []}
+                onSelect={(selected) => {
+                  const nextId = selected[0] ?? "";
+                  const nextEquipment = availableEquipment.find((item: AvailableEquipment) => item.id === nextId);
+                  setSelectedEquipmentId(nextId);
+                  setEquipmentSearchValue(nextEquipment?.name ?? "");
+                }}
+                textField={
+                  <Autocomplete.TextField
+                    label="Equipment"
+                    value={equipmentSearchValue}
+                    onChange={setEquipmentSearchValue}
+                    autoComplete="off"
+                    placeholder="Search equipment"
+                  />
+                }
+                emptyState={
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    No equipment matches that search.
+                  </Text>
+                }
+              />
+            )}
             <InlineStack gap="400" wrap={false}>
               <div style={{ flex: 1 }}>
                 <TextField
