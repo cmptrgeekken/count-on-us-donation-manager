@@ -19,19 +19,25 @@ import {
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
-import l10n from "../utils/localization"
+import l10n from "../utils/localization";
+import { getLocaleFromRequest } from "../utils/localization.server";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
+  const locale = getLocaleFromRequest(request);
 
   const url = new URL(request.url);
   const filterProductId = url.searchParams.get("product") ?? "";
   const filterConfigured = url.searchParams.get("configured") ?? "";
 
-  const [variants, products, templates] = await Promise.all([
+  const [shop, variants, products, templates] = await Promise.all([
+    prisma.shop.findUnique({
+      where: { shopId },
+      select: { currency: true },
+    }),
     prisma.variant.findMany({
       where: {
         shopId,
@@ -58,6 +64,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   ]);
 
   return Response.json({
+    localization: {
+      currency: shop?.currency ?? "USD",
+      locale,
+    },
     variants: variants.map((v) => ({
       id: v.id,
       shopifyId: v.shopifyId,
@@ -139,12 +149,12 @@ type VariantRow = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function VariantsPage() {
-  const { variants, products, templates, filterProductId, filterConfigured } =
+  const { localization, variants, products, templates, filterProductId, filterConfigured } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
   const navigate = useNavigate();
 
-  const { formatMoney } = l10n();
+  const { formatMoney } = l10n(localization.currency, localization.locale);
 
   const [searchParams] = useSearchParams();
 
