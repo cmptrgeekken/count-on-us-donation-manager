@@ -112,6 +112,50 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
 
+  async function requireMaterial(materialId: string) {
+    const material = await prisma.materialLibraryItem.findFirst({
+      where: { id: materialId, shopId },
+      select: { id: true },
+    });
+    if (!material) {
+      throw new Response("Not found", { status: 404 });
+    }
+    return material;
+  }
+
+  async function requireEquipment(equipmentId: string) {
+    const equipment = await prisma.equipmentLibraryItem.findFirst({
+      where: { id: equipmentId, shopId },
+      select: { id: true },
+    });
+    if (!equipment) {
+      throw new Response("Not found", { status: 404 });
+    }
+    return equipment;
+  }
+
+  async function requireMaterialLine(lineId: string) {
+    const line = await prisma.costTemplateMaterialLine.findFirst({
+      where: { id: lineId, templateId },
+      select: { id: true },
+    });
+    if (!line) {
+      throw new Response("Not found", { status: 404 });
+    }
+    return line;
+  }
+
+  async function requireEquipmentLine(lineId: string) {
+    const line = await prisma.costTemplateEquipmentLine.findFirst({
+      where: { id: lineId, templateId },
+      select: { id: true },
+    });
+    if (!line) {
+      throw new Response("Not found", { status: 404 });
+    }
+    return line;
+  }
+
   if (intent === "update-meta") {
     const name = formData.get("name")?.toString().trim() ?? "";
     const description = formData.get("description")?.toString().trim() || null;
@@ -128,6 +172,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const quantity = parseFloat(formData.get("quantity")?.toString() ?? "1");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
+
+    await requireMaterial(materialId);
 
     await prisma.costTemplateMaterialLine.create({
       data: {
@@ -151,6 +197,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
 
+    await requireMaterialLine(lineId);
+    await requireMaterial(materialId);
+
     await prisma.costTemplateMaterialLine.updateMany({
       where: { id: lineId, templateId },
       data: {
@@ -168,7 +217,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (intent === "remove-material-line") {
     const lineId = formData.get("lineId")?.toString() ?? "";
-    await prisma.costTemplateMaterialLine.delete({ where: { id: lineId } });
+    await requireMaterialLine(lineId);
+    await prisma.costTemplateMaterialLine.deleteMany({ where: { id: lineId, templateId } });
     await prisma.auditLog.create({
       data: { shopId, entity: "CostTemplate", entityId: templateId, action: "TEMPLATE_MATERIAL_LINE_REMOVED", actor: "merchant" },
     });
@@ -179,6 +229,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const equipmentId = formData.get("equipmentId")?.toString() ?? "";
     const minutes = formData.get("minutes")?.toString();
     const uses = formData.get("uses")?.toString();
+
+    await requireEquipment(equipmentId);
 
     await prisma.costTemplateEquipmentLine.create({
       data: {
@@ -200,6 +252,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const minutes = formData.get("minutes")?.toString();
     const uses = formData.get("uses")?.toString();
 
+    await requireEquipmentLine(lineId);
+    await requireEquipment(equipmentId);
+
     await prisma.costTemplateEquipmentLine.updateMany({
       where: { id: lineId, templateId },
       data: {
@@ -216,7 +271,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (intent === "remove-equipment-line") {
     const lineId = formData.get("lineId")?.toString() ?? "";
-    await prisma.costTemplateEquipmentLine.delete({ where: { id: lineId } });
+    await requireEquipmentLine(lineId);
+    await prisma.costTemplateEquipmentLine.deleteMany({ where: { id: lineId, templateId } });
     await prisma.auditLog.create({
       data: { shopId, entity: "CostTemplate", entityId: templateId, action: "TEMPLATE_EQUIPMENT_LINE_REMOVED", actor: "merchant" },
     });
