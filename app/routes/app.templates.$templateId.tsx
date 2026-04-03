@@ -20,6 +20,7 @@ import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import l10n from "../utils/localization";
+import { getLocaleFromRequest } from "../utils/localization.server";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
   const { templateId } = params;
+  const locale = getLocaleFromRequest(request);
 
   const template = await prisma.costTemplate.findFirst({
     where: { id: templateId, shopId },
@@ -40,7 +42,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const [materials, equipment] = await Promise.all([
+  const [shop, materials, equipment] = await Promise.all([
+    prisma.shop.findUnique({
+      where: { shopId },
+      select: { currency: true },
+    }),
     prisma.materialLibraryItem.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
@@ -54,6 +60,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   ]);
 
   return Response.json({
+    localization: {
+      currency: shop?.currency ?? "USD",
+      locale,
+    },
     template: {
       id: template.id,
       name: template.name,
@@ -359,9 +369,9 @@ type TemplateEquipmentLine = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function TemplateDetailPage() {
-  const { template, availableMaterials, availableEquipment } = useLoaderData<typeof loader>();
+  const { localization, template, availableMaterials, availableEquipment } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
-  const { formatMoney } = l10n();
+  const { formatMoney } = l10n(localization.currency, localization.locale);
 
   const [editingMeta, setEditingMeta] = useState(false);
   const [metaName, setMetaName] = useState(template.name);

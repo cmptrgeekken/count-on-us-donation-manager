@@ -1,4 +1,4 @@
-export default function l10n(currency: string = 'EUR', locale: string = 'de-DE') {
+export default function l10n(currency: string = "USD", locale: string = "en-US") {
   const percentFormatter = new Intl.NumberFormat(locale, {
     style: 'percent',
     maximumFractionDigits: 2
