@@ -63,6 +63,8 @@ Each persona speaks in a clearly labelled block. Two signal levels are used:
 - Identify edge cases not covered by the current spec or QA checklist
 - Flag when a change to one area is likely to affect another area not currently being considered
 - Propose test cases and acceptance criteria, not just identify gaps
+- Before each commit, identify any missing unit, regression, service, or integration tests that should ship with the change
+- Treat bug fixes and behavior corrections as presumed regression-test candidates unless there is a clear reason they cannot be covered meaningfully
 
 ---
 
@@ -173,6 +175,23 @@ Format:
 ```
 
 If no concern exists, the persona may be omitted from the response entirely — silence means no concerns in that domain.
+
+### Pre-commit QA check-in
+
+Before creating a commit, the **QA Engineer** persona performs a short test review. The goal is to identify missing coverage while the change is still in progress, not after the PR is already open.
+
+Minimum questions:
+- What behavior changed?
+- What existing test would fail if this regressed?
+- If no such test exists, what test should be added?
+
+For code changes, this review should explicitly consider:
+- regression tests for bug fixes
+- unit tests for financial or normalization logic
+- service or integration tests for assignment, reset, merge, and persistence workflows
+- validation tests when input rules change
+
+If the conclusion is that no new test is needed, that decision should be stated explicitly in the commit or PR context.
 
 ### Full panel milestone reviews
 

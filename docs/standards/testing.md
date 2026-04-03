@@ -48,6 +48,25 @@ Mandatory test coverage:
 - Template vs. variant override merge logic
 - Edge cases: no config (all zeros), zero prices, null optional fields
 
+### Always test: regressions for fixed bugs and corrected behavior
+
+When a bug is found and fixed, add the smallest durable test that would fail if the bug comes back. Treat this as the default, especially when the bug affects financial outcomes, configuration state, or admin workflows.
+
+High-priority regression targets:
+- financial calculation bugs in cost resolution, rounding, fallback, or normalization
+- template assignment, override, reset, and merge behavior
+- data-shaping bugs where the same record can appear in multiple UI sections
+- state transitions that can leave stale flags, stale badges, or orphaned rows behind
+- validation bugs where malformed or incomplete input was previously accepted
+- locale, currency, and formatting logic that can throw at render time or display incorrect money values
+
+Preferred test level:
+- unit test for pure calculation and normalization logic
+- service test for orchestration and persistence rules
+- integration test for database-backed workflows with meaningful state transitions
+
+If you choose not to add a regression test for a bug fix, document why in the PR description or working notes.
+
 ### Always test: Zod validation schemas
 
 When you add a Zod schema for action input validation, write a test that verifies:
@@ -62,6 +81,8 @@ Services like `catalogSync.server.ts` or `installService.server.ts` contain cond
 ### Do not test: Remix loaders and actions directly
 
 Loaders and actions are integration points — they authenticate, query the DB, and return responses. Testing them in isolation requires mocking too many layers to be meaningful. Test the underlying service functions instead.
+
+If a loader or action bug is fixed, prefer extracting the affected derivation, normalization, or persistence logic into a service/helper that can be tested directly rather than leaving the behavior untested.
 
 ### Do not test: Polaris component rendering
 
@@ -172,6 +193,26 @@ No coverage requirement for:
 - Route files (loaders, actions, components)
 - Database migration scripts
 - Configuration files
+
+---
+
+## Pre-Commit QA Test Review
+
+Before every commit, perform a short QA review focused on missing tests. Ask:
+- What behavior changed?
+- What would break if this change regressed next week?
+- Is that behavior already covered by a test?
+- If not, should the coverage be unit, service, integration, or regression-focused?
+
+This review is especially important when a change touches:
+- financial logic
+- validation
+- data normalization or fallback behavior
+- assignment/reset/merge workflows
+- currency or locale formatting
+- bug fixes prompted by QA, review, or production-like testing
+
+The expected default is to add or update tests in the same branch as the code change. When no test is added, the reason should be explicit.
 
 Run coverage to identify gaps, not to enforce a threshold:
 ```sh
