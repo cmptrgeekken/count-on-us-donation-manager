@@ -71,6 +71,16 @@ type TemplateEquipmentOverrideLine = {
   hasOverride: boolean;
 };
 
+function buildCountMap<T extends string>(values: T[]) {
+  const counts = new Map<T, number>();
+
+  for (const value of values) {
+    counts.set(value, (counts.get(value) ?? 0) + 1);
+  }
+
+  return counts;
+}
+
 function serializeVariantMaterialLine(
   line: {
     id: string;
@@ -179,14 +189,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         .filter((line) => line.templateLineId)
         .map((line) => [line.templateLineId as string, line]),
     );
-    const materialIdTemplateCounts = new Map<string, number>();
-
-    for (const line of templateMaterialSource) {
-      materialIdTemplateCounts.set(
-        line.materialId,
-        (materialIdTemplateCounts.get(line.materialId) ?? 0) + 1,
-      );
-    }
+    const materialIdTemplateCounts = buildCountMap(templateMaterialSource.map((line) => line.materialId));
 
     const legacyMaterialOverrides = new Map(
       config.materialLines
@@ -202,9 +205,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     templateMaterialLines = templateMaterialSource.map((line) => {
       const explicitOverride = explicitMaterialOverrides.get(line.id);
       const legacyOverride = explicitOverride ? null : legacyMaterialOverrides.get(line.materialId);
+      const legacyDuplicate = explicitOverride ? legacyMaterialOverrides.get(line.materialId) : null;
       const override = explicitOverride ?? legacyOverride;
 
       if (override) consumedMaterialLineIds.add(override.id);
+      if (legacyDuplicate) consumedMaterialLineIds.add(legacyDuplicate.id);
 
       return {
         templateLineId: line.id,
@@ -233,14 +238,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         .filter((line) => line.templateLineId)
         .map((line) => [line.templateLineId as string, line]),
     );
-    const equipmentIdTemplateCounts = new Map<string, number>();
-
-    for (const line of templateEquipmentSource) {
-      equipmentIdTemplateCounts.set(
-        line.equipmentId,
-        (equipmentIdTemplateCounts.get(line.equipmentId) ?? 0) + 1,
-      );
-    }
+    const equipmentIdTemplateCounts = buildCountMap(templateEquipmentSource.map((line) => line.equipmentId));
 
     const legacyEquipmentOverrides = new Map(
       config.equipmentLines
@@ -256,9 +254,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     templateEquipmentLines = templateEquipmentSource.map((line) => {
       const explicitOverride = explicitEquipmentOverrides.get(line.id);
       const legacyOverride = explicitOverride ? null : legacyEquipmentOverrides.get(line.equipmentId);
+      const legacyDuplicate = explicitOverride ? legacyEquipmentOverrides.get(line.equipmentId) : null;
       const override = explicitOverride ?? legacyOverride;
 
       if (override) consumedEquipmentLineIds.add(override.id);
+      if (legacyDuplicate) consumedEquipmentLineIds.add(legacyDuplicate.id);
 
       return {
         templateLineId: line.id,
@@ -386,12 +386,26 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           },
         },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        materialId: true,
+        template: {
+          select: {
+            materialLines: {
+              select: { materialId: true },
+            },
+          },
+        },
+      },
     });
     if (!line) {
       throw new Response("Not found", { status: 404 });
     }
-    return line;
+    return {
+      id: line.id,
+      materialId: line.materialId,
+      isUniqueMaterial: (buildCountMap(line.template.materialLines.map((item) => item.materialId)).get(line.materialId) ?? 0) === 1,
+    };
   }
 
   async function requireTemplateEquipmentLine(configId: string, templateLineId: string) {
@@ -404,12 +418,26 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           },
         },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        equipmentId: true,
+        template: {
+          select: {
+            equipmentLines: {
+              select: { equipmentId: true },
+            },
+          },
+        },
+      },
     });
     if (!line) {
       throw new Response("Not found", { status: 404 });
     }
-    return line;
+    return {
+      id: line.id,
+      equipmentId: line.equipmentId,
+      isUniqueEquipment: (buildCountMap(line.template.equipmentLines.map((item) => item.equipmentId)).get(line.equipmentId) ?? 0) === 1,
+    };
   }
 
   function getLegacyOverrideIds(template: {
@@ -575,18 +603,35 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
     const config = await ensureConfig();
-    await requireTemplateMaterialLine(config.id, templateLineId);
+    const templateLine = await requireTemplateMaterialLine(config.id, templateLineId);
     await requireMaterial(materialId);
 
     const existing = await prisma.variantMaterialLine.findFirst({
       where: { configId: config.id, shopId, templateLineId },
       select: { id: true },
     });
+    const legacy = !existing && templateLine.isUniqueMaterial
+      ? await prisma.variantMaterialLine.findFirst({
+          where: { configId: config.id, shopId, templateLineId: null, materialId: templateLine.materialId },
+          select: { id: true },
+        })
+      : null;
 
     if (existing) {
-      await prisma.variantMaterialLine.update({
+      await prisma.variantMaterialLine.updateMany({
         where: { id: existing.id, shopId },
         data: {
+          materialId,
+          quantity,
+          yield: yieldVal ? parseFloat(yieldVal) : null,
+          usesPerVariant: usesPerVariant ? parseFloat(usesPerVariant) : null,
+        },
+      });
+    } else if (legacy) {
+      await prisma.variantMaterialLine.updateMany({
+        where: { id: legacy.id, shopId },
+        data: {
+          templateLineId,
           materialId,
           quantity,
           yield: yieldVal ? parseFloat(yieldVal) : null,
@@ -617,10 +662,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const templateLineId = formData.get("templateLineId")?.toString() ?? "";
     const config = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId }, select: { id: true } });
     if (!config) return Response.json({ ok: false, message: "Configuration not found." }, { status: 404 });
-    await requireTemplateMaterialLine(config.id, templateLineId);
+    const templateLine = await requireTemplateMaterialLine(config.id, templateLineId);
 
     await prisma.variantMaterialLine.deleteMany({
-      where: { configId: config.id, shopId, templateLineId },
+      where: {
+        configId: config.id,
+        shopId,
+        OR: [
+          { templateLineId },
+          ...(templateLine.isUniqueMaterial ? [{ templateLineId: null, materialId: templateLine.materialId }] : []),
+        ],
+      },
     });
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "MATERIAL_OVERRIDE_RESET", actor: "merchant" },
@@ -686,18 +738,34 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const minutes = formData.get("minutes")?.toString();
     const uses = formData.get("uses")?.toString();
     const config = await ensureConfig();
-    await requireTemplateEquipmentLine(config.id, templateLineId);
+    const templateLine = await requireTemplateEquipmentLine(config.id, templateLineId);
     await requireEquipment(equipmentId);
 
     const existing = await prisma.variantEquipmentLine.findFirst({
       where: { configId: config.id, shopId, templateLineId },
       select: { id: true },
     });
+    const legacy = !existing && templateLine.isUniqueEquipment
+      ? await prisma.variantEquipmentLine.findFirst({
+          where: { configId: config.id, shopId, templateLineId: null, equipmentId: templateLine.equipmentId },
+          select: { id: true },
+        })
+      : null;
 
     if (existing) {
-      await prisma.variantEquipmentLine.update({
+      await prisma.variantEquipmentLine.updateMany({
         where: { id: existing.id, shopId },
         data: {
+          equipmentId,
+          minutes: minutes ? parseFloat(minutes) : null,
+          uses: uses ? parseFloat(uses) : null,
+        },
+      });
+    } else if (legacy) {
+      await prisma.variantEquipmentLine.updateMany({
+        where: { id: legacy.id, shopId },
+        data: {
+          templateLineId,
           equipmentId,
           minutes: minutes ? parseFloat(minutes) : null,
           uses: uses ? parseFloat(uses) : null,
@@ -726,10 +794,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const templateLineId = formData.get("templateLineId")?.toString() ?? "";
     const config = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId }, select: { id: true } });
     if (!config) return Response.json({ ok: false, message: "Configuration not found." }, { status: 404 });
-    await requireTemplateEquipmentLine(config.id, templateLineId);
+    const templateLine = await requireTemplateEquipmentLine(config.id, templateLineId);
 
     await prisma.variantEquipmentLine.deleteMany({
-      where: { configId: config.id, shopId, templateLineId },
+      where: {
+        configId: config.id,
+        shopId,
+        OR: [
+          { templateLineId },
+          ...(templateLine.isUniqueEquipment ? [{ templateLineId: null, equipmentId: templateLine.equipmentId }] : []),
+        ],
+      },
     });
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "EQUIPMENT_OVERRIDE_RESET", actor: "merchant" },
