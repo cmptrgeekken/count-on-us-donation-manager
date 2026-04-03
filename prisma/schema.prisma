@@ -152,6 +152,7 @@ model CostTemplateMaterialLine {
   yield          Decimal?            @db.Decimal(10, 4)
   quantity       Decimal             @db.Decimal(10, 4)
   usesPerVariant Decimal?            @db.Decimal(10, 4)
+  variantOverrides VariantMaterialLine[]
 }
 
 model CostTemplateEquipmentLine {
@@ -162,6 +163,7 @@ model CostTemplateEquipmentLine {
   equipment   EquipmentLibraryItem @relation(fields: [equipmentId], references: [id])
   minutes     Decimal?             @db.Decimal(10, 4)
   uses        Decimal?             @db.Decimal(10, 4)
+  variantOverrides VariantEquipmentLine[]
 }
 
 model Product {
@@ -227,11 +229,14 @@ model VariantMaterialLine {
   config         VariantCostConfig   @relation(fields: [configId], references: [id], onDelete: Cascade)
   materialId     String
   material       MaterialLibraryItem @relation(fields: [materialId], references: [id])
+  templateLineId String?
+  templateLine   CostTemplateMaterialLine? @relation(fields: [templateLineId], references: [id], onDelete: Cascade)
   yield          Decimal?            @db.Decimal(10, 4)
   quantity       Decimal             @db.Decimal(10, 4)
   usesPerVariant Decimal?            @db.Decimal(10, 4)
 
   @@index([shopId])
+  @@unique([configId, templateLineId])
 }
 
 model VariantEquipmentLine {
@@ -241,8 +246,11 @@ model VariantEquipmentLine {
   config      VariantCostConfig    @relation(fields: [configId], references: [id], onDelete: Cascade)
   equipmentId String
   equipment   EquipmentLibraryItem @relation(fields: [equipmentId], references: [id])
+  templateLineId String?
+  templateLine   CostTemplateEquipmentLine? @relation(fields: [templateLineId], references: [id], onDelete: Cascade)
   minutes     Decimal?             @db.Decimal(10, 4)
   uses        Decimal?             @db.Decimal(10, 4)
 
   @@index([shopId])
+  @@unique([configId, templateLineId])
 }

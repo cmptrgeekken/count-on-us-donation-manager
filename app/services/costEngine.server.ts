@@ -129,8 +129,8 @@ export async function resolveCosts(
           equipmentLines: { include: { equipment: true } },
         },
       },
-      materialLines: { include: { material: true } },
-      equipmentLines: { include: { equipment: true } },
+      materialLines: { include: { material: true, templateLine: true } },
+      equipmentLines: { include: { equipment: true, templateLine: true } },
     },
   });
 
@@ -158,13 +158,33 @@ export async function resolveCosts(
 
   // Step 3: Merge material lines — variant overrides take precedence over template
   // Build a map from materialId → variant override line
-  const variantMaterialMap = new Map(
-    config.materialLines.map((l) => [l.materialId, l]),
-  );
-
-  // Start with template lines as base, then override with variant-specific lines
   const templateMaterialLines = config.template?.materialLines ?? [];
-  const mergedMaterialLineIds = new Set<string>();
+  const explicitMaterialOverrideMap = new Map(
+    config.materialLines
+      .filter((line) => line.templateLineId)
+      .map((line) => [line.templateLineId as string, line]),
+  );
+  const templateMaterialIds = new Set(templateMaterialLines.map((line) => line.materialId));
+  const materialIdTemplateCounts = new Map<string, number>();
+
+  for (const line of templateMaterialLines) {
+    materialIdTemplateCounts.set(
+      line.materialId,
+      (materialIdTemplateCounts.get(line.materialId) ?? 0) + 1,
+    );
+  }
+
+  const legacyMaterialOverrides = new Map(
+    config.materialLines
+      .filter(
+        (line) =>
+          !line.templateLineId &&
+          templateMaterialIds.has(line.materialId) &&
+          (materialIdTemplateCounts.get(line.materialId) ?? 0) === 1,
+      )
+      .map((line) => [line.materialId, line]),
+  );
+  const consumedVariantMaterialLineIds = new Set<string>();
   const allMaterialLines: Array<{
     materialId: string;
     material: (typeof config.materialLines)[0]["material"];
@@ -174,7 +194,9 @@ export async function resolveCosts(
   }> = [];
 
   for (const tl of templateMaterialLines) {
-    const override = variantMaterialMap.get(tl.materialId);
+    const explicitOverride = explicitMaterialOverrideMap.get(tl.id);
+    const legacyOverride = explicitOverride ? null : legacyMaterialOverrides.get(tl.materialId);
+    const override = explicitOverride ?? legacyOverride;
     allMaterialLines.push({
       materialId: tl.materialId,
       material: override?.material ?? tl.material,
@@ -182,12 +204,12 @@ export async function resolveCosts(
       quantity: override?.quantity ?? tl.quantity,
       usesPerVariant: override?.usesPerVariant ?? tl.usesPerVariant,
     });
-    mergedMaterialLineIds.add(tl.materialId);
+    if (override) consumedVariantMaterialLineIds.add(override.id);
   }
 
   // Add variant-only lines (not in template)
   for (const vl of config.materialLines) {
-    if (!mergedMaterialLineIds.has(vl.materialId)) {
+    if (!consumedVariantMaterialLineIds.has(vl.id) && !vl.templateLineId) {
       allMaterialLines.push({
         materialId: vl.materialId,
         material: vl.material,
@@ -231,11 +253,33 @@ export async function resolveCosts(
   });
 
   // Step 3 (continued): Merge equipment lines
-  const variantEquipmentMap = new Map(
-    config.equipmentLines.map((l) => [l.equipmentId, l]),
-  );
   const templateEquipmentLines = config.template?.equipmentLines ?? [];
-  const mergedEquipmentIds = new Set<string>();
+  const explicitEquipmentOverrideMap = new Map(
+    config.equipmentLines
+      .filter((line) => line.templateLineId)
+      .map((line) => [line.templateLineId as string, line]),
+  );
+  const templateEquipmentIds = new Set(templateEquipmentLines.map((line) => line.equipmentId));
+  const equipmentIdTemplateCounts = new Map<string, number>();
+
+  for (const line of templateEquipmentLines) {
+    equipmentIdTemplateCounts.set(
+      line.equipmentId,
+      (equipmentIdTemplateCounts.get(line.equipmentId) ?? 0) + 1,
+    );
+  }
+
+  const legacyEquipmentOverrides = new Map(
+    config.equipmentLines
+      .filter(
+        (line) =>
+          !line.templateLineId &&
+          templateEquipmentIds.has(line.equipmentId) &&
+          (equipmentIdTemplateCounts.get(line.equipmentId) ?? 0) === 1,
+      )
+      .map((line) => [line.equipmentId, line]),
+  );
+  const consumedVariantEquipmentLineIds = new Set<string>();
   const allEquipmentLines: Array<{
     equipmentId: string;
     equipment: (typeof config.equipmentLines)[0]["equipment"];
@@ -244,18 +288,20 @@ export async function resolveCosts(
   }> = [];
 
   for (const tl of templateEquipmentLines) {
-    const override = variantEquipmentMap.get(tl.equipmentId);
+    const explicitOverride = explicitEquipmentOverrideMap.get(tl.id);
+    const legacyOverride = explicitOverride ? null : legacyEquipmentOverrides.get(tl.equipmentId);
+    const override = explicitOverride ?? legacyOverride;
     allEquipmentLines.push({
       equipmentId: tl.equipmentId,
       equipment: override?.equipment ?? tl.equipment,
       minutes: override?.minutes ?? tl.minutes,
       uses: override?.uses ?? tl.uses,
     });
-    mergedEquipmentIds.add(tl.equipmentId);
+    if (override) consumedVariantEquipmentLineIds.add(override.id);
   }
 
   for (const vl of config.equipmentLines) {
-    if (!mergedEquipmentIds.has(vl.equipmentId)) {
+    if (!consumedVariantEquipmentLineIds.has(vl.id) && !vl.templateLineId) {
       allEquipmentLines.push({
         equipmentId: vl.equipmentId,
         equipment: vl.equipment,
