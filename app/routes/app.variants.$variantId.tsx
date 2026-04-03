@@ -12,12 +12,9 @@ import {
   Modal,
   TextField,
   Select,
-  Divider,
-  EmptyState,
-  Badge,
+  Divider
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
-import { Prisma } from "@prisma/client";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
@@ -377,9 +374,6 @@ export default function VariantDetailPage() {
 
   const { formatMoney, formatPct, getCurrencySymbol } = l10n();
 
-  const defaultLaborRate = config?.defaultLaborRate;
-  const defaultMistakeBuffer = config?.defaultMistakeBuffer;
-
   const [assignTemplateOpen, setAssignTemplateOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState(templates[0]?.id ?? "");
 
@@ -544,7 +538,7 @@ export default function VariantDetailPage() {
                   <input type="hidden" name="intent" value="update-mistake-buffer" />
                   <TextField
                     label="Mistake buffer (%)"
-                    placeholder={`${formatPct(defaultMistakeBuffer / 100)} (Shop Default)`}
+                    placeholder={`${formatPct(config.defaultMistakeBuffer / 100)} (Shop Default)`}
                     name="mistakeBuffer"
                     type="number"
                     min={0}
@@ -560,7 +554,7 @@ export default function VariantDetailPage() {
               </fetcher.Form>
             ) : (
               <Text as="p" variant="bodyMd" tone="subdued">
-                {config?.mistakeBuffer ? `${formatPct(config.mistakeBuffer / 100)}` : `${formatPct(defaultMistakeBuffer / 100)} (Shop Default)`}
+                {config?.mistakeBuffer ? `${formatPct(config.mistakeBuffer / 100)}` : `${formatPct(config.defaultMistakeBuffer / 100)} (Shop Default)`}
               </Text>
             )}
           </BlockStack>

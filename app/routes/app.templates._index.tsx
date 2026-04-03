@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useFetcher, useRouteError, Link, Outlet } from "@remix-run/react";
+import { useLoaderData, useFetcher, useRouteError, Link } from "@remix-run/react";
 import {
   Page,
   Card,

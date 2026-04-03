@@ -6,7 +6,6 @@ import {
   Card,
   Banner,
   BlockStack,
-  InlineStack,
   Text,
   Badge,
   Button,
