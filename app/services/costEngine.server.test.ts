@@ -37,7 +37,10 @@ function createEquipment(id: string) {
   };
 }
 
-function createDb(config: unknown, shopOverrides?: { mistakeBuffer?: Prisma.Decimal | null; defaultLaborRate?: Prisma.Decimal | null }) {
+function createDb(
+  config: unknown,
+  shopOverrides?: { mistakeBuffer?: Prisma.Decimal | null; defaultLaborRate?: Prisma.Decimal | null },
+) {
   return {
     variantCostConfig: {
       findUnique: vi.fn().mockResolvedValue(config),
@@ -240,5 +243,160 @@ describe("resolveCosts", () => {
     expect(result.equipmentLines).toHaveLength(2);
     expect(result.equipmentLines.map((line) => line.minutes?.toString() ?? "")).toEqual(["10", "30"]);
     expect(result.equipmentCost.toString()).toBe("30");
+  });
+});
+
+describe("resolveCosts shipping material uses costing", () => {
+  it("calculates packaging cost from a uses-based shipping line", async () => {
+    const shippingMaterial = createMaterial({
+      id: "tape",
+      type: "shipping",
+      costingModel: "uses",
+      purchasePrice: "20",
+      purchaseQty: "2",
+      totalUsesPerUnit: "100",
+    });
+
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      template: null,
+      materialLines: [
+        {
+          id: "shipping-line",
+          materialId: "tape",
+          material: shippingMaterial,
+          quantity: decimal("1"),
+          yield: null,
+          usesPerVariant: decimal("3"),
+        },
+      ],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config),
+    );
+
+    expect(result.packagingCost.toString()).toBe("0.3");
+    expect(result.materialCost.toString()).toBe("0");
+    expect(result.totalCost.toString()).toBe("0.3");
+  });
+
+  it("uses the maximum shipping line cost rather than summing shipping lines", async () => {
+    const flatShippingMaterial = createMaterial({
+      id: "box",
+      type: "shipping",
+      costingModel: null,
+      purchasePrice: "4",
+      purchaseQty: "1",
+    });
+    const usesShippingMaterial = createMaterial({
+      id: "tape",
+      type: "shipping",
+      costingModel: "uses",
+      purchasePrice: "20",
+      purchaseQty: "2",
+      totalUsesPerUnit: "100",
+    });
+
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      template: null,
+      materialLines: [
+        {
+          id: "box-line",
+          materialId: "box",
+          material: flatShippingMaterial,
+          quantity: decimal("1"),
+          yield: null,
+          usesPerVariant: null,
+        },
+        {
+          id: "tape-line",
+          materialId: "tape",
+          material: usesShippingMaterial,
+          quantity: decimal("1"),
+          yield: null,
+          usesPerVariant: decimal("3"),
+        },
+      ],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config),
+    );
+
+    expect(result.packagingCost.toString()).toBe("4");
+    expect(result.totalCost.toString()).toBe("4");
+  });
+
+  it("still applies mistake buffer only to production materials when shipping uses lines are present", async () => {
+    const productionMaterial = createMaterial({
+      id: "fabric",
+      type: "production",
+      costingModel: "yield",
+      purchasePrice: "12",
+      purchaseQty: "1",
+    });
+    const shippingMaterial = createMaterial({
+      id: "tape",
+      type: "shipping",
+      costingModel: "uses",
+      purchasePrice: "20",
+      purchaseQty: "2",
+      totalUsesPerUnit: "100",
+    });
+
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: decimal("0.1"),
+      template: null,
+      materialLines: [
+        {
+          id: "production-line",
+          materialId: "fabric",
+          material: productionMaterial,
+          quantity: decimal("2"),
+          yield: decimal("1"),
+          usesPerVariant: null,
+        },
+        {
+          id: "shipping-line",
+          materialId: "tape",
+          material: shippingMaterial,
+          quantity: decimal("1"),
+          yield: null,
+          usesPerVariant: decimal("3"),
+        },
+      ],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config),
+    );
+
+    expect(result.materialCost.toString()).toBe("24");
+    expect(result.packagingCost.toString()).toBe("0.3");
+    expect(result.mistakeBufferAmount.toString()).toBe("2.4");
+    expect(result.totalCost.toString()).toBe("26.7");
   });
 });
