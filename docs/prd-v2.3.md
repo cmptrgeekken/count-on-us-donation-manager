@@ -2,6 +2,10 @@
 
 Product Requirements Document
 
+This is the primary product-definition document for the app. Use it for scope, financial rules, user-facing behavior, QA expectations, and release intent.
+
+When this document conflicts with an implementation detail elsewhere, treat the PRD as authoritative unless a newer ADR explicitly changes the decision.
+
 Version 2.3  |  Foundation Build
 
 March 2026

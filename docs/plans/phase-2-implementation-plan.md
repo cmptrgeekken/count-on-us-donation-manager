@@ -1,5 +1,9 @@
 # Phase 2 Implementation Plan — Count On Us
 
+Use this document as the execution plan for Phase 2.
+
+It turns the build plan and ADR decisions into a concrete implementation sequence for the cost-model work. It should stay implementation-oriented and avoid restating product requirements unless they directly affect execution.
+
 ## Context
 
 Phase 1 is complete and verified. Phase 2 builds the cost model: schema, CatalogSync, material/equipment/template libraries, variant cost configuration, and CostEngine. POD provider connections (2.9) are deferred to a follow-on. Bulk inline cell editing is replaced with multi-select + template assignment for now.

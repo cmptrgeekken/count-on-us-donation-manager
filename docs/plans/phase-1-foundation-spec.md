@@ -1,4 +1,8 @@
-# Phase 1 Feature Spec — Foundation
+# Phase 1 Foundation Spec
+
+Use this document as the execution-level spec for Phase 1.
+
+It translates the build plan into concrete implementation detail for the foundation phase. If this document conflicts with the build plan, ADRs, or PRD, treat those higher-level documents as authoritative unless this spec reflects an intentional later clarification.
 
 **App:** Count On Us
 **Version:** 1.1
