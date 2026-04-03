@@ -343,17 +343,138 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return prisma.variantCostConfig.create({ data: { shopId, variantId } });
   }
 
+  async function requireTemplate(templateId: string) {
+    const template = await prisma.costTemplate.findFirst({
+      where: { id: templateId, shopId },
+      select: { id: true },
+    });
+    if (!template) {
+      throw new Response("Not found", { status: 404 });
+    }
+    return template;
+  }
+
+  async function requireMaterial(materialId: string) {
+    const material = await prisma.materialLibraryItem.findFirst({
+      where: { id: materialId, shopId },
+      select: { id: true },
+    });
+    if (!material) {
+      throw new Response("Not found", { status: 404 });
+    }
+    return material;
+  }
+
+  async function requireEquipment(equipmentId: string) {
+    const equipment = await prisma.equipmentLibraryItem.findFirst({
+      where: { id: equipmentId, shopId },
+      select: { id: true },
+    });
+    if (!equipment) {
+      throw new Response("Not found", { status: 404 });
+    }
+    return equipment;
+  }
+
+  async function requireTemplateMaterialLine(configId: string, templateLineId: string) {
+    const line = await prisma.costTemplateMaterialLine.findFirst({
+      where: {
+        id: templateLineId,
+        template: {
+          variantConfigs: {
+            some: { id: configId, shopId },
+          },
+        },
+      },
+      select: { id: true },
+    });
+    if (!line) {
+      throw new Response("Not found", { status: 404 });
+    }
+    return line;
+  }
+
+  async function requireTemplateEquipmentLine(configId: string, templateLineId: string) {
+    const line = await prisma.costTemplateEquipmentLine.findFirst({
+      where: {
+        id: templateLineId,
+        template: {
+          variantConfigs: {
+            some: { id: configId, shopId },
+          },
+        },
+      },
+      select: { id: true },
+    });
+    if (!line) {
+      throw new Response("Not found", { status: 404 });
+    }
+    return line;
+  }
+
+  function getLegacyOverrideIds(template: {
+    materialLines: Array<{ materialId: string }>;
+    equipmentLines: Array<{ equipmentId: string }>;
+  } | null | undefined) {
+    const materialCounts = new Map<string, number>();
+    const equipmentCounts = new Map<string, number>();
+
+    for (const line of template?.materialLines ?? []) {
+      materialCounts.set(line.materialId, (materialCounts.get(line.materialId) ?? 0) + 1);
+    }
+
+    for (const line of template?.equipmentLines ?? []) {
+      equipmentCounts.set(line.equipmentId, (equipmentCounts.get(line.equipmentId) ?? 0) + 1);
+    }
+
+    return {
+      materialIds: [...materialCounts.entries()]
+        .filter(([, count]) => count === 1)
+        .map(([materialId]) => materialId),
+      equipmentIds: [...equipmentCounts.entries()]
+        .filter(([, count]) => count === 1)
+        .map(([equipmentId]) => equipmentId),
+    };
+  }
+
   if (intent === "assign-template") {
     const templateId = formData.get("templateId")?.toString() ?? "";
+    await requireTemplate(templateId);
     const config = await ensureConfig();
+    const currentConfig = await prisma.variantCostConfig.findFirst({
+      where: { id: config.id, shopId },
+      include: {
+        template: {
+          select: {
+            materialLines: { select: { materialId: true } },
+            equipmentLines: { select: { equipmentId: true } },
+          },
+        },
+      },
+    });
+    const legacyOverrideIds = getLegacyOverrideIds(currentConfig?.template);
 
     await prisma.$transaction([
       prisma.variantCostConfig.updateMany({ where: { id: config.id, shopId }, data: { templateId } }),
       prisma.variantMaterialLine.deleteMany({
-        where: { configId: config.id, shopId, templateLineId: { not: null } },
+        where: {
+          configId: config.id,
+          shopId,
+          OR: [
+            { templateLineId: { not: null } },
+            { templateLineId: null, materialId: { in: legacyOverrideIds.materialIds } },
+          ],
+        },
       }),
       prisma.variantEquipmentLine.deleteMany({
-        where: { configId: config.id, shopId, templateLineId: { not: null } },
+        where: {
+          configId: config.id,
+          shopId,
+          OR: [
+            { templateLineId: { not: null } },
+            { templateLineId: null, equipmentId: { in: legacyOverrideIds.equipmentIds } },
+          ],
+        },
       }),
     ]);
 
@@ -371,15 +492,40 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   if (intent === "remove-template") {
-    const config = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId } });
+    const config = await prisma.variantCostConfig.findFirst({
+      where: { variantId, shopId },
+      include: {
+        template: {
+          select: {
+            materialLines: { select: { materialId: true } },
+            equipmentLines: { select: { equipmentId: true } },
+          },
+        },
+      },
+    });
     if (config) {
+      const legacyOverrideIds = getLegacyOverrideIds(config.template);
       await prisma.$transaction([
         prisma.variantCostConfig.updateMany({ where: { id: config.id, shopId }, data: { templateId: null } }),
         prisma.variantMaterialLine.deleteMany({
-          where: { configId: config.id, shopId, templateLineId: { not: null } },
+          where: {
+            configId: config.id,
+            shopId,
+            OR: [
+              { templateLineId: { not: null } },
+              { templateLineId: null, materialId: { in: legacyOverrideIds.materialIds } },
+            ],
+          },
         }),
         prisma.variantEquipmentLine.deleteMany({
-          where: { configId: config.id, shopId, templateLineId: { not: null } },
+          where: {
+            configId: config.id,
+            shopId,
+            OR: [
+              { templateLineId: { not: null } },
+              { templateLineId: null, equipmentId: { in: legacyOverrideIds.equipmentIds } },
+            ],
+          },
         }),
       ]);
       await prisma.auditLog.create({
@@ -429,6 +575,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
     const config = await ensureConfig();
+    await requireTemplateMaterialLine(config.id, templateLineId);
+    await requireMaterial(materialId);
 
     const existing = await prisma.variantMaterialLine.findFirst({
       where: { configId: config.id, shopId, templateLineId },
@@ -469,6 +617,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const templateLineId = formData.get("templateLineId")?.toString() ?? "";
     const config = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId }, select: { id: true } });
     if (!config) return Response.json({ ok: false, message: "Configuration not found." }, { status: 404 });
+    await requireTemplateMaterialLine(config.id, templateLineId);
 
     await prisma.variantMaterialLine.deleteMany({
       where: { configId: config.id, shopId, templateLineId },
@@ -537,6 +686,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const minutes = formData.get("minutes")?.toString();
     const uses = formData.get("uses")?.toString();
     const config = await ensureConfig();
+    await requireTemplateEquipmentLine(config.id, templateLineId);
+    await requireEquipment(equipmentId);
 
     const existing = await prisma.variantEquipmentLine.findFirst({
       where: { configId: config.id, shopId, templateLineId },
@@ -575,6 +726,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const templateLineId = formData.get("templateLineId")?.toString() ?? "";
     const config = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId }, select: { id: true } });
     if (!config) return Response.json({ ok: false, message: "Configuration not found." }, { status: 404 });
+    await requireTemplateEquipmentLine(config.id, templateLineId);
 
     await prisma.variantEquipmentLine.deleteMany({
       where: { configId: config.id, shopId, templateLineId },
