@@ -137,7 +137,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   async function requireMaterialLine(lineId: string) {
     const line = await prisma.costTemplateMaterialLine.findFirst({
       where: { id: lineId, templateId },
-      select: { id: true },
+      select: { id: true, materialId: true },
     });
     if (!line) {
       throw new Response("Not found", { status: 404 });
@@ -148,12 +148,46 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   async function requireEquipmentLine(lineId: string) {
     const line = await prisma.costTemplateEquipmentLine.findFirst({
       where: { id: lineId, templateId },
-      select: { id: true },
+      select: { id: true, equipmentId: true },
     });
     if (!line) {
       throw new Response("Not found", { status: 404 });
     }
     return line;
+  }
+
+  async function ensureMaterialNotAlreadyAdded(materialId: string, currentLineId?: string) {
+    const existingLine = await prisma.costTemplateMaterialLine.findFirst({
+      where: {
+        templateId,
+        materialId,
+        ...(currentLineId ? { NOT: { id: currentLineId } } : {}),
+      },
+      select: { id: true },
+    });
+
+    if (existingLine) {
+      return Response.json({ ok: false, message: "That material is already included in this template." }, { status: 400 });
+    }
+
+    return null;
+  }
+
+  async function ensureEquipmentNotAlreadyAdded(equipmentId: string, currentLineId?: string) {
+    const existingLine = await prisma.costTemplateEquipmentLine.findFirst({
+      where: {
+        templateId,
+        equipmentId,
+        ...(currentLineId ? { NOT: { id: currentLineId } } : {}),
+      },
+      select: { id: true },
+    });
+
+    if (existingLine) {
+      return Response.json({ ok: false, message: "That equipment item is already included in this template." }, { status: 400 });
+    }
+
+    return null;
   }
 
   if (intent === "update-meta") {
@@ -174,6 +208,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
 
     await requireMaterial(materialId);
+    const duplicateMaterialResponse = await ensureMaterialNotAlreadyAdded(materialId);
+    if (duplicateMaterialResponse) return duplicateMaterialResponse;
 
     await prisma.costTemplateMaterialLine.create({
       data: {
@@ -199,6 +235,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     await requireMaterialLine(lineId);
     await requireMaterial(materialId);
+    const duplicateMaterialResponse = await ensureMaterialNotAlreadyAdded(materialId, lineId);
+    if (duplicateMaterialResponse) return duplicateMaterialResponse;
 
     await prisma.costTemplateMaterialLine.updateMany({
       where: { id: lineId, templateId },
@@ -231,6 +269,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const uses = formData.get("uses")?.toString();
 
     await requireEquipment(equipmentId);
+    const duplicateEquipmentResponse = await ensureEquipmentNotAlreadyAdded(equipmentId);
+    if (duplicateEquipmentResponse) return duplicateEquipmentResponse;
 
     await prisma.costTemplateEquipmentLine.create({
       data: {
@@ -254,6 +294,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     await requireEquipmentLine(lineId);
     await requireEquipment(equipmentId);
+    const duplicateEquipmentResponse = await ensureEquipmentNotAlreadyAdded(equipmentId, lineId);
+    if (duplicateEquipmentResponse) return duplicateEquipmentResponse;
 
     await prisma.costTemplateEquipmentLine.updateMany({
       where: { id: lineId, templateId },
@@ -349,9 +391,20 @@ export default function TemplateDetailPage() {
   const [eqUses, setEqUses] = useState("");
 
   const isSubmitting = fetcher.state !== "idle";
+  const unavailableMaterialIds = new Set(
+    template.materialLines
+      .filter((line: TemplateMaterialLine) => line.id !== editingMaterialLineId)
+      .map((line: TemplateMaterialLine) => line.materialId),
+  );
+  const unavailableEquipmentIds = new Set(
+    template.equipmentLines
+      .filter((line: TemplateEquipmentLine) => line.id !== editingEquipmentLineId)
+      .map((line: TemplateEquipmentLine) => line.equipmentId),
+  );
 
   const selectedMaterial = availableMaterials.find((m: AvailableMaterial) => m.id === selectedMaterialId);
   const filteredMaterialOptions = availableMaterials
+    .filter((material: AvailableMaterial) => !unavailableMaterialIds.has(material.id))
     .filter((material: AvailableMaterial) =>
       material.name.toLowerCase().includes(materialSearchValue.trim().toLowerCase()),
     )
@@ -361,6 +414,7 @@ export default function TemplateDetailPage() {
     }));
 
   const filteredEquipmentOptions = availableEquipment
+    .filter((equipment: AvailableEquipment) => !unavailableEquipmentIds.has(equipment.id))
     .filter((equipment: AvailableEquipment) =>
       equipment.name.toLowerCase().includes(equipmentSearchValue.trim().toLowerCase()),
     )
