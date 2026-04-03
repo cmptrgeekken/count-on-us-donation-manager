@@ -286,15 +286,17 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       sku: variant.sku ?? "",
       price: variant.price.toString(),
     },
+    shopDefaults: {
+      defaultLaborRate: shop?.defaultLaborRate?.toString() ?? "",
+      mistakeBuffer: shop?.mistakeBuffer ? (Number(shop.mistakeBuffer) * 100).toFixed(2) : "",
+    },
     config: config
       ? {
           id: config.id,
           templateId: config.templateId,
           templateName: config.template?.name ?? null,
-          defaultLaborRate: shop?.defaultLaborRate?.toString() ?? "",
           laborMinutes: config.laborMinutes?.toString() ?? "",
           laborRate: config.laborRate?.toString() ?? "",
-          defaultMistakeBuffer: shop?.mistakeBuffer ? (Number(shop.mistakeBuffer) * 100).toFixed(2) : "",
           mistakeBuffer: config.mistakeBuffer ? (Number(config.mistakeBuffer) * 100).toFixed(2) : "",
           lineItemCount: config.lineItemCount,
           templateMaterialLines,
@@ -918,7 +920,8 @@ function describeEquipmentLine(line: {
 }
 
 export default function VariantDetailPage() {
-  const { variant, config, templates, availableMaterials, availableEquipment } = useLoaderData<typeof loader>();
+  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment } =
+    useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string; preview?: Record<string, string> }>();
   const { formatMoney, formatPct, getCurrencySymbol } = l10n();
 
@@ -955,6 +958,15 @@ export default function VariantDetailPage() {
   const isSubmitting = fetcher.state !== "idle";
   const preview = fetcher.data?.preview;
   const selectedMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === selectedMaterialId);
+  const shopDefaultLaborRate = shopDefaults.defaultLaborRate;
+  const effectiveLaborRateLabel = config?.laborRate
+    ? `${formatMoney(config.laborRate)}/hr (Variant override)`
+    : shopDefaultLaborRate
+      ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
+      : "No labor rate set";
+  const laborRateHelpText = shopDefaultLaborRate
+    ? `Leave blank to use the shop default of ${formatMoney(shopDefaultLaborRate)}/hr.`
+    : "Leave blank to avoid a variant override. Set a shop default in Settings to make variants inherit one.";
 
   function resetAdditionalMaterialModal() {
     setSelectedMaterialId(availableMaterials[0]?.id ?? "");
@@ -1081,9 +1093,9 @@ export default function VariantDetailPage() {
                       <TextField
                         label={`Hourly rate (${getCurrencySymbol()})`}
                         placeholder={
-                          config?.defaultLaborRate
-                            ? `${formatMoney(config.defaultLaborRate)}/hr (Shop default)`
-                            : "Leave blank to use the shop default"
+                          shopDefaultLaborRate
+                            ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
+                            : "Set a variant override or configure a shop default"
                         }
                         name="laborRate"
                         type="number"
@@ -1092,7 +1104,7 @@ export default function VariantDetailPage() {
                         value={laborRate}
                         onChange={setLaborRate}
                         autoComplete="off"
-                        helpText="Leave blank to use the global default from Settings"
+                        helpText={laborRateHelpText}
                       />
                     </div>
                   </InlineStack>
@@ -1105,11 +1117,7 @@ export default function VariantDetailPage() {
                   {config?.laborMinutes ? `${config.laborMinutes} min` : "Not set"}
                 </Text>
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  {config?.laborRate
-                    ? `${formatMoney(config.laborRate)}/hr`
-                    : config?.defaultLaborRate
-                      ? `${formatMoney(config.defaultLaborRate)}/hr (Shop Default)`
-                      : "Uses shop default labor rate"}
+                  {effectiveLaborRateLabel}
                 </Text>
               </InlineStack>
             )}
@@ -1136,7 +1144,7 @@ export default function VariantDetailPage() {
                   <input type="hidden" name="intent" value="update-mistake-buffer" />
                   <TextField
                     label="Mistake buffer (%)"
-                    placeholder={`${formatPct((Number(config?.defaultMistakeBuffer ?? "0")) / 100)} (Shop Default)`}
+                    placeholder={`${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
                     name="mistakeBuffer"
                     type="number"
                     min={0}
@@ -1154,7 +1162,7 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">
                 {config?.mistakeBuffer
                   ? formatPct(Number(config.mistakeBuffer) / 100)
-                  : `${formatPct((Number(config?.defaultMistakeBuffer ?? "0")) / 100)} (Shop Default)`}
+                  : `${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
               </Text>
             )}
           </BlockStack>
