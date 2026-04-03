@@ -22,7 +22,7 @@ import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import { useAppLocalization } from "../utils/use-app-localization";
 
-// ── Loader ────────────────────────────────────────────────────────────────────
+// Loader
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -55,7 +55,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 };
 
-// ── Action ────────────────────────────────────────────────────────────────────
+// Action
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -67,7 +67,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "create" || intent === "update") {
     const name = formData.get("name")?.toString().trim() ?? "";
     const type = formData.get("type")?.toString() ?? "production";
-    const costingModel = formData.get("costingModel")?.toString() ?? "yield";
+    const rawCostingModel = formData.get("costingModel")?.toString() ?? "yield";
+    const costingModel =
+      type === "shipping"
+        ? rawCostingModel === "uses"
+          ? "uses"
+          : null
+        : rawCostingModel === "uses"
+          ? "uses"
+          : "yield";
     const purchasePrice = parseFloat(formData.get("purchasePrice")?.toString() ?? "0");
     const purchaseQty = parseFloat(formData.get("purchaseQty")?.toString() ?? "1");
     const totalUsesPerUnit =
@@ -77,14 +85,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const unitDescription = formData.get("unitDescription")?.toString().trim() || null;
     const notes = formData.get("notes")?.toString().trim() || null;
 
-    if (!name)
+    if (!name) {
       return Response.json({ ok: false, message: "Name is required." }, { status: 400 });
-    if (isNaN(purchasePrice) || purchasePrice <= 0)
+    }
+    if (isNaN(purchasePrice) || purchasePrice <= 0) {
       return Response.json({ ok: false, message: "Purchase price must be greater than 0." }, { status: 400 });
-    if (isNaN(purchaseQty) || purchaseQty <= 0)
+    }
+    if (isNaN(purchaseQty) || purchaseQty <= 0) {
       return Response.json({ ok: false, message: "Purchase quantity must be greater than 0." }, { status: 400 });
-    if (costingModel === "uses" && (totalUsesPerUnit === null || isNaN(totalUsesPerUnit) || totalUsesPerUnit <= 0))
+    }
+    if (costingModel === "uses" && (totalUsesPerUnit === null || isNaN(totalUsesPerUnit) || totalUsesPerUnit <= 0)) {
       return Response.json({ ok: false, message: "Total uses per unit must be greater than 0 for uses-based costing." }, { status: 400 });
+    }
 
     const perUnitCost = purchasePrice / purchaseQty;
     const data = {
@@ -106,14 +118,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         data: { shopId, entity: "MaterialLibraryItem", entityId: material.id, action: "MATERIAL_CREATED", actor: "merchant" },
       });
       return Response.json({ ok: true, message: "Material created." });
-    } else {
-      const id = formData.get("id")?.toString() ?? "";
-      await prisma.materialLibraryItem.update({ where: { id, shopId }, data });
-      await prisma.auditLog.create({
-        data: { shopId, entity: "MaterialLibraryItem", entityId: id, action: "MATERIAL_UPDATED", actor: "merchant" },
-      });
-      return Response.json({ ok: true, message: "Material updated." });
     }
+
+    const id = formData.get("id")?.toString() ?? "";
+    await prisma.materialLibraryItem.update({ where: { id, shopId }, data });
+    await prisma.auditLog.create({
+      data: { shopId, entity: "MaterialLibraryItem", entityId: id, action: "MATERIAL_UPDATED", actor: "merchant" },
+    });
+    return Response.json({ ok: true, message: "Material updated." });
   }
 
   if (intent === "deactivate" || intent === "reactivate") {
@@ -134,8 +146,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
 };
-
-// ── Types ─────────────────────────────────────────────────────────────────────
 
 type Material = {
   id: string;
@@ -165,8 +175,6 @@ const EMPTY_FORM = {
   notes: "",
 };
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 export default function MaterialsPage() {
   const { materials } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
@@ -189,7 +197,7 @@ export default function MaterialsPage() {
       id: m.id,
       name: m.name,
       type: m.type,
-      costingModel: m.costingModel ?? "yield",
+      costingModel: m.costingModel ?? (m.type === "shipping" ? "uses" : "yield"),
       purchasePrice: m.purchasePrice,
       purchaseQty: m.purchaseQty,
       totalUsesPerUnit: m.totalUsesPerUnit ?? "",
@@ -204,10 +212,23 @@ export default function MaterialsPage() {
       ? (Number(form.purchasePrice) / Number(form.purchaseQty)).toFixed(2)
       : null;
 
-  const perUsePreview = 
+  const perUsePreview =
     perUnitPreview && form.totalUsesPerUnit && Number(form.totalUsesPerUnit) > 0
       ? (Number(perUnitPreview) / Number(form.totalUsesPerUnit)).toFixed(2)
       : null;
+
+  const costingModelOptions =
+    form.type === "shipping"
+      ? [{ label: "Uses-based (e.g. one strip of tape per order)", value: "uses" }]
+      : [
+          { label: "Yield-based (e.g. fabric by the metre)", value: "yield" },
+          { label: "Uses-based (e.g. screen with 50 uses)", value: "uses" },
+        ];
+
+  const isLegacyFlatShippingMaterial =
+    form.type === "shipping" &&
+    form.id !== "" &&
+    materials.find((m: Material) => m.id === form.id)?.costingModel === null;
 
   const isSubmitting = fetcher.state !== "idle";
 
@@ -228,7 +249,7 @@ export default function MaterialsPage() {
       </IndexTable.Cell>
       <IndexTable.Cell>
         <Text as="span" variant="bodyMd">
-          {m.costingModel === "yield" ? "Yield-based" : m.costingModel === "uses" ? "Uses-based" : "—"}
+          {m.costingModel === "yield" ? "Yield-based" : m.costingModel === "uses" ? "Uses-based" : "Flat per unit"}
         </Text>
       </IndexTable.Cell>
       <IndexTable.Cell>
@@ -273,7 +294,6 @@ export default function MaterialsPage() {
         <button variant="primary" onClick={openCreate}>New material</button>
       </TitleBar>
 
-      {/* Screen reader announcements */}
       <div
         aria-live="polite"
         aria-atomic="true"
@@ -324,7 +344,6 @@ export default function MaterialsPage() {
         </Card>
       </BlockStack>
 
-      {/* Create / Edit modal */}
       <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
@@ -341,8 +360,9 @@ export default function MaterialsPage() {
             fd.append("costingModel", form.costingModel);
             fd.append("purchasePrice", form.purchasePrice);
             fd.append("purchaseQty", form.purchaseQty);
-            if (form.costingModel === "uses")
+            if (form.costingModel === "uses") {
               fd.append("totalUsesPerUnit", form.totalUsesPerUnit);
+            }
             fd.append("unitDescription", form.unitDescription);
             fd.append("notes", form.notes);
             fetcher.submit(fd, { method: "post" });
@@ -356,7 +376,7 @@ export default function MaterialsPage() {
             <TextField
               label="Name"
               value={form.name}
-              onChange={(v) => setForm((f) => ({ ...f, name: v }))}
+              onChange={(value) => setForm((current) => ({ ...current, name: value }))}
               autoComplete="off"
             />
             <Select
@@ -366,17 +386,25 @@ export default function MaterialsPage() {
                 { label: "Shipping material", value: "shipping" },
               ]}
               value={form.type}
-              onChange={(v) => setForm((f) => ({ ...f, type: v }))}
+              onChange={(value) =>
+                setForm((current) => ({
+                  ...current,
+                  type: value,
+                  costingModel: value === "shipping" ? "uses" : current.costingModel === "uses" ? "uses" : "yield",
+                }))
+              }
             />
             <Select
               label="Costing model"
-              options={[
-                { label: "Yield-based (e.g. fabric by the metre)", value: "yield" },
-                { label: "Uses-based (e.g. screen with 50 uses)", value: "uses" },
-              ]}
+              options={costingModelOptions}
               value={form.costingModel}
-              onChange={(v) => setForm((f) => ({ ...f, costingModel: v }))}
+              onChange={(value) => setForm((current) => ({ ...current, costingModel: value }))}
             />
+            {isLegacyFlatShippingMaterial && (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                This existing shipping material currently uses legacy flat per-unit costing. Saving will convert it to uses-based costing.
+              </Text>
+            )}
             <InlineStack gap="400" wrap={false}>
               <div style={{ flex: 1 }}>
                 <TextField
@@ -385,7 +413,7 @@ export default function MaterialsPage() {
                   min={0}
                   step={0.01}
                   value={form.purchasePrice}
-                  onChange={(v) => setForm((f) => ({ ...f, purchasePrice: v }))}
+                  onChange={(value) => setForm((current) => ({ ...current, purchasePrice: value }))}
                   autoComplete="off"
                 />
               </div>
@@ -396,7 +424,7 @@ export default function MaterialsPage() {
                   min={0}
                   step={0.001}
                   value={form.purchaseQty}
-                  onChange={(v) => setForm((f) => ({ ...f, purchaseQty: v }))}
+                  onChange={(value) => setForm((current) => ({ ...current, purchaseQty: value }))}
                   autoComplete="off"
                 />
               </div>
@@ -414,7 +442,7 @@ export default function MaterialsPage() {
                   min={0}
                   step={1}
                   value={form.totalUsesPerUnit}
-                  onChange={(v) => setForm((f) => ({ ...f, totalUsesPerUnit: v }))}
+                  onChange={(value) => setForm((current) => ({ ...current, totalUsesPerUnit: value }))}
                   autoComplete="off"
                   helpText="How many uses can be extracted from one purchased unit"
                 />
@@ -428,14 +456,14 @@ export default function MaterialsPage() {
             <TextField
               label="Unit description (optional)"
               value={form.unitDescription}
-              onChange={(v) => setForm((f) => ({ ...f, unitDescription: v }))}
+              onChange={(value) => setForm((current) => ({ ...current, unitDescription: value }))}
               autoComplete="off"
               helpText="e.g. metres, grams, sheets"
             />
             <TextField
               label="Notes (optional)"
               value={form.notes}
-              onChange={(v) => setForm((f) => ({ ...f, notes: v }))}
+              onChange={(value) => setForm((current) => ({ ...current, notes: value }))}
               multiline={3}
               autoComplete="off"
             />
@@ -443,7 +471,6 @@ export default function MaterialsPage() {
         </Modal.Section>
       </Modal>
 
-      {/* Deactivate confirmation modal */}
       {deactivateTarget && (
         <Modal
           open
