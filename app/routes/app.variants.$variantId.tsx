@@ -920,7 +920,7 @@ function describeEquipmentLine(line: {
 }
 
 export default function VariantDetailPage() {
-  const { variant, config, templates, availableMaterials, availableEquipment } =
+  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string; preview?: Record<string, string> }>();
 
