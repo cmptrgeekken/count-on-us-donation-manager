@@ -1,5 +1,9 @@
 # Internal API Contract — Shopify Donation Manager
 
+Use this document as the intended contract for internal and extension-facing endpoints.
+
+It is a design reference, not proof that every endpoint is already implemented. Check the current implementation status and the codebase before assuming an endpoint is live.
+
 **Version:** 1.0  
 **Date:** March 2026  
 **Style:** REST  

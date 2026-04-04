@@ -34,5 +34,7 @@ ADR-006 (Bulk migration removal) — no chain dependency; supersedes PRD §11.6 
 
 ## Related documents
 
-- [PRD v2.3](../shopify_donation_manager_prd_v2-3.md)
+- [Docs guide](../README.md)
+- [PRD v2.3](../prd-v2.3.md)
+- [Build Plan v1.2](../build-plan.md)
 - Feasibility checklist (inline in session notes — to be extracted)

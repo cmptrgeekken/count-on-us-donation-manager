@@ -1,5 +1,9 @@
 # Phase 3 Implementation Plan — Count On Us
 
+Use this document as the execution plan for Phase 3.
+
+It turns the build plan and ADR decisions into a concrete implementation sequence for causes, snapshots, adjustments, and related financial workflows. It should stay implementation-oriented and avoid duplicating PRD language unless the detail is needed to build safely.
+
 ## Context
 
 Phase 2 is complete and verified. Phase 3 introduces causes, the immutable snapshot system, business expenses, order webhook handlers, and the order history page. This is the most financially critical phase — the correctness of every subsequent report, disbursement, and tax estimate depends on snapshots being created accurately and atomically.
@@ -10,7 +14,7 @@ POD provider connections remain deferred (Phase 2.9). The snapshot system is des
 
 ## Pre-Phase 3 amendments (complete before starting Phase 3 steps)
 
-The following items from `docs/proposed-updates.md` must be completed first. They affect the cost model that SnapshotService will consume:
+The following items from `docs/implementation-backlog.md` must be completed first. They affect the cost model that SnapshotService will consume:
 
 - **PU-1** — Uses-based costing for shipping materials  
 - **PU-2** — Searchable pickers + editable lines in template editor  

@@ -1,11 +1,15 @@
 # Phased Build Plan — Shopify Donation Manager
 
+Use this document for sequencing, dependencies, phase boundaries, and exit criteria.
+
+This is the authoritative delivery roadmap. It explains when work should happen and what must be true before the next phase begins.
+
 **Version:** 1.2
 **Date:** March 2026  
 **Developer:** Solo  
 **Phase definition:** Each phase ends when all work in that phase is complete, tested, and verifiable on a development store. No phase begins until the previous phase passes its exit criteria.
 
-**v1.2 — March 2026:** §1.3 — replaced `RecalculationRun` with `DeletionJob` as the fourth Phase 1 schema table. RecalculationRun has no Phase 1 role (removed via BE-1 panel flag). DeletionJob is required in Phase 1 to support the uninstall/reinstall lifecycle. See Phase 1 feature spec v1.1 §3.4.
+**v1.2 — March 2026:** §1.3 — replaced `RecalculationRun` with `DeletionJob` as the fourth Phase 1 schema table. RecalculationRun has no Phase 1 role (removed via BE-1 panel flag). DeletionJob is required in Phase 1 to support the uninstall/reinstall lifecycle. See Phase 1 foundation spec v1.1 §3.4.
 
 
 ---

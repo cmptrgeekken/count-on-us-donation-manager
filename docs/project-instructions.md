@@ -1,5 +1,11 @@
 # Project Instructions — Shopify Donation Manager
 
+## Purpose
+
+Use this document for project-wide working rules: the transparency tenet, collaboration model, personas, review expectations, and the core document map.
+
+This is the best starting point when deciding how work should be done. Use the PRD, build plan, ADRs, and phase plans for what should be built.
+
 ## Primary tenet
 
 **Transparency is valued over all else.**
@@ -229,14 +235,22 @@ If the answer to any of these is "no" or "not fully," the feature must be rework
 
 All decisions in this project are grounded in the following documents. When a persona raises a concern, they should reference the relevant section where applicable.
 
-- [PRD v2.1](shopify_donation_manager_prd_v2-1.md)
-- [Phased Build Plan v1.0](phased-build-plan.md)
-- [ADR-000 Index](adr-000-index.md)
-- [ADR-001 Immutable snapshot architecture](adr-001-immutable-snapshot-architecture.md)
-- [ADR-002 Dual-track financial model](adr-002-dual-track-financial-model.md)
-- [ADR-003 Cost resolution strategy](adr-003-cost-resolution-strategy.md)
-- [ADR-004 Storefront widget data delivery](adr-004-storefront-widget-data-delivery.md)
-- [ADR-005 Direct Giving Mode](adr-005-direct-giving-mode.md)
+- [Docs guide](README.md)
+- [Current implementation status](current-implementation-status.md)
+- [PRD v2.3](prd-v2.3.md)
+- [Build Plan v1.2](build-plan.md)
+- [Internal API Contract](internal-api-contract.md)
+- [Implementation Backlog](implementation-backlog.md)
+- [Phase 1 Foundation Spec](plans/phase-1-foundation-spec.md)
+- [Phase 2 Implementation Plan](plans/phase-2-implementation-plan.md)
+- [Phase 3 Implementation Plan](plans/phase-3-implementation-plan.md)
+- [ADR-000 Index](adrs/adr-000-index.md)
+- [ADR-001 Immutable snapshot architecture](adrs/adr-001-immutable-snapshot-architecture.md)
+- [ADR-002 Dual-track financial model](adrs/adr-002-dual-track-financial-model.md)
+- [ADR-003 Cost resolution strategy](adrs/adr-003-cost-resolution-strategy.md)
+- [ADR-004 Storefront widget data delivery](adrs/adr-004-storefront-widget-data-delivery.md)
+- [ADR-005 Direct Giving Mode](adrs/adr-005-direct-giving-mode.md)
+- [ADR-006 Bulk migration removal](adrs/adr-006-bulk-migration-removal.md)
 
 ---
 

@@ -1,4 +1,8 @@
-# Proposed Updates
+# Implementation Backlog
+
+Use this document for post-spec amendments, follow-up improvements, and design or implementation issues discovered during development.
+
+This is not the source of record for shipped scope. Items here become authoritative only when they are folded into the PRD, build plan, ADRs, or a phase implementation plan.
 
 Issues and improvement ideas identified during Phase 2 development and testing. Each item is analysed, given a complexity estimate, and assigned to the most appropriate phase.
 
