@@ -19,35 +19,23 @@ import {
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
-import l10n from "../utils/localization";
-import { getLocaleFromRequest } from "../utils/localization.server";
+import { useAppLocalization } from "../utils/use-app-localization";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
-  const locale = getLocaleFromRequest(request);
 
-  const [shop, equipment] = await Promise.all([
-    prisma.shop.findUnique({
-      where: { shopId },
-      select: { currency: true },
-    }),
-    prisma.equipmentLibraryItem.findMany({
-      where: { shopId },
-      orderBy: { createdAt: "asc" },
-      include: {
-        _count: { select: { templateLines: true, variantLines: true } },
-      },
-    }),
-  ]);
+  const equipment = await prisma.equipmentLibraryItem.findMany({
+    where: { shopId },
+    orderBy: { createdAt: "asc" },
+    include: {
+      _count: { select: { templateLines: true, variantLines: true } },
+    },
+  });
 
   return Response.json({
-    localization: {
-      currency: shop?.currency ?? "USD",
-      locale,
-    },
     equipment: equipment.map((e) => ({
       id: e.id,
       name: e.name,
@@ -150,10 +138,10 @@ const EMPTY_FORM = { id: "", name: "", hourlyRate: "", perUseCost: "", notes: ""
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function EquipmentPage() {
-  const { equipment, localization } = useLoaderData<typeof loader>();
+  const { equipment } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
 
-  const { formatMoney, getCurrencySymbol } = l10n(localization.currency, localization.locale);
+  const { formatMoney, getCurrencySymbol } = useAppLocalization();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
