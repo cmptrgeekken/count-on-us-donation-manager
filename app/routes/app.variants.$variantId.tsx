@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
 import {
   Badge,
   Banner,
@@ -16,10 +16,22 @@ import {
   TextField,
 } from "@shopify/polaris";
 import { TitleBar } from "@shopify/app-bridge-react";
+import { z } from "zod";
+import { AppSaveBar } from "../components/AppSaveBar";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
 import { useAppLocalization } from "../utils/use-app-localization";
+import {
+  applyTemplateSelectionToVariantDraft,
+  cloneDraft,
+  createClientId,
+  normalizeVariantDraft,
+  type TemplateCatalogEntry,
+  type VariantDraft,
+  type VariantTemplateEquipmentDraftLine,
+  type VariantTemplateMaterialDraftLine,
+} from "../utils/staged-editor";
 
 type SerializedMaterialLine = {
   id: string;
@@ -124,6 +136,57 @@ function serializeVariantEquipmentLine(
   };
 }
 
+const variantDraftSchema = z.object({
+  templateId: z.string().nullable(),
+  laborMinutes: z.string(),
+  laborRate: z.string(),
+  mistakeBuffer: z.string(),
+  templateMaterialLines: z.array(z.object({
+    templateLineId: z.string(),
+    materialId: z.string(),
+    hasOverride: z.boolean(),
+    overrideQuantity: z.string().nullable(),
+    overrideYield: z.string().nullable(),
+    overrideUsesPerVariant: z.string().nullable(),
+  })),
+  templateEquipmentLines: z.array(z.object({
+    templateLineId: z.string(),
+    equipmentId: z.string(),
+    hasOverride: z.boolean(),
+    overrideMinutes: z.string().nullable(),
+    overrideUses: z.string().nullable(),
+  })),
+  materialLines: z.array(z.object({
+    materialId: z.string(),
+    quantity: z.string(),
+    yield: z.string().nullable(),
+    usesPerVariant: z.string().nullable(),
+  })),
+  equipmentLines: z.array(z.object({
+    equipmentId: z.string(),
+    minutes: z.string().nullable(),
+    uses: z.string().nullable(),
+  })),
+});
+
+function parseNullableNumber(value: string | null | undefined, field: string) {
+  if (!value || !value.trim()) return null;
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    throw new Response(`${field} must be a non-negative number.`, { status: 400 });
+  }
+  return parsed;
+}
+
+function parseOptionalPercent(value: string | null | undefined) {
+  if (!value || !value.trim()) return null;
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed < 0 || parsed > 100) {
+    throw new Response("Mistake buffer must be between 0 and 100.", { status: 400 });
+  }
+  return parsed / 100;
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
@@ -161,7 +224,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     prisma.costTemplate.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
-      select: { id: true, name: true },
+      include: {
+        materialLines: { include: { material: true }, orderBy: { id: "asc" } },
+        equipmentLines: { include: { equipment: true }, orderBy: { id: "asc" } },
+      },
     }),
     prisma.materialLibraryItem.findMany({
       where: { shopId, status: "active" },
@@ -305,7 +371,27 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           equipmentLines: additionalEquipmentLines,
         }
       : null,
-    templates: templates.map((template) => ({ id: template.id, name: template.name })),
+    templates: templates.map((template) => ({
+      id: template.id,
+      name: template.name,
+      materialLines: template.materialLines.map((line) => ({
+        templateLineId: line.id,
+        materialId: line.materialId,
+        materialName: line.material.name,
+        materialType: line.material.type,
+        costingModel: line.material.costingModel,
+        quantity: line.quantity.toString(),
+        yield: line.yield?.toString() ?? null,
+        usesPerVariant: line.usesPerVariant?.toString() ?? null,
+      })),
+      equipmentLines: template.equipmentLines.map((line) => ({
+        templateLineId: line.id,
+        equipmentId: line.equipmentId,
+        equipmentName: line.equipment.name,
+        minutes: line.minutes?.toString() ?? null,
+        uses: line.uses?.toString() ?? null,
+      })),
+    })),
     availableMaterials: materials.map((material) => ({
       id: material.id,
       name: material.name,
@@ -465,6 +551,198 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         .filter(([, count]) => count === 1)
         .map(([equipmentId]) => equipmentId),
     };
+  }
+
+  if (intent === "save-variant-draft") {
+    const rawDraft = formData.get("draft")?.toString();
+    if (!rawDraft) {
+      return Response.json({ ok: false, message: "Draft data is required." }, { status: 400 });
+    }
+
+    const parsedDraft = variantDraftSchema.safeParse(JSON.parse(rawDraft));
+    if (!parsedDraft.success) {
+      return Response.json(
+        { ok: false, message: parsedDraft.error.issues[0]?.message ?? "Invalid variant data." },
+        { status: 400 },
+      );
+    }
+
+    const draft = parsedDraft.data;
+    const selectedTemplate = draft.templateId
+      ? await prisma.costTemplate.findFirst({
+          where: { id: draft.templateId, shopId },
+          include: {
+            materialLines: { select: { id: true, materialId: true } },
+            equipmentLines: { select: { id: true, equipmentId: true } },
+          },
+        })
+      : null;
+
+    if (draft.templateId && !selectedTemplate) {
+      return Response.json({ ok: false, message: "Template not found." }, { status: 404 });
+    }
+
+    const materialMap = new Map((selectedTemplate?.materialLines ?? []).map((line) => [line.id, line.materialId]));
+    const equipmentMap = new Map((selectedTemplate?.equipmentLines ?? []).map((line) => [line.id, line.equipmentId]));
+
+    for (const line of draft.templateMaterialLines) {
+      if (!materialMap.has(line.templateLineId) || materialMap.get(line.templateLineId) !== line.materialId) {
+        return Response.json({ ok: false, message: "One or more material overrides are invalid." }, { status: 400 });
+      }
+    }
+
+    for (const line of draft.templateEquipmentLines) {
+      if (!equipmentMap.has(line.templateLineId) || equipmentMap.get(line.templateLineId) !== line.equipmentId) {
+        return Response.json({ ok: false, message: "One or more equipment overrides are invalid." }, { status: 400 });
+      }
+    }
+
+    const additionalMaterialIds = [...new Set(draft.materialLines.map((line) => line.materialId))];
+    const additionalEquipmentIds = [...new Set(draft.equipmentLines.map((line) => line.equipmentId))];
+
+    const [materialsFound, equipmentFound, existingConfig] = await Promise.all([
+      prisma.materialLibraryItem.findMany({ where: { id: { in: additionalMaterialIds }, shopId }, select: { id: true } }),
+      prisma.equipmentLibraryItem.findMany({ where: { id: { in: additionalEquipmentIds }, shopId }, select: { id: true } }),
+      prisma.variantCostConfig.findFirst({ where: { variantId, shopId }, select: { id: true } }),
+    ]);
+
+    if (materialsFound.length !== additionalMaterialIds.length) {
+      return Response.json({ ok: false, message: "One or more additional materials could not be found." }, { status: 404 });
+    }
+
+    if (equipmentFound.length !== additionalEquipmentIds.length) {
+      return Response.json({ ok: false, message: "One or more additional equipment items could not be found." }, { status: 404 });
+    }
+
+    const hasMeaningfulDraft = Boolean(
+      draft.templateId ||
+        draft.laborMinutes ||
+        draft.laborRate ||
+        draft.mistakeBuffer ||
+        draft.materialLines.length ||
+        draft.equipmentLines.length ||
+        draft.templateMaterialLines.some((line) => line.hasOverride) ||
+        draft.templateEquipmentLines.some((line) => line.hasOverride),
+    );
+
+    if (!hasMeaningfulDraft) {
+      if (existingConfig) {
+        await prisma.variantCostConfig.delete({ where: { id: existingConfig.id } });
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "VariantCostConfig",
+            entityId: existingConfig.id,
+            action: "VARIANT_CONFIG_UPDATED",
+            actor: "merchant",
+          },
+        });
+      }
+
+      return Response.json({
+        ok: true,
+        message: "Variant configuration saved.",
+        savedAt: new Date().toISOString(),
+      });
+    }
+
+    const materialOverrideLines = draft.templateMaterialLines
+      .filter((line) => line.hasOverride)
+      .map((line) => ({
+        shopId,
+        templateLineId: line.templateLineId,
+        materialId: line.materialId,
+        quantity: parseNullableNumber(line.overrideQuantity, "Material quantity") ?? 0,
+        yield: parseNullableNumber(line.overrideYield, "Material yield"),
+        usesPerVariant: parseNullableNumber(line.overrideUsesPerVariant, "Material uses per variant"),
+      }));
+
+    const equipmentOverrideLines = draft.templateEquipmentLines
+      .filter((line) => line.hasOverride)
+      .map((line) => ({
+        shopId,
+        templateLineId: line.templateLineId,
+        equipmentId: line.equipmentId,
+        minutes: parseNullableNumber(line.overrideMinutes, "Equipment minutes"),
+        uses: parseNullableNumber(line.overrideUses, "Equipment uses"),
+      }));
+
+    const additionalMaterialLines = draft.materialLines.map((line) => ({
+      shopId,
+      materialId: line.materialId,
+      quantity: parseNullableNumber(line.quantity, "Material quantity") ?? 0,
+      yield: parseNullableNumber(line.yield, "Material yield"),
+      usesPerVariant: parseNullableNumber(line.usesPerVariant, "Material uses per variant"),
+    }));
+
+    const additionalEquipmentLines = draft.equipmentLines.map((line) => ({
+      shopId,
+      equipmentId: line.equipmentId,
+      minutes: parseNullableNumber(line.minutes, "Equipment minutes"),
+      uses: parseNullableNumber(line.uses, "Equipment uses"),
+    }));
+
+    await prisma.$transaction(async (tx) => {
+      const config = existingConfig
+        ? await tx.variantCostConfig.update({
+            where: { id: existingConfig.id },
+            data: {
+              templateId: draft.templateId,
+              laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
+              laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
+              mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
+              lineItemCount: draft.materialLines.length + draft.equipmentLines.length,
+            },
+          })
+        : await tx.variantCostConfig.create({
+            data: {
+              shopId,
+              variantId,
+              templateId: draft.templateId,
+              laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
+              laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
+              mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
+              lineItemCount: draft.materialLines.length + draft.equipmentLines.length,
+            },
+          });
+
+      await tx.variantMaterialLine.deleteMany({ where: { configId: config.id, shopId } });
+      await tx.variantEquipmentLine.deleteMany({ where: { configId: config.id, shopId } });
+
+      if (materialOverrideLines.length + additionalMaterialLines.length > 0) {
+        await tx.variantMaterialLine.createMany({
+          data: [
+            ...materialOverrideLines.map((line) => ({ ...line, configId: config.id })),
+            ...additionalMaterialLines.map((line) => ({ ...line, configId: config.id })),
+          ],
+        });
+      }
+
+      if (equipmentOverrideLines.length + additionalEquipmentLines.length > 0) {
+        await tx.variantEquipmentLine.createMany({
+          data: [
+            ...equipmentOverrideLines.map((line) => ({ ...line, configId: config.id })),
+            ...additionalEquipmentLines.map((line) => ({ ...line, configId: config.id })),
+          ],
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "VariantCostConfig",
+          entityId: config.id,
+          action: "VARIANT_CONFIG_UPDATED",
+          actor: "merchant",
+        },
+      });
+    });
+
+    return Response.json({
+      ok: true,
+      message: "Variant configuration saved.",
+      savedAt: new Date().toISOString(),
+    });
   }
 
   if (intent === "assign-template") {
@@ -919,22 +1197,43 @@ function describeEquipmentLine(line: {
     .join(" · ");
 }
 
+function buildVariantDraft(config: {
+  templateId: string | null;
+  laborMinutes: string;
+  laborRate: string;
+  mistakeBuffer: string;
+  templateMaterialLines: TemplateMaterialOverrideLine[];
+  templateEquipmentLines: TemplateEquipmentOverrideLine[];
+  materialLines: SerializedMaterialLine[];
+  equipmentLines: SerializedEquipmentLine[];
+} | null): VariantDraft {
+  return {
+    templateId: config?.templateId ?? null,
+    laborMinutes: config?.laborMinutes ?? "",
+    laborRate: config?.laborRate ?? "",
+    mistakeBuffer: config?.mistakeBuffer ?? "",
+    templateMaterialLines: cloneDraft(config?.templateMaterialLines ?? []),
+    templateEquipmentLines: cloneDraft(config?.templateEquipmentLines ?? []),
+    materialLines: cloneDraft(config?.materialLines ?? []),
+    equipmentLines: cloneDraft(config?.equipmentLines ?? []),
+  };
+}
+
+function serializeVariantDraftState(draft: VariantDraft) {
+  return JSON.stringify(normalizeVariantDraft(draft));
+}
+
 export default function VariantDetailPage() {
   const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment } =
     useLoaderData<typeof loader>();
-  const fetcher = useFetcher<{ ok: boolean; message: string; preview?: Record<string, string> }>();
+  const saveFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
+  const previewFetcher = useFetcher<{ ok: boolean; message: string; preview?: Record<string, string> }>();
+  const revalidator = useRevalidator();
 
   const { formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
   const [assignTemplateOpen, setAssignTemplateOpen] = useState(false);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(templates[0]?.id ?? "");
-
-  const [editingLabor, setEditingLabor] = useState(false);
-  const [laborMinutes, setLaborMinutes] = useState(config?.laborMinutes ?? "");
-  const [laborRate, setLaborRate] = useState(config?.laborRate ?? "");
-
-  const [editingBuffer, setEditingBuffer] = useState(false);
-  const [bufferInput, setBufferInput] = useState(config?.mistakeBuffer ?? "");
+  const [selectedTemplateId, setSelectedTemplateId] = useState(config?.templateId ?? templates[0]?.id ?? "");
 
   const [addMaterialOpen, setAddMaterialOpen] = useState(false);
   const [selectedMaterialId, setSelectedMaterialId] = useState(availableMaterials[0]?.id ?? "");
@@ -942,7 +1241,7 @@ export default function VariantDetailPage() {
   const [matYield, setMatYield] = useState("");
   const [matUses, setMatUses] = useState("");
 
-  const [materialOverrideTarget, setMaterialOverrideTarget] = useState<TemplateMaterialOverrideLine | null>(null);
+  const [materialOverrideTargetId, setMaterialOverrideTargetId] = useState<string | null>(null);
   const [overrideMatQty, setOverrideMatQty] = useState("1");
   const [overrideMatYield, setOverrideMatYield] = useState("");
   const [overrideMatUses, setOverrideMatUses] = useState("");
@@ -952,22 +1251,40 @@ export default function VariantDetailPage() {
   const [eqMinutes, setEqMinutes] = useState("");
   const [eqUses, setEqUses] = useState("");
 
-  const [equipmentOverrideTarget, setEquipmentOverrideTarget] = useState<TemplateEquipmentOverrideLine | null>(null);
+  const [equipmentOverrideTargetId, setEquipmentOverrideTargetId] = useState<string | null>(null);
   const [overrideEqMinutes, setOverrideEqMinutes] = useState("");
   const [overrideEqUses, setOverrideEqUses] = useState("");
 
-  const isSubmitting = fetcher.state !== "idle";
-  const preview = fetcher.data?.preview;
+  const [baseDraft, setBaseDraft] = useState(() => buildVariantDraft(config));
+  const [draft, setDraft] = useState(() => buildVariantDraft(config));
+  const handledSaveRef = useRef<string | null>(null);
+
+  const isSaving = saveFetcher.state !== "idle";
+  const preview = previewFetcher.data?.preview;
   const selectedMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === selectedMaterialId);
+  const materialOverrideTarget =
+    draft.templateMaterialLines.find((line) => line.templateLineId === materialOverrideTargetId) ?? null;
+  const equipmentOverrideTarget =
+    draft.templateEquipmentLines.find((line) => line.templateLineId === equipmentOverrideTargetId) ?? null;
+  const isDirty = serializeVariantDraftState(draft) !== serializeVariantDraftState(baseDraft);
   const shopDefaultLaborRate = shopDefaults.defaultLaborRate;
-  const effectiveLaborRateLabel = config?.laborRate
-    ? `${formatMoney(config.laborRate)}/hr (Variant override)`
+  const effectiveLaborRateLabel = draft.laborRate
+    ? `${formatMoney(draft.laborRate)}/hr (Variant override)`
     : shopDefaultLaborRate
       ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
       : "No labor rate set";
   const laborRateHelpText = shopDefaultLaborRate
     ? `Leave blank to use the shop default of ${formatMoney(shopDefaultLaborRate)}/hr.`
     : "Leave blank to avoid a variant override. Set a shop default in Settings to make variants inherit one.";
+
+  useEffect(() => {
+    if (!saveFetcher.data?.ok || !saveFetcher.data.savedAt || saveFetcher.data.savedAt === handledSaveRef.current) return;
+    handledSaveRef.current = saveFetcher.data.savedAt;
+    const committedDraft = cloneDraft(draft);
+    setBaseDraft(committedDraft);
+    setDraft(committedDraft);
+    revalidator.revalidate();
+  }, [draft, revalidator, saveFetcher.data]);
 
   function resetAdditionalMaterialModal() {
     setSelectedMaterialId(availableMaterials[0]?.id ?? "");
@@ -982,36 +1299,191 @@ export default function VariantDetailPage() {
     setEqUses("");
   }
 
-  function openMaterialOverride(line: TemplateMaterialOverrideLine) {
-    setMaterialOverrideTarget(line);
+  function openMaterialOverride(line: VariantTemplateMaterialDraftLine) {
+    setMaterialOverrideTargetId(line.templateLineId);
     setOverrideMatQty(line.overrideQuantity ?? line.quantity);
     setOverrideMatYield(line.overrideYield ?? line.yield ?? "");
     setOverrideMatUses(line.overrideUsesPerVariant ?? line.usesPerVariant ?? "");
   }
 
   function closeMaterialOverride() {
-    setMaterialOverrideTarget(null);
+    setMaterialOverrideTargetId(null);
     setOverrideMatQty("1");
     setOverrideMatYield("");
     setOverrideMatUses("");
   }
 
-  function openEquipmentOverride(line: TemplateEquipmentOverrideLine) {
-    setEquipmentOverrideTarget(line);
+  function openEquipmentOverride(line: VariantTemplateEquipmentDraftLine) {
+    setEquipmentOverrideTargetId(line.templateLineId);
     setOverrideEqMinutes(line.overrideMinutes ?? line.minutes ?? "");
     setOverrideEqUses(line.overrideUses ?? line.uses ?? "");
   }
 
   function closeEquipmentOverride() {
-    setEquipmentOverrideTarget(null);
+    setEquipmentOverrideTargetId(null);
     setOverrideEqMinutes("");
     setOverrideEqUses("");
+  }
+
+  function discardChanges() {
+    setDraft(cloneDraft(baseDraft));
+    setAssignTemplateOpen(false);
+    setMaterialOverrideTargetId(null);
+    setEquipmentOverrideTargetId(null);
+    setAddMaterialOpen(false);
+    setAddEquipmentOpen(false);
+    resetAdditionalMaterialModal();
+    resetAdditionalEquipmentModal();
+    closeMaterialOverride();
+    closeEquipmentOverride();
+  }
+
+  function saveDraft() {
+    const formData = new FormData();
+    formData.append("intent", "save-variant-draft");
+    formData.append("draft", JSON.stringify(normalizeVariantDraft(draft)));
+    saveFetcher.submit(formData, { method: "post" });
+  }
+
+  function applySelectedTemplate() {
+    const nextTemplate = templates.find((template: TemplateCatalogEntry) => template.id === selectedTemplateId) ?? null;
+    setDraft((current) => applyTemplateSelectionToVariantDraft(current, nextTemplate));
+    setAssignTemplateOpen(false);
+  }
+
+  function removeSelectedTemplate() {
+    setDraft((current) => applyTemplateSelectionToVariantDraft(current, null));
+  }
+
+  function addAdditionalMaterialLine() {
+    if (!selectedMaterial) return;
+
+    const nextLine: SerializedMaterialLine = {
+      id: createClientId("draft-material"),
+      materialId: selectedMaterial.id,
+      materialName: selectedMaterial.name,
+      materialType: selectedMaterial.type,
+      costingModel: selectedMaterial.costingModel,
+      perUnitCost: selectedMaterial.perUnitCost,
+      quantity: matQty,
+      yield: selectedMaterial.costingModel === "yield" ? (matYield || null) : null,
+      usesPerVariant: selectedMaterial.costingModel === "uses" ? (matUses || null) : null,
+    };
+
+    setDraft((current) => ({ ...current, materialLines: [...current.materialLines, nextLine] }));
+    setAddMaterialOpen(false);
+    resetAdditionalMaterialModal();
+  }
+
+  function removeAdditionalMaterialLine(lineId: string) {
+    setDraft((current) => ({
+      ...current,
+      materialLines: current.materialLines.filter((line) => line.id !== lineId),
+    }));
+  }
+
+  function addAdditionalEquipmentLine() {
+    const equipment = availableEquipment.find((item: { id: string }) => item.id === selectedEquipmentId);
+    if (!equipment) return;
+
+    const nextLine: SerializedEquipmentLine = {
+      id: createClientId("draft-equipment"),
+      equipmentId: equipment.id,
+      equipmentName: equipment.name,
+      hourlyRate: equipment.hourlyRate,
+      perUseCost: equipment.perUseCost,
+      minutes: eqMinutes || null,
+      uses: eqUses || null,
+    };
+
+    setDraft((current) => ({ ...current, equipmentLines: [...current.equipmentLines, nextLine] }));
+    setAddEquipmentOpen(false);
+    resetAdditionalEquipmentModal();
+  }
+
+  function removeAdditionalEquipmentLine(lineId: string) {
+    setDraft((current) => ({
+      ...current,
+      equipmentLines: current.equipmentLines.filter((line) => line.id !== lineId),
+    }));
+  }
+
+  function applyMaterialOverride() {
+    if (!materialOverrideTarget) return;
+
+    setDraft((current) => ({
+      ...current,
+      templateMaterialLines: current.templateMaterialLines.map((line) =>
+        line.templateLineId === materialOverrideTarget.templateLineId
+          ? {
+              ...line,
+              hasOverride: true,
+              overrideQuantity: overrideMatQty,
+              overrideYield: line.costingModel === "yield" ? (overrideMatYield || null) : null,
+              overrideUsesPerVariant: line.costingModel === "uses" ? (overrideMatUses || null) : null,
+            }
+          : line,
+      ),
+    }));
+    closeMaterialOverride();
+  }
+
+  function resetMaterialOverride(templateLineId: string) {
+    setDraft((current) => ({
+      ...current,
+      templateMaterialLines: current.templateMaterialLines.map((line) =>
+        line.templateLineId === templateLineId
+          ? {
+              ...line,
+              hasOverride: false,
+              overrideQuantity: null,
+              overrideYield: null,
+              overrideUsesPerVariant: null,
+            }
+          : line,
+      ),
+    }));
+  }
+
+  function applyEquipmentOverride() {
+    if (!equipmentOverrideTarget) return;
+
+    setDraft((current) => ({
+      ...current,
+      templateEquipmentLines: current.templateEquipmentLines.map((line) =>
+        line.templateLineId === equipmentOverrideTarget.templateLineId
+          ? {
+              ...line,
+              hasOverride: true,
+              overrideMinutes: overrideEqMinutes || null,
+              overrideUses: overrideEqUses || null,
+            }
+          : line,
+      ),
+    }));
+    closeEquipmentOverride();
+  }
+
+  function resetEquipmentOverride(templateLineId: string) {
+    setDraft((current) => ({
+      ...current,
+      templateEquipmentLines: current.templateEquipmentLines.map((line) =>
+        line.templateLineId === templateLineId
+          ? {
+              ...line,
+              hasOverride: false,
+              overrideMinutes: null,
+              overrideUses: null,
+            }
+          : line,
+      ),
+    }));
   }
 
   function refreshPreview() {
     const fd = new FormData();
     fd.append("intent", "preview-cost");
-    fetcher.submit(fd, { method: "post" });
+    previewFetcher.submit(fd, { method: "post" });
   }
 
   return (
@@ -1020,13 +1492,14 @@ export default function VariantDetailPage() {
       title={`${variant.productTitle} - ${variant.title}`}
     >
       <TitleBar title="Variant Cost Configuration" />
+      <AppSaveBar open={isDirty} onSave={saveDraft} onDiscard={discardChanges} loading={isSaving} />
 
       <div
         aria-live="polite"
         aria-atomic="true"
         style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
       >
-        {fetcher.data?.message ?? ""}
+        {saveFetcher.data?.message ?? previewFetcher.data?.message ?? ""}
       </div>
 
       <BlockStack gap="600">
@@ -1044,20 +1517,27 @@ export default function VariantDetailPage() {
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h2" variant="headingMd">Cost Template</Text>
               <InlineStack gap="200">
-                {config?.templateId && (
-                  <fetcher.Form method="post">
-                    <input type="hidden" name="intent" value="remove-template" />
-                    <Button variant="plain" tone="critical" submit loading={isSubmitting}>Remove</Button>
-                  </fetcher.Form>
+                {draft.templateId && (
+                  <Button variant="plain" tone="critical" onClick={removeSelectedTemplate}>
+                    Remove
+                  </Button>
                 )}
-                <Button onClick={() => setAssignTemplateOpen(true)} disabled={templates.length === 0}>
-                  {config?.templateId ? "Change template" : "Assign template"}
+                <Button
+                  onClick={() => {
+                    setSelectedTemplateId(draft.templateId ?? templates[0]?.id ?? "");
+                    setAssignTemplateOpen(true);
+                  }}
+                  disabled={templates.length === 0}
+                >
+                  {draft.templateId ? "Change template" : "Assign template"}
                 </Button>
               </InlineStack>
             </InlineStack>
             <Divider />
-            {config?.templateName ? (
-              <Text as="p" variant="bodyMd">{config.templateName}</Text>
+            {draft.templateId ? (
+              <Text as="p" variant="bodyMd">
+                {templates.find((template: TemplateCatalogEntry) => template.id === draft.templateId)?.name ?? "Assigned template"}
+              </Text>
             ) : (
               <Text as="p" variant="bodyMd" tone="subdued">No template assigned - configure lines manually below.</Text>
             )}
@@ -1066,110 +1546,78 @@ export default function VariantDetailPage() {
 
         <Card>
           <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <Text as="h2" variant="headingMd">Labor</Text>
-              <Button variant="plain" onClick={() => setEditingLabor((value) => !value)}>
-                {editingLabor ? "Cancel" : "Edit"}
-              </Button>
-            </InlineStack>
+            <Text as="h2" variant="headingMd">Labor</Text>
             <Divider />
-            {editingLabor ? (
-              <fetcher.Form method="post" onSubmit={() => setEditingLabor(false)}>
-                <BlockStack gap="400">
-                  <input type="hidden" name="intent" value="update-labor" />
-                  <InlineStack gap="400" wrap={false}>
-                    <div style={{ flex: 1 }}>
-                      <TextField
-                        label="Minutes per variant"
-                        name="laborMinutes"
-                        type="number"
-                        min={0}
-                        step={0.5}
-                        value={laborMinutes}
-                        onChange={setLaborMinutes}
-                        autoComplete="off"
-                      />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <TextField
-                        label={`Hourly rate (${getCurrencySymbol()})`}
-                        placeholder={
-                          shopDefaultLaborRate
-                            ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
-                            : "Set a variant override or configure a shop default"
-                        }
-                        name="laborRate"
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={laborRate}
-                        onChange={setLaborRate}
-                        autoComplete="off"
-                        helpText={laborRateHelpText}
-                      />
-                    </div>
-                  </InlineStack>
-                  <Button submit loading={isSubmitting}>Save</Button>
-                </BlockStack>
-              </fetcher.Form>
-            ) : (
-              <InlineStack gap="600">
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  {config?.laborMinutes ? `${config.laborMinutes} min` : "Not set"}
-                </Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  {effectiveLaborRateLabel}
-                </Text>
+            <BlockStack gap="400">
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Minutes per variant"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={draft.laborMinutes}
+                    onChange={(value) => setDraft((current) => ({ ...current, laborMinutes: value }))}
+                    autoComplete="off"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label={`Hourly rate (${getCurrencySymbol()})`}
+                    placeholder={
+                      shopDefaultLaborRate
+                        ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
+                        : "Set a variant override or configure a shop default"
+                    }
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={draft.laborRate}
+                    onChange={(value) => setDraft((current) => ({ ...current, laborRate: value }))}
+                    autoComplete="off"
+                    helpText={laborRateHelpText}
+                  />
+                </div>
               </InlineStack>
-            )}
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Current effective rate: {effectiveLaborRateLabel}
+              </Text>
+            </BlockStack>
           </BlockStack>
         </Card>
 
         <Card>
           <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Mistake Buffer Override</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Overrides the global default from Settings for this variant only.
-                </Text>
-              </BlockStack>
-              <Button variant="plain" onClick={() => setEditingBuffer((value) => !value)}>
-                {editingBuffer ? "Cancel" : "Edit"}
-              </Button>
-            </InlineStack>
-            <Divider />
-            {editingBuffer ? (
-              <fetcher.Form method="post" onSubmit={() => setEditingBuffer(false)}>
-                <BlockStack gap="400">
-                  <input type="hidden" name="intent" value="update-mistake-buffer" />
-                  <TextField
-                    label="Mistake buffer (%)"
-                    placeholder={`${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
-                    name="mistakeBuffer"
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.1}
-                    value={bufferInput}
-                    onChange={setBufferInput}
-                    autoComplete="off"
-                    helpText="Leave blank to use the global default from Settings"
-                  />
-                  <Button submit loading={isSubmitting}>Save</Button>
-                </BlockStack>
-              </fetcher.Form>
-            ) : (
+            <BlockStack gap="100">
+              <Text as="h2" variant="headingMd">Mistake Buffer Override</Text>
               <Text as="p" variant="bodyMd" tone="subdued">
-                {config?.mistakeBuffer
-                  ? formatPct(Number(config.mistakeBuffer) / 100)
+                Overrides the global default from Settings for this variant only.
+              </Text>
+            </BlockStack>
+            <Divider />
+            <BlockStack gap="400">
+              <TextField
+                label="Mistake buffer (%)"
+                placeholder={`${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                value={draft.mistakeBuffer}
+                onChange={(value) => setDraft((current) => ({ ...current, mistakeBuffer: value }))}
+                autoComplete="off"
+                helpText="Leave blank to use the global default from Settings"
+              />
+              <Text as="p" variant="bodyMd" tone="subdued">
+                {draft.mistakeBuffer
+                  ? formatPct(Number(draft.mistakeBuffer) / 100)
                   : `${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
               </Text>
-            )}
+            </BlockStack>
           </BlockStack>
         </Card>
 
-        {config?.templateId && (
+        {draft.templateId && (
           <Card>
             <BlockStack gap="400">
               <BlockStack gap="100">
@@ -1179,11 +1627,11 @@ export default function VariantDetailPage() {
                 </Text>
               </BlockStack>
               <Divider />
-              {config.templateMaterialLines.length === 0 ? (
+              {draft.templateMaterialLines.length === 0 ? (
                 <Text as="p" variant="bodyMd" tone="subdued">This template has no material lines.</Text>
               ) : (
                 <BlockStack gap="300">
-                  {config.templateMaterialLines.map((line: TemplateMaterialOverrideLine) => (
+                  {draft.templateMaterialLines.map((line) => (
                     <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
                       <BlockStack gap="100">
                         <InlineStack gap="200" blockAlign="center">
@@ -1211,11 +1659,9 @@ export default function VariantDetailPage() {
                           {line.hasOverride ? "Edit override" : "Override"}
                         </Button>
                         {line.hasOverride && (
-                          <fetcher.Form method="post">
-                            <input type="hidden" name="intent" value="reset-material-override" />
-                            <input type="hidden" name="templateLineId" value={line.templateLineId} />
-                            <Button variant="plain" submit loading={isSubmitting}>Reset</Button>
-                          </fetcher.Form>
+                          <Button variant="plain" onClick={() => resetMaterialOverride(line.templateLineId)}>
+                            Reset
+                          </Button>
                         )}
                       </InlineStack>
                     </InlineStack>
@@ -1232,9 +1678,9 @@ export default function VariantDetailPage() {
               <BlockStack gap="100">
                 <InlineStack gap="200" blockAlign="center">
                   <Text as="h2" variant="headingMd">Additional Material Lines</Text>
-                  {config && config.materialLines.length > 0 && (
+                  {draft.materialLines.length > 0 && (
                     <Text as="span" variant="bodySm" tone="subdued">
-                      {config.materialLines.length}
+                      {draft.materialLines.length}
                     </Text>
                   )}
                 </InlineStack>
@@ -1247,21 +1693,19 @@ export default function VariantDetailPage() {
               </Button>
             </InlineStack>
             <Divider />
-            {!config || config.materialLines.length === 0 ? (
+            {draft.materialLines.length === 0 ? (
               <Text as="p" variant="bodyMd" tone="subdued">No variant-only material lines.</Text>
             ) : (
               <BlockStack gap="300">
-                {config.materialLines.map((line: SerializedMaterialLine) => (
+                {draft.materialLines.map((line: SerializedMaterialLine) => (
                   <InlineStack key={line.id} align="space-between" blockAlign="center">
                     <BlockStack gap="100">
                       <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
                       <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
                     </BlockStack>
-                    <fetcher.Form method="post">
-                      <input type="hidden" name="intent" value="remove-material-line" />
-                      <input type="hidden" name="lineId" value={line.id} />
-                      <Button variant="plain" tone="critical" submit loading={isSubmitting}>Remove</Button>
-                    </fetcher.Form>
+                    <Button variant="plain" tone="critical" onClick={() => removeAdditionalMaterialLine(line.id)}>
+                      Remove
+                    </Button>
                   </InlineStack>
                 ))}
               </BlockStack>
@@ -1269,7 +1713,7 @@ export default function VariantDetailPage() {
           </BlockStack>
         </Card>
 
-        {config?.templateId && (
+        {draft.templateId && (
           <Card>
             <BlockStack gap="400">
               <BlockStack gap="100">
@@ -1279,11 +1723,11 @@ export default function VariantDetailPage() {
                 </Text>
               </BlockStack>
               <Divider />
-              {config.templateEquipmentLines.length === 0 ? (
+              {draft.templateEquipmentLines.length === 0 ? (
                 <Text as="p" variant="bodyMd" tone="subdued">This template has no equipment lines.</Text>
               ) : (
                 <BlockStack gap="300">
-                  {config.templateEquipmentLines.map((line: TemplateEquipmentOverrideLine) => (
+                  {draft.templateEquipmentLines.map((line) => (
                     <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
                       <BlockStack gap="100">
                         <InlineStack gap="200" blockAlign="center">
@@ -1309,11 +1753,9 @@ export default function VariantDetailPage() {
                           {line.hasOverride ? "Edit override" : "Override"}
                         </Button>
                         {line.hasOverride && (
-                          <fetcher.Form method="post">
-                            <input type="hidden" name="intent" value="reset-equipment-override" />
-                            <input type="hidden" name="templateLineId" value={line.templateLineId} />
-                            <Button variant="plain" submit loading={isSubmitting}>Reset</Button>
-                          </fetcher.Form>
+                          <Button variant="plain" onClick={() => resetEquipmentOverride(line.templateLineId)}>
+                            Reset
+                          </Button>
                         )}
                       </InlineStack>
                     </InlineStack>
@@ -1330,9 +1772,9 @@ export default function VariantDetailPage() {
               <BlockStack gap="100">
                 <InlineStack gap="200" blockAlign="center">
                   <Text as="h2" variant="headingMd">Additional Equipment Lines</Text>
-                  {config && config.equipmentLines.length > 0 && (
+                  {draft.equipmentLines.length > 0 && (
                     <Text as="span" variant="bodySm" tone="subdued">
-                      {config.equipmentLines.length}
+                      {draft.equipmentLines.length}
                     </Text>
                   )}
                 </InlineStack>
@@ -1345,21 +1787,19 @@ export default function VariantDetailPage() {
               </Button>
             </InlineStack>
             <Divider />
-            {!config || config.equipmentLines.length === 0 ? (
+            {draft.equipmentLines.length === 0 ? (
               <Text as="p" variant="bodyMd" tone="subdued">No variant-only equipment lines.</Text>
             ) : (
               <BlockStack gap="300">
-                {config.equipmentLines.map((line: SerializedEquipmentLine) => (
+                {draft.equipmentLines.map((line: SerializedEquipmentLine) => (
                   <InlineStack key={line.id} align="space-between" blockAlign="center">
                     <BlockStack gap="100">
                       <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
                       <Text as="p" variant="bodyMd" tone="subdued">{describeEquipmentLine(line)}</Text>
                     </BlockStack>
-                    <fetcher.Form method="post">
-                      <input type="hidden" name="intent" value="remove-equipment-line" />
-                      <input type="hidden" name="lineId" value={line.id} />
-                      <Button variant="plain" tone="critical" submit loading={isSubmitting}>Remove</Button>
-                    </fetcher.Form>
+                    <Button variant="plain" tone="critical" onClick={() => removeAdditionalEquipmentLine(line.id)}>
+                      Remove
+                    </Button>
                   </InlineStack>
                 ))}
               </BlockStack>
@@ -1371,10 +1811,16 @@ export default function VariantDetailPage() {
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h2" variant="headingMd">Cost Preview</Text>
-              <Button onClick={refreshPreview} loading={isSubmitting}>Refresh</Button>
+              <Button onClick={refreshPreview} loading={previewFetcher.state !== "idle"} disabled={isDirty}>
+                Refresh
+              </Button>
             </InlineStack>
             <Divider />
-            {!preview ? (
+            {isDirty ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Save or discard your staged changes before refreshing the cost preview.
+              </Text>
+            ) : !preview ? (
               <Text as="p" variant="bodyMd" tone="subdued">Click Refresh to calculate the current cost breakdown.</Text>
             ) : (
               <BlockStack gap="200">
@@ -1414,15 +1860,9 @@ export default function VariantDetailPage() {
         onClose={() => setAssignTemplateOpen(false)}
         title="Assign template"
         primaryAction={{
-          content: "Assign",
-          loading: isSubmitting,
-          onAction: () => {
-            const fd = new FormData();
-            fd.append("intent", "assign-template");
-            fd.append("templateId", selectedTemplateId);
-            fetcher.submit(fd, { method: "post" });
-            setAssignTemplateOpen(false);
-          },
+          content: draft.templateId ? "Apply" : "Assign",
+          loading: isSaving,
+          onAction: applySelectedTemplate,
         }}
         secondaryActions={[{ content: "Cancel", onAction: () => setAssignTemplateOpen(false) }]}
       >
@@ -1442,19 +1882,8 @@ export default function VariantDetailPage() {
         title={materialOverrideTarget ? `Override ${materialOverrideTarget.materialName}` : "Override material"}
         primaryAction={{
           content: materialOverrideTarget?.hasOverride ? "Save override" : "Apply override",
-          loading: isSubmitting,
-          onAction: () => {
-            if (!materialOverrideTarget) return;
-            const fd = new FormData();
-            fd.append("intent", "save-material-override");
-            fd.append("templateLineId", materialOverrideTarget.templateLineId);
-            fd.append("materialId", materialOverrideTarget.materialId);
-            fd.append("quantity", overrideMatQty);
-            if (materialOverrideTarget.costingModel === "yield" && overrideMatYield) fd.append("yield", overrideMatYield);
-            if (materialOverrideTarget.costingModel === "uses" && overrideMatUses) fd.append("usesPerVariant", overrideMatUses);
-            fetcher.submit(fd, { method: "post" });
-            closeMaterialOverride();
-          },
+          loading: isSaving,
+          onAction: applyMaterialOverride,
         }}
         secondaryActions={[{ content: "Cancel", onAction: closeMaterialOverride }]}
       >
@@ -1511,22 +1940,8 @@ export default function VariantDetailPage() {
         title="Add material line"
         primaryAction={{
           content: "Add",
-          loading: isSubmitting,
-          onAction: () => {
-            const fd = new FormData();
-            fd.append("intent", "add-material-line");
-            fd.append("materialId", selectedMaterialId);
-            if (selectedMaterial?.costingModel === "yield" && matYield) {
-              fd.append("quantity", matQty);
-              fd.append("yield", matYield);
-            }
-            if (selectedMaterial?.costingModel === "uses" && matUses) {
-              fd.append("usesPerVariant", matUses);
-            }
-            fetcher.submit(fd, { method: "post" });
-            setAddMaterialOpen(false);
-            resetAdditionalMaterialModal();
-          },
+          loading: isSaving,
+          onAction: addAdditionalMaterialLine,
         }}
         secondaryActions={[{
           content: "Cancel",
@@ -1594,18 +2009,8 @@ export default function VariantDetailPage() {
         title={equipmentOverrideTarget ? `Override ${equipmentOverrideTarget.equipmentName}` : "Override equipment"}
         primaryAction={{
           content: equipmentOverrideTarget?.hasOverride ? "Save override" : "Apply override",
-          loading: isSubmitting,
-          onAction: () => {
-            if (!equipmentOverrideTarget) return;
-            const fd = new FormData();
-            fd.append("intent", "save-equipment-override");
-            fd.append("templateLineId", equipmentOverrideTarget.templateLineId);
-            fd.append("equipmentId", equipmentOverrideTarget.equipmentId);
-            if (overrideEqMinutes) fd.append("minutes", overrideEqMinutes);
-            if (overrideEqUses) fd.append("uses", overrideEqUses);
-            fetcher.submit(fd, { method: "post" });
-            closeEquipmentOverride();
-          },
+          loading: isSaving,
+          onAction: applyEquipmentOverride,
         }}
         secondaryActions={[{ content: "Cancel", onAction: closeEquipmentOverride }]}
       >
@@ -1653,17 +2058,8 @@ export default function VariantDetailPage() {
         title="Add equipment line"
         primaryAction={{
           content: "Add",
-          loading: isSubmitting,
-          onAction: () => {
-            const fd = new FormData();
-            fd.append("intent", "add-equipment-line");
-            fd.append("equipmentId", selectedEquipmentId);
-            if (eqMinutes) fd.append("minutes", eqMinutes);
-            if (eqUses) fd.append("uses", eqUses);
-            fetcher.submit(fd, { method: "post" });
-            setAddEquipmentOpen(false);
-            resetAdditionalEquipmentModal();
-          },
+          loading: isSaving,
+          onAction: addAdditionalEquipmentLine,
         }}
         secondaryActions={[{
           content: "Cancel",
