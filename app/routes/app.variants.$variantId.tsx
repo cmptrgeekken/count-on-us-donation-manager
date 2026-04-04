@@ -19,7 +19,7 @@ import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
-import l10n from "../utils/localization";
+import { useAppLocalization } from "../utils/use-app-localization";
 
 type SerializedMaterialLine = {
   id: string;
@@ -923,7 +923,8 @@ export default function VariantDetailPage() {
   const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string; preview?: Record<string, string> }>();
-  const { formatMoney, formatPct, getCurrencySymbol } = l10n();
+
+  const { formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
   const [assignTemplateOpen, setAssignTemplateOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState(templates[0]?.id ?? "");

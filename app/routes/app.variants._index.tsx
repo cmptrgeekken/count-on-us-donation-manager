@@ -19,7 +19,7 @@ import {
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
-import l10n from "../utils/localization"
+import { useAppLocalization } from "../utils/use-app-localization";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
@@ -144,7 +144,7 @@ export default function VariantsPage() {
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
   const navigate = useNavigate();
 
-  const { formatMoney } = l10n();
+  const { formatMoney } = useAppLocalization();
 
   const [searchParams] = useSearchParams();
 

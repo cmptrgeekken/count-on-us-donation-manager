@@ -20,7 +20,7 @@ import {
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
-import l10n from "../utils/localization";
+import { useAppLocalization } from "../utils/use-app-localization";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
@@ -170,7 +170,7 @@ const EMPTY_FORM = {
 export default function MaterialsPage() {
   const { materials } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
-  const { formatMoney, getCurrencySymbol } = l10n();
+  const { formatMoney, getCurrencySymbol } = useAppLocalization();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
