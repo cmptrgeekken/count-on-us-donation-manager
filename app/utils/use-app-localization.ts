@@ -2,7 +2,6 @@ import { useRouteLoaderData } from "@remix-run/react";
 import l10n from "./localization";
 
 type AppLocalizationData = {
-  apiKey: string;
   localization: {
     currency: string;
     locale: string;
