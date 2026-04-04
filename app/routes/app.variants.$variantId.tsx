@@ -22,6 +22,7 @@ import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
 import { useAppLocalization } from "../utils/use-app-localization";
+import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import {
   applyTemplateSelectionToVariantDraft,
   cloneDraft,
@@ -1272,6 +1273,7 @@ export default function VariantDetailPage() {
   const equipmentOverrideTarget =
     draft.templateEquipmentLines.find((line) => line.templateLineId === equipmentOverrideTargetId) ?? null;
   const isDirty = serializeVariantDraftState(draft) !== serializeVariantDraftState(baseDraft);
+  const { confirmThenNavigate } = useUnsavedChangesGuard(isDirty);
   const shopDefaultLaborRate = shopDefaults.defaultLaborRate;
   const effectiveLaborRateLabel = draft.laborRate
     ? `${formatMoney(draft.laborRate)}/hr (Variant override)`
@@ -1493,7 +1495,7 @@ export default function VariantDetailPage() {
 
   return (
     <Page
-      backAction={{ content: "Variants", url: "/app/variants" }}
+      backAction={{ content: "Variants", onAction: () => void confirmThenNavigate("/app/variants") }}
       title={`${variant.productTitle} - ${variant.title}`}
     >
       <TitleBar title="Variant Cost Configuration" />

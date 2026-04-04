@@ -22,6 +22,7 @@ import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
 import { authenticate } from "../shopify.server";
 import { useAppLocalization } from "../utils/use-app-localization";
+import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import {
   cloneDraft,
   createClientId,
@@ -412,6 +413,7 @@ export default function TemplateDetailPage() {
 
   const isSaving = fetcher.state !== "idle";
   const isDirty = serializeDraft(draft) !== serializeDraft(baseDraft);
+  const { confirmThenNavigate } = useUnsavedChangesGuard(isDirty);
   const selectedMaterial = availableMaterials.find((item: AvailableMaterial) => item.id === selectedMaterialId);
 
   useEffect(() => {
@@ -615,7 +617,7 @@ export default function TemplateDetailPage() {
 
   return (
     <Page
-      backAction={{ content: "Templates", url: "/app/templates" }}
+      backAction={{ content: "Templates", onAction: () => void confirmThenNavigate("/app/templates") }}
       title={draft.name || template.name}
       titleMetadata={
         <Badge tone={template.status === "active" ? "success" : "enabled"}>
