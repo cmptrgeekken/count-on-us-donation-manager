@@ -1,27 +1,9 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useFetcher, useRouteError, useNavigate, useSearchParams, Link } from "@remix-run/react";
-import {
-  Page,
-  Card,
-  Banner,
-  BlockStack,
-  Text,
-  Badge,
-  Button,
-  Modal,
-  Select,
-  IndexTable,
-  useIndexResourceState,
-  EmptyState,
-  Filters,
-} from "@shopify/polaris";
-import { TitleBar } from "@shopify/app-bridge-react";
+import { Link, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import { useAppLocalization } from "../utils/use-app-localization";
-
-// ── Loader ────────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -76,8 +58,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 };
 
-// ── Action ────────────────────────────────────────────────────────────────────
-
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
@@ -89,13 +69,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const templateId = formData.get("templateId")?.toString() ?? "";
     const variantIds = formData.getAll("variantId").map(String);
 
-    if (!templateId) return Response.json({ ok: false, message: "No template selected." }, { status: 400 });
-    if (variantIds.length === 0) return Response.json({ ok: false, message: "No variants selected." }, { status: 400 });
+    if (!templateId) {
+      return Response.json({ ok: false, message: "No template selected." }, { status: 400 });
+    }
+    if (variantIds.length === 0) {
+      return Response.json({ ok: false, message: "No variants selected." }, { status: 400 });
+    }
 
-    // Verify template belongs to this shop
-    const template = await prisma.costTemplate.findFirst({ where: { id: templateId, shopId }, select: { shopId: true } });
-    if (!template)
+    const template = await prisma.costTemplate.findFirst({
+      where: { id: templateId, shopId },
+      select: { shopId: true },
+    });
+
+    if (!template) {
       return Response.json({ ok: false, message: "Template not found." }, { status: 404 });
+    }
 
     for (const variantId of variantIds) {
       const existing = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId } });
@@ -122,8 +110,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 type VariantRow = {
   id: string;
   shopifyId: string;
@@ -136,42 +122,84 @@ type VariantRow = {
   templateName: string | null;
 };
 
-// ── Component ─────────────────────────────────────────────────────────────────
-
 export default function VariantsPage() {
-  const { variants, products, templates, filterProductId, filterConfigured } =
-    useLoaderData<typeof loader>();
+  const { variants, products, templates, filterProductId, filterConfigured } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
-  const navigate = useNavigate();
-
   const { formatMoney } = useAppLocalization();
-
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const assignDialogRef = useRef<HTMLDialogElement>(null);
+  const confirmDialogRef = useRef<HTMLDialogElement>(null);
 
-  const [assignOpen, setAssignOpen] = useState(false);
+  const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState(templates[0]?.id ?? "");
-  const [confirmOverwrite, setConfirmOverwrite] = useState(false);
-  const [overwriteCount, setOverwriteCount] = useState(0);
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
+  const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [pendingAssign, setPendingAssign] = useState<string[]>([]);
+  const [overwriteCount, setOverwriteCount] = useState(0);
 
-  const { selectedResources, allResourcesSelected, handleSelectionChange, clearSelection } =
-    useIndexResourceState(variants);
+  useEffect(() => {
+    setSelectedVariantIds((current) => current.filter((id) => variants.some((variant: VariantRow) => variant.id === id)));
+  }, [variants]);
+
+  useEffect(() => {
+    const dialog = assignDialogRef.current;
+    if (!dialog) return;
+
+    if (assignDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!assignDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [assignDialogOpen]);
+
+  useEffect(() => {
+    const dialog = confirmDialogRef.current;
+    if (!dialog) return;
+
+    if (confirmDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!confirmDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [confirmDialogOpen]);
 
   const isSubmitting = fetcher.state !== "idle";
+  const statusMessage = fetcher.data?.message ?? "";
+  const allSelected = variants.length > 0 && selectedVariantIds.length === variants.length;
 
-  function handleBulkAssign() {
-    const alreadyConfigured = variants
-      .filter((v: VariantRow) => selectedResources.includes(v.id) && v.hasConfig)
-      .length;
+  const selectedConfiguredCount = useMemo(
+    () => variants.filter((variant: VariantRow) => selectedVariantIds.includes(variant.id) && variant.hasConfig).length,
+    [selectedVariantIds, variants],
+  );
 
-    setPendingAssign([...selectedResources]);
+  function updateSelection(id: string, checked: boolean) {
+    setSelectedVariantIds((current) =>
+      checked ? (current.includes(id) ? current : [...current, id]) : current.filter((value) => value !== id),
+    );
+  }
 
-    if (alreadyConfigured > 0) {
-      setOverwriteCount(alreadyConfigured);
-      setConfirmOverwrite(true);
-    } else {
-      submitAssign([...selectedResources]);
-    }
+  function toggleSelectAll(checked: boolean) {
+    setSelectedVariantIds(checked ? variants.map((variant: VariantRow) => variant.id) : []);
+  }
+
+  function clearSelection() {
+    setSelectedVariantIds([]);
+  }
+
+  function openAssignDialog() {
+    setSelectedTemplateId(templates[0]?.id ?? "");
+    setAssignDialogOpen(true);
+  }
+
+  function closeAssignDialog() {
+    setAssignDialogOpen(false);
+  }
+
+  function closeConfirmDialog() {
+    setConfirmDialogOpen(false);
+    setPendingAssign([]);
+    setOverwriteCount(0);
   }
 
   function submitAssign(ids: string[]) {
@@ -181,242 +209,383 @@ export default function VariantsPage() {
     ids.forEach((id) => fd.append("variantId", id));
     fetcher.submit(fd, { method: "post" });
     clearSelection();
-    setAssignOpen(false);
-    setConfirmOverwrite(false);
+    closeAssignDialog();
+    closeConfirmDialog();
   }
 
-  const bulkActions = selectedResources.length > 0
-    ? [{ content: "Assign template", onAction: () => setAssignOpen(true) }]
-    : [];
+  function handleBulkAssign() {
+    if (selectedVariantIds.length === 0) {
+      return;
+    }
 
-  const rowMarkup = variants.map((v: VariantRow, index: number) => (
-    <IndexTable.Row
-      id={v.id}
-      key={v.id}
-      selected={selectedResources.includes(v.id)}
-      position={index}
-    >
-      <IndexTable.Cell>
-        <Text as="span" variant="bodyMd" tone="subdued">{v.productTitle}</Text>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Link to={`/app/variants/${v.id}`} style={{ textDecoration: "none" }} onClick={(e) => e.stopPropagation()}>
-          <Text as="span" variant="bodyMd" fontWeight="semibold">{v.title}</Text>
-        </Link>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Text as="span" variant="bodyMd" tone="subdued">{v.sku || "—"}</Text>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Text as="span" variant="bodyMd">{formatMoney(v.price)}</Text>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Text as="span" variant="bodyMd" tone="subdued">{v.templateName ?? "—"}</Text>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Badge tone={v.hasConfig ? "success" : "enabled"}>
-          {v.hasConfig ? "Configured" : "Not configured"}
-        </Badge>
-      </IndexTable.Cell>
-      <IndexTable.Cell>
-        <Link to={`/app/variants/${v.id}`} onClick={(e) => e.stopPropagation()}>
-          <Button variant="plain">Configure</Button>
-        </Link>
-      </IndexTable.Cell>
-    </IndexTable.Row>
-  ));
+    setPendingAssign(selectedVariantIds);
 
-  function removeFilter(key: string) {
+    if (selectedConfiguredCount > 0) {
+      setOverwriteCount(selectedConfiguredCount);
+      setConfirmDialogOpen(true);
+    } else {
+      submitAssign(selectedVariantIds);
+    }
+  }
+
+  function applyFilters(form: HTMLFormElement) {
+    const formData = new FormData(form);
     const params = new URLSearchParams(searchParams);
-    params.delete(key);
+
+    const product = formData.get("product")?.toString() ?? "";
+    const configured = formData.get("configured")?.toString() ?? "";
+
+    if (product) params.set("product", product);
+    else params.delete("product");
+
+    if (configured) params.set("configured", configured);
+    else params.delete("configured");
+
     navigate(`?${params.toString()}`);
   }
 
-  const appliedFilters = [];
-  if (filterProductId) {
-    const productLabel = products.find((p: { id: string; title: string }) => p.id === filterProductId)?.title ?? filterProductId;
-    appliedFilters.push({
-      key: "product",
-      label: `Product: ${productLabel}`,
-      onRemove: () => removeFilter("product"),
-    });
-  }
-  if (filterConfigured) {
-    appliedFilters.push({
-      key: "configured",
-      label: filterConfigured === "yes" ? "Configured only" : "Not configured only",
-      onRemove: () => removeFilter("configured"),
-    });
+  function clearFilters() {
+    const params = new URLSearchParams(searchParams);
+    params.delete("product");
+    params.delete("configured");
+    navigate(`?${params.toString()}`);
   }
 
   return (
-    <Page>
-      <TitleBar title="Variants" />
+    <>
+      <ui-title-bar title="Variants" />
 
       <div
         aria-live="polite"
         aria-atomic="true"
-        style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
+        style={{
+          position: "absolute",
+          width: 1,
+          height: 1,
+          overflow: "hidden",
+          clip: "rect(0,0,0,0)",
+          whiteSpace: "nowrap",
+        }}
       >
-        {fetcher.data?.message ?? ""}
+        {statusMessage}
       </div>
 
-      <BlockStack gap="400">
+      <s-page>
         {fetcher.data && !fetcher.data.ok && (
-          <Banner tone="critical">
-            <Text as="p" variant="bodyMd">{fetcher.data.message}</Text>
-          </Banner>
+          <s-banner tone="critical">
+            <s-text>{fetcher.data.message}</s-text>
+          </s-banner>
         )}
         {fetcher.data?.ok && fetcher.data.message && (
-          <Banner tone="success">
-            <Text as="p" variant="bodyMd">{fetcher.data.message}</Text>
-          </Banner>
+          <s-banner tone="success">
+            <s-text>{fetcher.data.message}</s-text>
+          </s-banner>
         )}
 
-        <Card padding="0">
-          {variants.length === 0 && !filterProductId && !filterConfigured ? (
-            <EmptyState
-              heading="No variants synced yet"
-              image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-            >
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Variants will appear here after the initial catalog sync completes.
-              </Text>
-            </EmptyState>
-          ) : (
-            <>
-              <Filters
-                queryValue=""
-                filters={[
-                  {
-                    key: "product",
-                    label: "Product",
-                    filter: (
-                      <Select
-                        label="Product"
-                        labelHidden
-                        options={[
-                          { label: "All products", value: "" },
-                          ...products.map((p: { id: string; title: string }) => ({ label: p.title, value: p.id })),
-                        ]}
-                        value={filterProductId}
-                        onChange={(v) => {
-                          const params = new URLSearchParams(searchParams);
-                          if (v) params.set("product", v);
-                          else params.delete("product");
-                          navigate(`?${params.toString()}`);
-                        }}
-                      />
-                    ),
-                    shortcut: true,
-                  },
-                  {
-                    key: "configured",
-                    label: "Configuration status",
-                    filter: (
-                      <Select
-                        label="Status"
-                        labelHidden
-                        options={[
-                          { label: "All", value: "" },
-                          { label: "Configured", value: "yes" },
-                          { label: "Not configured", value: "no" },
-                        ]}
-                        value={filterConfigured}
-                        onChange={(v) => {
-                          const params = new URLSearchParams(searchParams);
-                          if (v) params.set("configured", v);
-                          else params.delete("configured");
-                          navigate(`?${params.toString()}`);
-                        }}
-                      />
-                    ),
-                    shortcut: true,
-                  },
-                ]}
-                appliedFilters={appliedFilters}
-                onQueryChange={() => {}}
-                onQueryClear={() => {}}
-                onClearAll={() => {
-                  const params = new URLSearchParams(searchParams);
-                  params.delete("product");
-                  params.delete("configured");
-                  navigate(`?${params.toString()}`);
+        {variants.length === 0 && !filterProductId && !filterConfigured ? (
+          <s-section heading="No variants synced yet">
+            <s-text>Variants will appear here after the initial catalog sync completes.</s-text>
+          </s-section>
+        ) : (
+          <>
+            <s-section>
+              <form
+                method="get"
+                style={{ display: "grid", gap: "1rem" }}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  applyFilters(event.currentTarget);
                 }}
-              />
-              <IndexTable
-                resourceName={{ singular: "variant", plural: "variants" }}
-                itemCount={variants.length}
-                selectedItemsCount={allResourcesSelected ? "All" : selectedResources.length}
-                onSelectionChange={handleSelectionChange}
-                bulkActions={bulkActions}
-                headings={[
-                  { title: "Product" },
-                  { title: "Variant" },
-                  { title: "SKU" },
-                  { title: "Price" },
-                  { title: "Template" },
-                  { title: "Status" },
-                  { title: "Actions" },
-                ]}
               >
-                {rowMarkup}
-              </IndexTable>
-            </>
-          )}
-        </Card>
-      </BlockStack>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                    gap: "1rem",
+                    alignItems: "end",
+                  }}
+                >
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="variants-product-filter">Product</label>
+                    <select
+                      id="variants-product-filter"
+                      name="product"
+                      defaultValue={filterProductId}
+                      style={{
+                        width: "100%",
+                        padding: "0.75rem",
+                        borderRadius: "0.75rem",
+                        border: "1px solid var(--p-color-border)",
+                        font: "inherit",
+                      }}
+                    >
+                      <option value="">All products</option>
+                      {products.map((product: { id: string; title: string }) => (
+                        <option key={product.id} value={product.id}>{product.title}</option>
+                      ))}
+                    </select>
+                  </div>
 
-      {/* Bulk assign modal — template picker */}
-      <Modal
-        open={assignOpen}
-        onClose={() => setAssignOpen(false)}
-        title={`Assign template to ${selectedResources.length} variant(s)`}
-        primaryAction={{
-          content: "Assign",
-          loading: isSubmitting,
-          onAction: handleBulkAssign,
-        }}
-        secondaryActions={[{ content: "Cancel", onAction: () => setAssignOpen(false) }]}
-      >
-        <Modal.Section>
-          <BlockStack gap="400">
-            {templates.length === 0 ? (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                No active templates available. Create a template first.
-              </Text>
-            ) : (
-              <Select
-                label="Template"
-                options={templates.map((t: { id: string; name: string }) => ({ label: t.name, value: t.id }))}
-                value={selectedTemplateId}
-                onChange={setSelectedTemplateId}
-              />
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="variants-configured-filter">Configuration status</label>
+                    <select
+                      id="variants-configured-filter"
+                      name="configured"
+                      defaultValue={filterConfigured}
+                      style={{
+                        width: "100%",
+                        padding: "0.75rem",
+                        borderRadius: "0.75rem",
+                        border: "1px solid var(--p-color-border)",
+                        font: "inherit",
+                      }}
+                    >
+                      <option value="">All</option>
+                      <option value="yes">Configured</option>
+                      <option value="no">Not configured</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                    <s-button type="submit" variant="primary">Apply filters</s-button>
+                    <s-button variant="secondary" onClick={clearFilters}>Clear</s-button>
+                  </div>
+                </div>
+
+                {(filterProductId || filterConfigured) && (
+                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                    {filterProductId && (
+                      <s-badge tone="info">
+                        Product: {products.find((product: { id: string; title: string }) => product.id === filterProductId)?.title ?? filterProductId}
+                      </s-badge>
+                    )}
+                    {filterConfigured && (
+                      <s-badge tone="info">
+                        {filterConfigured === "yes" ? "Configured only" : "Not configured only"}
+                      </s-badge>
+                    )}
+                  </div>
+                )}
+              </form>
+            </s-section>
+
+            {selectedVariantIds.length > 0 && (
+              <s-section>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ display: "grid", gap: "0.25rem" }}>
+                    <strong>{selectedVariantIds.length} variant{selectedVariantIds.length !== 1 ? "s" : ""} selected</strong>
+                    <s-text color="subdued">
+                      {selectedConfiguredCount > 0
+                        ? `${selectedConfiguredCount} selected variant(s) already have a configuration.`
+                        : "Assign a template to the selected variants."}
+                    </s-text>
+                  </div>
+                  <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                    <s-button variant="secondary" onClick={clearSelection}>Clear selection</s-button>
+                    <s-button variant="primary" onClick={openAssignDialog} disabled={templates.length === 0}>
+                      Assign template
+                    </s-button>
+                  </div>
+                </div>
+              </s-section>
             )}
-          </BlockStack>
-        </Modal.Section>
-      </Modal>
 
-      {/* Overwrite confirmation modal */}
-      <Modal
-        open={confirmOverwrite}
-        onClose={() => setConfirmOverwrite(false)}
-        title="Overwrite existing configurations?"
-        primaryAction={{
-          content: "Yes, overwrite",
-          destructive: true,
-          loading: isSubmitting,
-          onAction: () => submitAssign(pendingAssign),
+            <s-section padding="none">
+              <s-table>
+                <div
+                  slot="filters"
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "1rem",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                    padding: "1rem",
+                  }}
+                >
+                  <div style={{ display: "grid", gap: "0.2rem" }}>
+                    <strong>Variants</strong>
+                    <s-text color="subdued">Filter, select, and assign templates to synced Shopify variants.</s-text>
+                  </div>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={(event) => toggleSelectAll(event.currentTarget.checked)}
+                    />
+                    <span>Select all visible</span>
+                  </label>
+                </div>
+
+                <s-table-header-row>
+                  <s-table-header>Select</s-table-header>
+                  <s-table-header listSlot="secondary">Product</s-table-header>
+                  <s-table-header listSlot="primary">Variant</s-table-header>
+                  <s-table-header listSlot="secondary">SKU</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Price</s-table-header>
+                  <s-table-header listSlot="secondary">Template</s-table-header>
+                  <s-table-header listSlot="inline">Status</s-table-header>
+                  <s-table-header>Actions</s-table-header>
+                </s-table-header-row>
+
+                <s-table-body>
+                  {variants.map((variant: VariantRow) => (
+                    <s-table-row key={variant.id}>
+                      <s-table-cell>
+                        <input
+                          type="checkbox"
+                          checked={selectedVariantIds.includes(variant.id)}
+                          onChange={(event) => updateSelection(variant.id, event.currentTarget.checked)}
+                          aria-label={`Select ${variant.title}`}
+                        />
+                      </s-table-cell>
+                      <s-table-cell>{variant.productTitle}</s-table-cell>
+                      <s-table-cell>{variant.title}</s-table-cell>
+                      <s-table-cell>{variant.sku || "—"}</s-table-cell>
+                      <s-table-cell>{formatMoney(variant.price)}</s-table-cell>
+                      <s-table-cell>{variant.templateName ?? "—"}</s-table-cell>
+                      <s-table-cell>
+                        <s-badge tone={variant.hasConfig ? "success" : "enabled"}>
+                          {variant.hasConfig ? "Configured" : "Not configured"}
+                        </s-badge>
+                      </s-table-cell>
+                      <s-table-cell>
+                        <Link to={`/app/variants/${variant.id}`}>
+                          <s-button variant="secondary">Configure</s-button>
+                        </Link>
+                      </s-table-cell>
+                    </s-table-row>
+                  ))}
+                </s-table-body>
+              </s-table>
+            </s-section>
+          </>
+        )}
+      </s-page>
+
+      <dialog
+        ref={assignDialogRef}
+        onClose={closeAssignDialog}
+        style={{
+          border: "none",
+          borderRadius: "1rem",
+          padding: 0,
+          maxWidth: "36rem",
+          width: "calc(100% - 2rem)",
         }}
-        secondaryActions={[{ content: "Cancel", onAction: () => setConfirmOverwrite(false) }]}
       >
-        <Modal.Section>
-          <Text as="p" variant="bodyMd">
+        <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <strong>Assign template</strong>
+              <s-text color="subdued">
+                Assign a template to {selectedVariantIds.length} selected variant{selectedVariantIds.length !== 1 ? "s" : ""}.
+              </s-text>
+            </div>
+            <button
+              type="button"
+              aria-label="Close dialog"
+              onClick={closeAssignDialog}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "1.5rem",
+                lineHeight: 1,
+                cursor: "pointer",
+              }}
+            >
+              ×
+            </button>
+          </div>
+
+          {templates.length === 0 ? (
+            <s-text>No active templates are available. Create a template first.</s-text>
+          ) : (
+            <div style={{ display: "grid", gap: "0.35rem" }}>
+              <label htmlFor="variant-template-assign">Template</label>
+              <select
+                id="variant-template-assign"
+                value={selectedTemplateId}
+                onChange={(event) => setSelectedTemplateId(event.currentTarget.value)}
+                style={{
+                  width: "100%",
+                  padding: "0.75rem",
+                  borderRadius: "0.75rem",
+                  border: "1px solid var(--p-color-border)",
+                  font: "inherit",
+                }}
+              >
+                {templates.map((template: { id: string; name: string }) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+            <s-button variant="secondary" onClick={closeAssignDialog}>Cancel</s-button>
+            <s-button
+              variant="primary"
+              disabled={isSubmitting || templates.length === 0 || selectedVariantIds.length === 0}
+              onClick={handleBulkAssign}
+            >
+              Assign
+            </s-button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={confirmDialogRef}
+        onClose={closeConfirmDialog}
+        style={{
+          border: "none",
+          borderRadius: "1rem",
+          padding: 0,
+          maxWidth: "36rem",
+          width: "calc(100% - 2rem)",
+        }}
+      >
+        <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <strong>Overwrite existing configurations?</strong>
+              <s-text color="subdued">Some selected variants already have a configuration.</s-text>
+            </div>
+            <button
+              type="button"
+              aria-label="Close dialog"
+              onClick={closeConfirmDialog}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "1.5rem",
+                lineHeight: 1,
+                cursor: "pointer",
+              }}
+            >
+              ×
+            </button>
+          </div>
+
+          <s-text>
             {overwriteCount} of the selected variant(s) already have a cost configuration. Assigning this template will replace their current template assignment. Per-variant line overrides and labor settings will be preserved.
-          </Text>
-        </Modal.Section>
-      </Modal>
-    </Page>
+          </s-text>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+            <s-button variant="secondary" onClick={closeConfirmDialog}>Cancel</s-button>
+            <s-button
+              variant="primary"
+              tone="critical"
+              disabled={isSubmitting}
+              onClick={() => submitAssign(pendingAssign)}
+            >
+              Yes, overwrite
+            </s-button>
+          </div>
+        </div>
+      </dialog>
+    </>
   );
 }
 
@@ -424,14 +593,13 @@ export function ErrorBoundary() {
   const error = useRouteError();
   console.error("[Variants] ErrorBoundary caught:", error);
   return (
-    <Page>
-      <TitleBar title="Variants" />
-      <Banner tone="critical">
-        <BlockStack gap="200">
-          <Text as="p" variant="bodyMd" fontWeight="bold">Something went wrong loading variants.</Text>
-          <Text as="p" variant="bodyMd">Please refresh the page. If the problem persists, contact support.</Text>
-        </BlockStack>
-      </Banner>
-    </Page>
+    <>
+      <ui-title-bar title="Variants" />
+      <s-page>
+        <s-banner tone="critical">
+          <s-text>Something went wrong loading variants. Please refresh the page.</s-text>
+        </s-banner>
+      </s-page>
+    </>
   );
 }
