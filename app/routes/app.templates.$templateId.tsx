@@ -253,8 +253,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   await prisma.$transaction(async (tx) => {
-    await tx.costTemplate.update({
-      where: { id: templateId },
+    await tx.costTemplate.updateMany({
+      where: { id: templateId, shopId },
       data: {
         name: draft.name.trim(),
         description: draft.description.trim() || null,

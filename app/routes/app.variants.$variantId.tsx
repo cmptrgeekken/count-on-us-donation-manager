@@ -627,7 +627,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     if (!hasMeaningfulDraft) {
       if (existingConfig) {
-        await prisma.variantCostConfig.delete({ where: { id: existingConfig.id } });
+        await prisma.variantCostConfig.deleteMany({ where: { id: existingConfig.id, shopId } });
         await prisma.auditLog.create({
           data: {
             shopId,
@@ -683,37 +683,42 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }));
 
     await prisma.$transaction(async (tx) => {
-      const config = existingConfig
-        ? await tx.variantCostConfig.update({
-            where: { id: existingConfig.id },
-            data: {
-              templateId: draft.templateId,
-              laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
-              laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
-              mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
-              lineItemCount: draft.materialLines.length + draft.equipmentLines.length,
-            },
-          })
-        : await tx.variantCostConfig.create({
-            data: {
-              shopId,
-              variantId,
-              templateId: draft.templateId,
-              laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
-              laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
-              mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
-              lineItemCount: draft.materialLines.length + draft.equipmentLines.length,
-            },
-          });
+      let configId = existingConfig?.id;
 
-      await tx.variantMaterialLine.deleteMany({ where: { configId: config.id, shopId } });
-      await tx.variantEquipmentLine.deleteMany({ where: { configId: config.id, shopId } });
+      if (configId) {
+        await tx.variantCostConfig.updateMany({
+          where: { id: configId, shopId },
+          data: {
+            templateId: draft.templateId,
+            laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
+            laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
+            mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
+            lineItemCount: draft.materialLines.length + draft.equipmentLines.length,
+          },
+        });
+      } else {
+        const createdConfig = await tx.variantCostConfig.create({
+          data: {
+            shopId,
+            variantId,
+            templateId: draft.templateId,
+            laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
+            laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
+            mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
+            lineItemCount: draft.materialLines.length + draft.equipmentLines.length,
+          },
+        });
+        configId = createdConfig.id;
+      }
+
+      await tx.variantMaterialLine.deleteMany({ where: { configId, shopId } });
+      await tx.variantEquipmentLine.deleteMany({ where: { configId, shopId } });
 
       if (materialOverrideLines.length + additionalMaterialLines.length > 0) {
         await tx.variantMaterialLine.createMany({
           data: [
-            ...materialOverrideLines.map((line) => ({ ...line, configId: config.id })),
-            ...additionalMaterialLines.map((line) => ({ ...line, configId: config.id })),
+            ...materialOverrideLines.map((line) => ({ ...line, configId })),
+            ...additionalMaterialLines.map((line) => ({ ...line, configId })),
           ],
         });
       }
@@ -721,8 +726,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       if (equipmentOverrideLines.length + additionalEquipmentLines.length > 0) {
         await tx.variantEquipmentLine.createMany({
           data: [
-            ...equipmentOverrideLines.map((line) => ({ ...line, configId: config.id })),
-            ...additionalEquipmentLines.map((line) => ({ ...line, configId: config.id })),
+            ...equipmentOverrideLines.map((line) => ({ ...line, configId })),
+            ...additionalEquipmentLines.map((line) => ({ ...line, configId })),
           ],
         });
       }
@@ -731,7 +736,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         data: {
           shopId,
           entity: "VariantCostConfig",
-          entityId: config.id,
+          entityId: configId,
           action: "VARIANT_CONFIG_UPDATED",
           actor: "merchant",
         },
