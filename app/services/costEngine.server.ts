@@ -62,7 +62,7 @@ function decimalOrZero(value: Prisma.Decimal | null | undefined): Prisma.Decimal
  * Compute material line cost.
  * Yield-based:  (purchasePrice / purchaseQty / yield) * quantity
  * Uses-based:   (purchasePrice / purchaseQty / totalUsesPerUnit) * usesPerVariant
- * Shipping:     perUnitCost * quantity (no yield/uses division)
+ * Legacy flat shipping: perUnitCost * quantity
  */
 function computeMaterialLineCost(params: {
   type: string;
