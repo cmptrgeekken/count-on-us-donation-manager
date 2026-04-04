@@ -68,14 +68,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const name = formData.get("name")?.toString().trim() ?? "";
     const type = formData.get("type")?.toString() ?? "production";
     const rawCostingModel = formData.get("costingModel")?.toString() ?? "yield";
-    const costingModel =
-      type === "shipping"
-        ? rawCostingModel === "uses"
-          ? "uses"
-          : null
-        : rawCostingModel === "uses"
-          ? "uses"
-          : "yield";
+    const costingModel = rawCostingModel === "uses" ? "uses" : "yield";
     const purchasePrice = parseFloat(formData.get("purchasePrice")?.toString() ?? "0");
     const purchaseQty = parseFloat(formData.get("purchaseQty")?.toString() ?? "1");
     const totalUsesPerUnit =
@@ -197,7 +190,7 @@ export default function MaterialsPage() {
       id: m.id,
       name: m.name,
       type: m.type,
-      costingModel: m.costingModel ?? (m.type === "shipping" ? "uses" : "yield"),
+      costingModel: m.costingModel ?? "yield",
       purchasePrice: m.purchasePrice,
       purchaseQty: m.purchaseQty,
       totalUsesPerUnit: m.totalUsesPerUnit ?? "",
@@ -217,18 +210,10 @@ export default function MaterialsPage() {
       ? (Number(perUnitPreview) / Number(form.totalUsesPerUnit)).toFixed(2)
       : null;
 
-  const costingModelOptions =
-    form.type === "shipping"
-      ? [{ label: "Uses-based (e.g. one strip of tape per order)", value: "uses" }]
-      : [
-          { label: "Yield-based (e.g. fabric by the metre)", value: "yield" },
-          { label: "Uses-based (e.g. screen with 50 uses)", value: "uses" },
-        ];
-
-  const isLegacyFlatShippingMaterial =
-    form.type === "shipping" &&
-    form.id !== "" &&
-    materials.find((m: Material) => m.id === form.id)?.costingModel === null;
+  const costingModelOptions = [
+    { label: "Yield-based (e.g. fabric by the metre)", value: "yield" },
+    { label: "Uses-based (e.g. screen with 50 uses)", value: "uses" },
+  ];
 
   const isSubmitting = fetcher.state !== "idle";
 
@@ -386,13 +371,7 @@ export default function MaterialsPage() {
                 { label: "Shipping material", value: "shipping" },
               ]}
               value={form.type}
-              onChange={(value) =>
-                setForm((current) => ({
-                  ...current,
-                  type: value,
-                  costingModel: value === "shipping" ? "uses" : current.costingModel === "uses" ? "uses" : "yield",
-                }))
-              }
+              onChange={(value) => setForm((current) => ({ ...current, type: value }))}
             />
             <Select
               label="Costing model"
@@ -400,11 +379,6 @@ export default function MaterialsPage() {
               value={form.costingModel}
               onChange={(value) => setForm((current) => ({ ...current, costingModel: value }))}
             />
-            {isLegacyFlatShippingMaterial && (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                This existing shipping material currently uses legacy flat per-unit costing. Saving will convert it to uses-based costing.
-              </Text>
-            )}
             <InlineStack gap="400" wrap={false}>
               <div style={{ flex: 1 }}>
                 <TextField
