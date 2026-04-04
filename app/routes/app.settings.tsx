@@ -21,6 +21,14 @@ import { prisma } from "../db.server";
 import l10n from "../utils/localization";
 import { getLocaleFromRequest } from "../utils/localization.server";
 
+const SHOP_CURRENCY_QUERY = `#graphql
+  query ShopCurrency {
+    shop {
+      currencyCode
+    }
+  }
+`;
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
@@ -58,7 +66,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const shopId = session.shop;
 
   const formData = await request.formData();
@@ -160,6 +168,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     return Response.json({ ok: true, message: "Cost defaults updated." });
+  }
+
+  if (intent === "refresh-shop-currency") {
+    const response = await admin.graphql(SHOP_CURRENCY_QUERY);
+    const json = await response.json();
+    const currency = json?.data?.shop?.currencyCode;
+
+    if (typeof currency !== "string" || currency.length !== 3) {
+      console.error("[Settings] Failed to refresh shop currency:", json);
+      return Response.json({ ok: false, message: "Unable to refresh shop currency from Shopify." }, { status: 502 });
+    }
+
+    await prisma.shop.update({
+      where: { shopId },
+      data: { currency },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "Shop",
+        action: "SHOP_CURRENCY_REFRESHED",
+        actor: "merchant",
+        payload: { currency },
+      },
+    });
+
+    return Response.json({ ok: true, message: `Shop currency refreshed to ${currency}.` });
   }
 
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
@@ -332,6 +368,50 @@ export default function Settings() {
                     Save
                   </Button>
                 </div>
+            </fetcher.Form>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="400">
+            <Text as="h2" variant="headingMd">
+              Localization
+            </Text>
+            <Divider />
+
+            <InlineStack align="space-between" blockAlign="center">
+              <BlockStack gap="100">
+                <Text as="p" variant="bodyMd" fontWeight="semibold">
+                  Shop currency
+                </Text>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Used throughout the admin when formatting money values. Refresh this if your Shopify store currency changed.
+                </Text>
+              </BlockStack>
+              <Text as="p" variant="bodyMd">
+                {localization.currency}
+              </Text>
+            </InlineStack>
+
+            <InlineStack align="space-between" blockAlign="center">
+              <BlockStack gap="100">
+                <Text as="p" variant="bodyMd" fontWeight="semibold">
+                  Active locale
+                </Text>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Derived from the current admin request and used for number formatting in this session.
+                </Text>
+              </BlockStack>
+              <Text as="p" variant="bodyMd">
+                {localization.locale}
+              </Text>
+            </InlineStack>
+
+            <fetcher.Form method="post">
+              <input type="hidden" name="intent" value="refresh-shop-currency" />
+              <Button submit loading={isSubmitting}>
+                Refresh from Shopify
+              </Button>
             </fetcher.Form>
           </BlockStack>
         </Card>
