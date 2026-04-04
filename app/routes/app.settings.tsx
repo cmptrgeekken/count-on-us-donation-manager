@@ -1,23 +1,9 @@
 import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useFetcher, useRouteError } from "@remix-run/react";
-import {
-  Page,
-  Card,
-  Banner,
-  BlockStack,
-  InlineStack,
-  Text,
-  Badge,
-  Divider,
-  Button,
-  TextField,
-  EmptyState,
-} from "@shopify/polaris";
-import { TitleBar } from "@shopify/app-bridge-react";
+import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 
-import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
+import { authenticate } from "../shopify.server";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const SHOP_CURRENCY_QUERY = `#graphql
@@ -40,22 +26,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       planOverride: true,
       currency: true,
       mistakeBuffer: true,
-      defaultLaborRate: true
+      defaultLaborRate: true,
     },
   });
 
   return Response.json({
     planTier: shop?.planTier ?? "Unknown",
-    paymentRate: shop?.paymentRate
-      ? (Number(shop.paymentRate) * 100).toFixed(2)
-      : null,
+    paymentRate: shop?.paymentRate ? (Number(shop.paymentRate) * 100).toFixed(2) : null,
     planOverride: shop?.planOverride ?? false,
-    mistakeBuffer: shop?.mistakeBuffer
-      ? (Number(shop.mistakeBuffer) * 100).toFixed(2)
-      : "",
-    defaultLaborRate: shop?.defaultLaborRate
-      ? Number(shop.defaultLaborRate).toFixed(2)
-      : ""
+    mistakeBuffer: shop?.mistakeBuffer ? (Number(shop.mistakeBuffer) * 100).toFixed(2) : "",
+    defaultLaborRate: shop?.defaultLaborRate ? Number(shop.defaultLaborRate).toFixed(2) : "",
   });
 };
 
@@ -147,7 +127,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { shopId },
       data: {
         mistakeBuffer: rate / 100,
-        defaultLaborRate
+        defaultLaborRate,
       },
     });
 
@@ -200,9 +180,7 @@ export default function Settings() {
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
   const { currency, locale, formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
-  // Accessible status announcement for screen readers
   const statusRef = useRef<HTMLDivElement>(null);
-
   const [rateInput, setRateInput] = useState(paymentRate ?? "");
   const [bufferInput, setBufferInput] = useState(mistakeBuffer ?? "");
   const [laborRateInput, setLaborRateInput] = useState(defaultLaborRate ?? "");
@@ -211,10 +189,9 @@ export default function Settings() {
   const statusMessage = fetcher.data?.message ?? "";
 
   return (
-    <Page>
-      <TitleBar title="Settings" />
+    <>
+      <ui-title-bar title="Settings" />
 
-      {/* Screen reader announcements */}
       <div
         ref={statusRef}
         aria-live="polite"
@@ -224,231 +201,137 @@ export default function Settings() {
         {statusMessage}
       </div>
 
-      <BlockStack gap="600">
-        {/* Shopify Payments */}
-        <Card>
-          <BlockStack gap="400">
-            <Text as="h2" variant="headingMd">
-              Shopify Payments
-            </Text>
-            <Divider />
+      <s-page>
+        <s-section heading="Shopify Payments">
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+              <div style={{ display: "grid", gap: "0.25rem" }}>
+                <strong>Plan</strong>
+                <s-text>Your current Shopify plan, used to look up your payment processing rate.</s-text>
+              </div>
+              <div>{planTier}</div>
+            </div>
 
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="p" variant="bodyMd" fontWeight="semibold">
-                  Plan
-                </Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Your current Shopify plan, used to look up your payment processing rate.
-                </Text>
-              </BlockStack>
-              <Badge tone={planTier === "Unknown" ? "warning" : "success"}>
-                {planTier}
-              </Badge>
-            </InlineStack>
-
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="p" variant="bodyMd" fontWeight="semibold">
-                  Payment processing rate
-                </Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  {planOverride
-                    ? "Manually set — daily auto-detection paused."
-                    : "Auto-detected daily from your plan."}
-                </Text>
-              </BlockStack>
-              <Text as="p" variant="bodyMd">
-                {paymentRate !== null ? `${formatPct(paymentRate / 100)}` : "Not detected"}
-              </Text>
-            </InlineStack>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+              <div style={{ display: "grid", gap: "0.25rem" }}>
+                <strong>Payment processing rate</strong>
+                <s-text>
+                  {planOverride ? "Manually set - daily auto-detection paused." : "Auto-detected daily from your plan."}
+                </s-text>
+              </div>
+              <div>{paymentRate !== null ? formatPct(Number(paymentRate) / 100) : "Not detected"}</div>
+            </div>
 
             {planOverride && (
               <fetcher.Form method="post">
                 <input type="hidden" name="intent" value="update-rate" />
-                <InlineStack gap="200" blockAlign="end">
-                  <TextField
+                <div style={{ display: "grid", gap: "0.75rem" }}>
+                  <s-text-field
                     label="Override rate (%)"
                     name="paymentRate"
+                    value={rateInput}
+                    onChange={(event) => setRateInput((event.currentTarget as HTMLInputElement).value)}
                     type="number"
                     min={0}
                     max={100}
                     step={0.01}
-                    autoComplete="off"
-                    value={rateInput}
-                    onChange={setRateInput}
-                    helpText="Enter the percentage as a number, e.g. 2.90"
-                    connectedRight={
-                      <Button submit loading={isSubmitting}>
-                        Save
-                      </Button>
-                    }
                   />
-                </InlineStack>
+                  <s-text>Enter the percentage as a number, for example 2.90.</s-text>
+                  <div>
+                    <s-button type="submit" disabled={isSubmitting}>Save</s-button>
+                  </div>
+                </div>
               </fetcher.Form>
             )}
 
             <fetcher.Form method="post">
-              <input
-                type="hidden"
-                name="intent"
-                value={planOverride ? "disable-override" : "enable-override"}
-              />
-              <Button
-                submit
-                loading={isSubmitting}
-                variant={planOverride ? "plain" : "secondary"}
+              <input type="hidden" name="intent" value={planOverride ? "disable-override" : "enable-override"} />
+              <s-button
+                type="submit"
+                disabled={isSubmitting}
+                variant={planOverride ? "secondary" : "primary"}
                 tone={planOverride ? "critical" : undefined}
               >
-                {planOverride
-                  ? "Remove override — resume auto-detection"
-                  : "Set a manual rate override"}
-              </Button>
+                {planOverride ? "Remove override and resume auto-detection" : "Set a manual rate override"}
+              </s-button>
             </fetcher.Form>
-          </BlockStack>
-        </Card>
+          </div>
+        </s-section>
 
-        {/* Cost Defaults */}
-        <Card>
-          <BlockStack gap="400">
-            <Text as="h2" variant="headingMd">
-              Cost Defaults
-            </Text>
-            <Divider />
-            
-            {/* <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="p" variant="bodyMd" fontWeight="semibold">
-                  Mistake buffer
-                </Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Applied to production material costs on every variant. Can be overridden per variant.
-                </Text>
-              </BlockStack>
-            </InlineStack> */}
-            <fetcher.Form method="post">
-              <input type="hidden" name="intent" value="update-cost-defaults" />
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Mistake buffer (%)"
-                  name="mistakeBuffer"
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={0.1}
-                  autoComplete="off"
-                  value={bufferInput}
-                  onChange={setBufferInput}
-                  helpText={`e.g. 5 = ${formatPct(.05)}. Added to production material costs to account for waste.`}
-                 />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label={`Default Labor Rate (${getCurrencySymbol()}/hr)`}
-                    name="defaultLaborRate"
-                    type="number"
-                    min={0}
-                    max={100}
-                    step={0.1}
-                    autoComplete="off"
-                    value={laborRateInput}
-                    onChange={setLaborRateInput}
-                    helpText={`e.g., ${formatMoney(15)}/hr. Leave blank to remove the shop default labor rate.`}
-                  />
-                </div>
+        <s-section heading="Cost Defaults">
+          <fetcher.Form method="post">
+            <input type="hidden" name="intent" value="update-cost-defaults" />
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <s-text-field
+                label="Mistake buffer (%)"
+                name="mistakeBuffer"
+                value={bufferInput}
+                onChange={(event) => setBufferInput((event.currentTarget as HTMLInputElement).value)}
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+              />
+              <s-text>
+                Example: 5 = {formatPct(0.05)}. Added to production material costs to account for waste.
+              </s-text>
+              <s-text-field
+                label={`Default labor rate (${getCurrencySymbol()}/hr)`}
+                name="defaultLaborRate"
+                value={laborRateInput}
+                onChange={(event) => setLaborRateInput((event.currentTarget as HTMLInputElement).value)}
+                type="number"
+                min={0}
+                step={0.1}
+              />
+              <s-text>
+                Example: {formatMoney(15)}/hr. Leave blank to remove the shop default labor rate.
+              </s-text>
+              <div>
+                <s-button type="submit" disabled={isSubmitting}>Save cost defaults</s-button>
+              </div>
+            </div>
+          </fetcher.Form>
+        </s-section>
 
-                <div style={{ flex: 1 }}>
-                  <Button submit loading={isSubmitting}>
-                    Save
-                  </Button>
-                </div>
-            </fetcher.Form>
-          </BlockStack>
-        </Card>
-
-        <Card>
-          <BlockStack gap="400">
-            <Text as="h2" variant="headingMd">
-              Localization
-            </Text>
-            <Divider />
-
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="p" variant="bodyMd" fontWeight="semibold">
-                  Shop currency
-                </Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
+        <s-section heading="Localization">
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+              <div style={{ display: "grid", gap: "0.25rem" }}>
+                <strong>Shop currency</strong>
+                <s-text>
                   Used throughout the admin when formatting money values. Refresh this if your Shopify store currency changed.
-                </Text>
-              </BlockStack>
-              <Text as="p" variant="bodyMd">
-                {currency}
-              </Text>
-            </InlineStack>
+                </s-text>
+              </div>
+              <div>{currency}</div>
+            </div>
 
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="p" variant="bodyMd" fontWeight="semibold">
-                  Active locale
-                </Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+              <div style={{ display: "grid", gap: "0.25rem" }}>
+                <strong>Active locale</strong>
+                <s-text>
                   Derived from the current admin request and used for number formatting in this session.
-                </Text>
-              </BlockStack>
-              <Text as="p" variant="bodyMd">
-                {locale}
-              </Text>
-            </InlineStack>
+                </s-text>
+              </div>
+              <div>{locale}</div>
+            </div>
 
             <fetcher.Form method="post">
               <input type="hidden" name="intent" value="refresh-shop-currency" />
-              <Button submit loading={isSubmitting}>
-                Refresh from Shopify
-              </Button>
+              <s-button type="submit" disabled={isSubmitting}>Refresh from Shopify</s-button>
             </fetcher.Form>
-          </BlockStack>
-        </Card>
+          </div>
+        </s-section>
 
-        {/* Donation Email — Phase 5 placeholder */}
-        <Card>
-          <BlockStack gap="200">
-            <Text as="h2" variant="headingMd">
-              Donation Email
-            </Text>
-            <Divider />
-            <EmptyState
-              heading="Coming soon"
-              image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-              fullWidth
-            >
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Configure post-purchase donation emails in a future update.
-              </Text>
-            </EmptyState>
-          </BlockStack>
-        </Card>
+        <s-section heading="Donation Email">
+          <s-text>This feature will be available in a future update.</s-text>
+        </s-section>
 
-        {/* Audit Log — Phase 4 placeholder */}
-        <Card>
-          <BlockStack gap="200">
-            <Text as="h2" variant="headingMd">
-              Audit Log
-            </Text>
-            <Divider />
-            <EmptyState
-              heading="Coming soon"
-              image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-              fullWidth
-            >
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Browse your full audit history in a future update.
-              </Text>
-            </EmptyState>
-          </BlockStack>
-        </Card>
-      </BlockStack>
-    </Page>
+        <s-section heading="Audit Log">
+          <s-text>Browse your full audit history in a future update.</s-text>
+        </s-section>
+      </s-page>
+    </>
   );
 }
 
@@ -456,18 +339,14 @@ export function ErrorBoundary() {
   const error = useRouteError();
   console.error("[Settings] ErrorBoundary caught:", error);
   return (
-    <Page>
-      <TitleBar title="Settings" />
-      <Banner tone="critical">
-        <BlockStack gap="200">
-          <Text as="p" variant="bodyMd" fontWeight="bold">
-            Something went wrong loading settings.
-          </Text>
-          <Text as="p" variant="bodyMd">
-            Please refresh the page. If the problem persists, contact support.
-          </Text>
-        </BlockStack>
-      </Banner>
-    </Page>
+    <>
+      <ui-title-bar title="Settings" />
+      <s-page>
+        <s-banner tone="critical" heading="Settings unavailable">
+          <p style={{ margin: 0, fontWeight: 650 }}>Something went wrong loading settings.</p>
+          <p style={{ margin: "0.5rem 0 0" }}>Please refresh the page. If the problem persists, contact support.</p>
+        </s-banner>
+      </s-page>
+    </>
   );
 }
