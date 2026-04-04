@@ -1,20 +1,9 @@
-import { useRef, useEffect } from "react";
+import { useEffect, useRef } from "react";
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useRouteError, Link } from "@remix-run/react";
-import {
-  Page,
-  Banner,
-  Card,
-  EmptyState,
-  BlockStack,
-  InlineStack,
-  Text,
-  Button,
-} from "@shopify/polaris";
-import { TitleBar } from "@shopify/app-bridge-react";
+import { Link, useLoaderData, useRouteError } from "@remix-run/react";
 
-import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
+import { authenticate } from "../shopify.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -43,7 +32,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export default function Dashboard() {
   const { catalogSynced, productCount, variantCount, configuredCount } = useLoaderData<typeof loader>();
 
-  // aria-live region announces when catalog sync completes
   const prevSyncedRef = useRef(catalogSynced);
   const liveRef = useRef<HTMLDivElement>(null);
 
@@ -55,10 +43,9 @@ export default function Dashboard() {
   }, [catalogSynced]);
 
   return (
-    <Page>
-      <TitleBar title="Dashboard" />
+    <>
+      <ui-title-bar title="Dashboard" />
 
-      {/* Screen reader announcement for catalog sync completion */}
       <div
         ref={liveRef}
         aria-live="polite"
@@ -66,64 +53,49 @@ export default function Dashboard() {
         style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
       />
 
-      <BlockStack gap="400">
+      <s-page>
         {!catalogSynced && (
-          <Banner tone="info">
-            <Text as="p" variant="bodyMd">
-              We&rsquo;re syncing your store catalog. This may take a few
-              minutes. You can start exploring the app while this runs.
-            </Text>
-          </Banner>
+          <s-banner tone="info" heading="Catalog sync in progress">
+            <s-text>
+              We&apos;re syncing your store catalog. This may take a few minutes. You can start exploring the app while this runs.
+            </s-text>
+          </s-banner>
         )}
 
         {catalogSynced && (
-          <Card>
-            <BlockStack gap="400">
-              <Text as="h2" variant="headingMd">Catalog</Text>
-              <InlineStack gap="600" wrap>
-                <BlockStack gap="100">
-                  <Text as="p" variant="headingLg">{productCount}</Text>
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    {productCount === 1 ? "Product" : "Products"}
-                  </Text>
-                </BlockStack>
-                <BlockStack gap="100">
-                  <Text as="p" variant="headingLg">{variantCount}</Text>
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    {variantCount === 1 ? "Variant" : "Variants"}
-                  </Text>
-                </BlockStack>
-                <BlockStack gap="100">
-                  <Text as="p" variant="headingLg">{configuredCount}</Text>
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    {configuredCount === 1 ? "Variant configured" : "Variants configured"}
-                  </Text>
-                </BlockStack>
-              </InlineStack>
+          <s-section heading="Catalog">
+            <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: "1.75rem", fontWeight: 650 }}>{productCount}</div>
+                <s-text>{productCount === 1 ? "Product" : "Products"}</s-text>
+              </div>
+              <div>
+                <div style={{ fontSize: "1.75rem", fontWeight: 650 }}>{variantCount}</div>
+                <s-text>{variantCount === 1 ? "Variant" : "Variants"}</s-text>
+              </div>
+              <div>
+                <div style={{ fontSize: "1.75rem", fontWeight: 650 }}>{configuredCount}</div>
+                <s-text>{configuredCount === 1 ? "Variant configured" : "Variants configured"}</s-text>
+              </div>
+            </div>
+            <div style={{ marginTop: "1rem" }}>
               <Link to="/app/variants">
-                <Button variant="plain">View all variants</Button>
+                <s-button>View all variants</s-button>
               </Link>
-            </BlockStack>
-          </Card>
+            </div>
+          </s-section>
         )}
 
-        <EmptyState
-          heading="Welcome to Count On Us"
-          image="https://cdn.shopify.com/s/files/1/0262/4071/2726/files/emptystate-files.png"
-        >
-          <BlockStack gap="200">
-            <Text as="p" variant="bodyMd" tone="subdued">
-              Track production costs, calculate donation pools, and allocate
-              donations to your chosen causes — with full transparency for your
-              customers.
-            </Text>
-            <Text as="p" variant="bodyMd" tone="subdued">
-              Complete the setup steps to get started.
-            </Text>
-          </BlockStack>
-        </EmptyState>
-      </BlockStack>
-    </Page>
+        <s-section heading="Welcome to Count On Us">
+          <div style={{ display: "grid", gap: "0.75rem" }}>
+            <s-text>
+              Track production costs, calculate donation pools, and allocate donations to your chosen causes with full transparency for your customers.
+            </s-text>
+            <s-text>Complete the setup steps to get started.</s-text>
+          </div>
+        </s-section>
+      </s-page>
+    </>
   );
 }
 
@@ -131,18 +103,14 @@ export function ErrorBoundary() {
   const error = useRouteError();
   console.error("[Dashboard] ErrorBoundary caught:", error);
   return (
-    <Page>
-      <TitleBar title="Dashboard" />
-      <Banner tone="critical">
-        <BlockStack gap="200">
-          <Text as="p" variant="bodyMd" fontWeight="bold">
-            Something went wrong loading the dashboard.
-          </Text>
-          <Text as="p" variant="bodyMd">
-            Please refresh the page. If the problem persists, contact support.
-          </Text>
-        </BlockStack>
-      </Banner>
-    </Page>
+    <>
+      <ui-title-bar title="Dashboard" />
+      <s-page>
+        <s-banner tone="critical" heading="Dashboard unavailable">
+          <p style={{ margin: 0, fontWeight: 650 }}>Something went wrong loading the dashboard.</p>
+          <p style={{ margin: "0.5rem 0 0" }}>Please refresh the page. If the problem persists, contact support.</p>
+        </s-banner>
+      </s-page>
+    </>
   );
 }
