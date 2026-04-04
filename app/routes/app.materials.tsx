@@ -20,35 +20,23 @@ import {
 import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
-import l10n from "../utils/localization";
-import { getLocaleFromRequest } from "../utils/localization.server";
+import { useAppLocalization } from "../utils/use-app-localization";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
-  const locale = getLocaleFromRequest(request);
 
-  const [shop, materials] = await Promise.all([
-    prisma.shop.findUnique({
-      where: { shopId },
-      select: { currency: true },
-    }),
-    prisma.materialLibraryItem.findMany({
-      where: { shopId },
-      orderBy: { createdAt: "asc" },
-      include: {
-        _count: { select: { templateLines: true, variantLines: true } },
-      },
-    }),
-  ]);
+  const materials = await prisma.materialLibraryItem.findMany({
+    where: { shopId },
+    orderBy: { createdAt: "asc" },
+    include: {
+      _count: { select: { templateLines: true, variantLines: true } },
+    },
+  });
 
   return Response.json({
-    localization: {
-      currency: shop?.currency ?? "USD",
-      locale,
-    },
     materials: materials.map((m) => ({
       id: m.id,
       name: m.name,
@@ -180,9 +168,9 @@ const EMPTY_FORM = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function MaterialsPage() {
-  const { localization, materials } = useLoaderData<typeof loader>();
+  const { materials } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
-  const { formatMoney, getCurrencySymbol } = l10n(localization.currency, localization.locale);
+  const { formatMoney, getCurrencySymbol } = useAppLocalization();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);

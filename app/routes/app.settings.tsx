@@ -18,8 +18,7 @@ import { TitleBar } from "@shopify/app-bridge-react";
 
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
-import l10n from "../utils/localization";
-import { getLocaleFromRequest } from "../utils/localization.server";
+import { useAppLocalization } from "../utils/use-app-localization";
 
 const SHOP_CURRENCY_QUERY = `#graphql
   query ShopCurrency {
@@ -32,7 +31,6 @@ const SHOP_CURRENCY_QUERY = `#graphql
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
-  const locale = getLocaleFromRequest(request);
 
   const shop = await prisma.shop.findUnique({
     where: { shopId },
@@ -47,10 +45,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   return Response.json({
-    localization: {
-      currency: shop?.currency ?? "USD",
-      locale,
-    },
     planTier: shop?.planTier ?? "Unknown",
     paymentRate: shop?.paymentRate
       ? (Number(shop.paymentRate) * 100).toFixed(2)
@@ -202,9 +196,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Settings() {
-  const { localization, planTier, paymentRate, planOverride, mistakeBuffer, defaultLaborRate } = useLoaderData<typeof loader>();
+  const { planTier, paymentRate, planOverride, mistakeBuffer, defaultLaborRate } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
-  const { formatMoney, formatPct, getCurrencySymbol } = l10n(localization.currency, localization.locale);
+  const { currency, locale, formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
   // Accessible status announcement for screen readers
   const statusRef = useRef<HTMLDivElement>(null);
@@ -389,7 +383,7 @@ export default function Settings() {
                 </Text>
               </BlockStack>
               <Text as="p" variant="bodyMd">
-                {localization.currency}
+                {currency}
               </Text>
             </InlineStack>
 
@@ -403,7 +397,7 @@ export default function Settings() {
                 </Text>
               </BlockStack>
               <Text as="p" variant="bodyMd">
-                {localization.locale}
+                {locale}
               </Text>
             </InlineStack>
 

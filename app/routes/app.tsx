@@ -5,15 +5,28 @@ import { AppProvider } from "@shopify/shopify-app-remix/react";
 import { NavMenu } from "@shopify/app-bridge-react";
 import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 
+import { prisma } from "../db.server";
 import { authenticate } from "../shopify.server";
+import { getLocaleFromRequest } from "../utils/localization.server";
 
 export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const locale = getLocaleFromRequest(request);
+  const shop = await prisma.shop.findUnique({
+    where: { shopId: session.shop },
+    select: { currency: true },
+  });
 
   return Response.json(
-    { apiKey: process.env.SHOPIFY_API_KEY || "" },
+    {
+      apiKey: process.env.SHOPIFY_API_KEY || "",
+      localization: {
+        currency: shop?.currency ?? "USD",
+        locale,
+      },
+    },
     {
       headers: {
         "Strict-Transport-Security": "max-age=31536000; includeSubDomains",

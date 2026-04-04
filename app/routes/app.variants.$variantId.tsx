@@ -18,8 +18,7 @@ import { TitleBar } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
-import l10n from "../utils/localization";
-import { getLocaleFromRequest } from "../utils/localization.server";
+import { useAppLocalization } from "../utils/use-app-localization";
 
 // ── Loader ────────────────────────────────────────────────────────────────────
 
@@ -27,11 +26,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
   const { variantId } = params;
-  const locale = getLocaleFromRequest(request);
 
   const shop = await prisma.shop.findUnique({
     where: { shopId },
-    select: { currency: true, mistakeBuffer: true, defaultLaborRate: true },
+    select: { mistakeBuffer: true, defaultLaborRate: true },
   });
 
   const variant = await prisma.variant.findFirst({
@@ -73,10 +71,6 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const config = variant.costConfig;
 
   return Response.json({
-    localization: {
-      currency: shop?.currency ?? "USD",
-      locale,
-    },
     variant: {
       id: variant.id,
       productTitle: variant.product.title,
@@ -374,11 +368,11 @@ type VariantEquipmentLine = {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function VariantDetailPage() {
-  const { localization, variant, config, templates, availableMaterials, availableEquipment } =
+  const { variant, config, templates, availableMaterials, availableEquipment } =
     useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string; preview?: Record<string, string> }>();
 
-  const { formatMoney, formatPct, getCurrencySymbol } = l10n(localization.currency, localization.locale);
+  const { formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
   const [assignTemplateOpen, setAssignTemplateOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState(templates[0]?.id ?? "");
