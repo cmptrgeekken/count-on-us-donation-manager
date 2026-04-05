@@ -1,6 +1,8 @@
 import type { PgBoss } from "pg-boss";
 import { prisma } from "../db.server";
 import { fullSync, incrementalSync } from "../services/catalogSync.server";
+import { processOrderUpdate, processRefund } from "../services/adjustmentService.server";
+import { createSnapshot } from "../services/snapshotService.server";
 import shopify from "../shopify.server";
 
 const QUEUES = [
@@ -37,59 +39,33 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     console.log(`[plan.detect] Phase 1 placeholder for shop: ${job.data.shopId}`);
   });
 
-  await boss.work<{ shopId: string; shopifyOrderId: string }>(
+  await boss.work<{ shopId: string; shopifyOrderId: string; payload?: unknown }>(
     "orders.snapshot",
     async (jobs) => {
       const job = jobs[0];
       if (!job) return;
-      const { shopId, shopifyOrderId } = job.data;
-      await prisma.auditLog.create({
-        data: {
-          shopId,
-          entity: "OrderSnapshot",
-          entityId: shopifyOrderId,
-          action: "ORDER_SNAPSHOT_ENQUEUED",
-          actor: "webhook",
-          payload: { topic: "orders/create", note: "Phase 3 stub - SnapshotService not implemented yet" },
-        },
-      });
+      const { shopId, payload } = job.data;
+      await createSnapshot(shopId, payload as any, prisma);
     },
   );
 
-  await boss.work<{ shopId: string; shopifyOrderId: string }>(
+  await boss.work<{ shopId: string; shopifyOrderId: string; payload?: unknown }>(
     "orders.updated",
     async (jobs) => {
       const job = jobs[0];
       if (!job) return;
-      const { shopId, shopifyOrderId } = job.data;
-      await prisma.auditLog.create({
-        data: {
-          shopId,
-          entity: "OrderSnapshot",
-          entityId: shopifyOrderId,
-          action: "ORDER_UPDATE_ENQUEUED",
-          actor: "webhook",
-          payload: { topic: "orders/updated", note: "Phase 3 stub - adjustment handling not implemented yet" },
-        },
-      });
+      const { shopId, payload } = job.data;
+      await processOrderUpdate(shopId, payload as any, prisma);
     },
   );
 
-  await boss.work<{ shopId: string }>(
+  await boss.work<{ shopId: string; payload?: unknown }>(
     "orders.refund",
     async (jobs) => {
       const job = jobs[0];
       if (!job) return;
-      const { shopId } = job.data;
-      await prisma.auditLog.create({
-        data: {
-          shopId,
-          entity: "Adjustment",
-          action: "REFUND_ENQUEUED",
-          actor: "webhook",
-          payload: { topic: "refunds/create", note: "Phase 3 stub - AdjustmentService not implemented yet" },
-        },
-      });
+      const { shopId, payload } = job.data;
+      await processRefund(shopId, payload as any, prisma);
     },
   );
 
