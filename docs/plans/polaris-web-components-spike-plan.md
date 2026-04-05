@@ -141,3 +141,12 @@ Do not start with:
   - compose filters from native inputs plus URL-backed client navigation
   - represent active filters as badges
   - keep the interaction model simple and explicit until Shopify offers a stronger first-party equivalent or we choose to build our own reusable filter bar
+
+### Embedded Shopify shell behavior gap
+
+- Issue: Local DOM-based testing showed variant/template save working, but in the actual embedded Shopify admin the Save action failed while Discard still worked.
+- Cause: `ui-save-bar` integration behaved differently when Shopify projected the bar into admin chrome; React-style assumptions around slotted button behavior were not reliable enough on their own.
+- Recovery:
+  - Hardened the shared save-bar wrapper to use native button refs, native event listeners, and explicit button attributes for the projected primary/discard actions.
+  - Revalidated the staged editor flows in the real embedded Shopify UI.
+- Takeaway: Browser automation against localhost is valuable, but shell-integrated components such as `ui-save-bar` still need targeted verification inside the embedded Shopify admin when we change their wiring.

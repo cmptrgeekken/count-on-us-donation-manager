@@ -18,9 +18,9 @@ import {
 } from "../components/polaris-shim";
 import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
-import { authenticate } from "../shopify.server";
 import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
+import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import {
@@ -189,7 +189,7 @@ function parseOptionalPercent(value: string | null | undefined) {
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
   const { variantId } = params;
 
@@ -411,7 +411,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
   const variantId = params.variantId ?? "";
 
@@ -569,6 +569,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     const draft = parsedDraft.data;
+    const normalizedTemplateId = draft.templateId?.trim() ? draft.templateId : null;
     const selectedTemplate = draft.templateId
       ? await prisma.costTemplate.findFirst({
           where: { id: draft.templateId, shopId },
@@ -690,7 +691,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         await tx.variantCostConfig.updateMany({
           where: { id: configId, shopId },
           data: {
-            templateId: draft.templateId,
+            templateId: normalizedTemplateId,
             laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
             laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
             mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
@@ -702,7 +703,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           data: {
             shopId,
             variantId,
-            templateId: draft.templateId,
+            templateId: normalizedTemplateId,
             laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
             laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
             mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),

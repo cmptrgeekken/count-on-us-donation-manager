@@ -20,7 +20,7 @@ import {
 import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
-import { authenticate } from "../shopify.server";
+import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import {
@@ -126,7 +126,7 @@ function buildTemplateDraft(template: ReturnType<typeof serializeTemplate>): Tem
 }
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
   const templateId = params.templateId ?? "";
 
@@ -175,7 +175,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
   const templateId = params.templateId ?? "";
 

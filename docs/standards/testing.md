@@ -4,6 +4,8 @@
 
 Use **Vitest** as the test runner. It is compatible with the Vite build setup and supports TypeScript natively without additional configuration.
 
+Use **Playwright** for browser-level UI and visual regression coverage. Playwright complements Vitest; it does not replace unit, regression, or service-level tests.
+
 Install:
 ```sh
 npm install --save-dev vitest @vitest/coverage-v8
@@ -87,6 +89,26 @@ If a loader or action bug is fixed, prefer extracting the affected derivation, n
 ### Do not test: Polaris component rendering
 
 Polaris components are well-tested by Shopify. Do not write snapshot tests or shallow render tests for pages that are purely composed of Polaris components.
+
+### Test when browser behavior matters: UI workflows and visual regressions
+
+Use Playwright when the risk is in real browser behavior rather than server logic. High-value targets include:
+
+- modal open/close behavior
+- autocomplete and dropdown visibility/positioning
+- staged save/discard UI
+- filtering and selection behavior
+- layout regressions after UI refactors or migrations
+
+For new features and workflow changes, explicitly evaluate whether Playwright coverage should ship in the same branch. The expected default is to consider browser-level coverage when a change affects:
+
+- real user workflows on app routes
+- staged editing or save/discard behavior
+- modal, dialog, picker, or dropdown interaction
+- filtering, selection, or bulk-action flows
+- browser-only regressions that unit and service tests would not catch
+
+Prefer a small number of durable screenshot baselines over broad, fragile snapshot coverage. Use deterministic routes or fixture states whenever possible.
 
 ---
 
@@ -210,6 +232,7 @@ This review is especially important when a change touches:
 - data normalization or fallback behavior
 - assignment/reset/merge workflows
 - currency or locale formatting
+- UI-visible workflow changes that may need Playwright coverage
 - bug fixes prompted by QA, review, or production-like testing
 
 The expected default is to add or update tests in the same branch as the code change. When no test is added, the reason should be explicit.

@@ -4,11 +4,11 @@ import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 
 import { prisma } from "../db.server";
-import { authenticate } from "../shopify.server";
+import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { getLocaleFromRequest } from "../utils/localization.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await authenticateAdminRequest(request);
   const locale = getLocaleFromRequest(request);
   const shop = await prisma.shop.findUnique({
     where: { shopId: session.shop },
