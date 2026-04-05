@@ -6,7 +6,9 @@ import shopify from "../shopify.server";
 const QUEUES = [
   "plan.detect.daily",
   "plan.detect",
-  "webhook.orders.create",
+  "orders.snapshot",
+  "orders.updated",
+  "orders.refund",
   "shop.delete",
   "webhook.compliance",
   "catalog.sync",
@@ -14,12 +16,10 @@ const QUEUES = [
 ];
 
 export async function registerAllProcessors(boss: PgBoss): Promise<void> {
-  // pg-boss v12 requires queues to be explicitly created before workers can be registered
   for (const name of QUEUES) {
     await boss.createQueue(name);
   }
 
-  // Daily plan re-detection: fan out one job per non-overridden shop
   await boss.work("plan.detect.daily", async (_jobs) => {
     const shops = await prisma.shop.findMany({
       where: { planOverride: false },
@@ -31,36 +31,68 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     }
   });
 
-  // Per-shop plan detection
-  // Phase 1: logs a placeholder. Full implementation requires retrieving the
-  // offline access token from session storage to instantiate an Admin API client.
   await boss.work<{ shopId: string }>("plan.detect", async (jobs) => {
     const job = jobs[0];
     if (!job) return;
     console.log(`[plan.detect] Phase 1 placeholder for shop: ${job.data.shopId}`);
   });
 
-  // orders/create stub — log receipt, no other processing in Phase 1
-  await boss.work<{ shopId: string; orderId: string; topic: string }>(
-    "webhook.orders.create",
+  await boss.work<{ shopId: string; shopifyOrderId: string }>(
+    "orders.snapshot",
     async (jobs) => {
       const job = jobs[0];
       if (!job) return;
-      const { shopId, orderId } = job.data;
+      const { shopId, shopifyOrderId } = job.data;
       await prisma.auditLog.create({
         data: {
           shopId,
-          entity: "Order",
-          entityId: orderId,
-          action: "RECEIVED",
+          entity: "OrderSnapshot",
+          entityId: shopifyOrderId,
+          action: "ORDER_SNAPSHOT_ENQUEUED",
           actor: "webhook",
-          payload: { topic: "orders/create", note: "Phase 1 stub — no processing" },
+          payload: { topic: "orders/create", note: "Phase 3 stub - SnapshotService not implemented yet" },
         },
       });
     },
   );
 
-  // shop.delete: runs 48hrs after uninstall — delete all shop data atomically
+  await boss.work<{ shopId: string; shopifyOrderId: string }>(
+    "orders.updated",
+    async (jobs) => {
+      const job = jobs[0];
+      if (!job) return;
+      const { shopId, shopifyOrderId } = job.data;
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "OrderSnapshot",
+          entityId: shopifyOrderId,
+          action: "ORDER_UPDATE_ENQUEUED",
+          actor: "webhook",
+          payload: { topic: "orders/updated", note: "Phase 3 stub - adjustment handling not implemented yet" },
+        },
+      });
+    },
+  );
+
+  await boss.work<{ shopId: string }>(
+    "orders.refund",
+    async (jobs) => {
+      const job = jobs[0];
+      if (!job) return;
+      const { shopId } = job.data;
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "Adjustment",
+          action: "REFUND_ENQUEUED",
+          actor: "webhook",
+          payload: { topic: "refunds/create", note: "Phase 3 stub - AdjustmentService not implemented yet" },
+        },
+      });
+    },
+  );
+
   await boss.work<{ shopId: string; deletionJobId: string }>(
     "shop.delete",
     async (jobs) => {
@@ -72,13 +104,11 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
         where: { shopId },
       });
 
-      // Cancelled if merchant reinstalled within the window
       if (!deletionJob || deletionJob.status === "cancelled") {
-        console.log(`[shop.delete] Skipped — DeletionJob cancelled for shop ${shopId}`);
+        console.log(`[shop.delete] Skipped - DeletionJob cancelled for shop ${shopId}`);
         return;
       }
 
-      // Delete in FK-safe order: children before parent
       await prisma.$transaction([
         prisma.auditLog.deleteMany({ where: { shopId } }),
         prisma.wizardState.deleteMany({ where: { shopId } }),
@@ -91,7 +121,6 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     },
   );
 
-  // Full catalog sync — runs after install
   await boss.work<{ shopId: string }>("catalog.sync", async (jobs) => {
     const job = jobs[0];
     if (!job) return;
@@ -101,7 +130,6 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     await fullSync(shopId, admin);
   });
 
-  // Incremental sync — runs on products/update webhook
   await boss.work<{ shopId: string; productGid: string }>(
     "catalog.sync.incremental",
     async (jobs) => {
@@ -114,7 +142,6 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     },
   );
 
-  // GDPR: log receipt for all compliance webhooks
   await boss.work<{ shopId: string; topic: string }>(
     "webhook.compliance",
     async (jobs) => {
@@ -122,7 +149,6 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       if (!job) return;
       const { shopId, topic } = job.data;
 
-      // shop/redact triggers the same deletion flow as app/uninstalled
       if (topic === "shop/redact") {
         const existing = await prisma.deletionJob.findUnique({
           where: { shopId },

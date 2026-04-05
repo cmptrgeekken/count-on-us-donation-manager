@@ -15,6 +15,10 @@ api_version = "2026-04"
 topics = ["app/uninstalled", "products/update"]
 uri = "https://shopify.mnbecks.com/webhooks"
 
+[[webhooks.subscriptions]]
+topics = ["orders/create", "orders/updated", "refunds/create"]
+uri = "https://shopify.mnbecks.com/webhooks"
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_locales,read_metaobject_definitions,read_metaobjects,read_orders,read_products,write_app_proxy,write_metaobject_definitions,write_metaobjects,write_products"

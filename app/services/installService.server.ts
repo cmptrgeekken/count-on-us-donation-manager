@@ -1,9 +1,10 @@
 import { prisma } from "~/db.server";
 import { jobQueue } from "~/jobs/queue.server";
+import { ensureCauseMetaobjectDefinition } from "~/services/causeMetaobjectService.server";
 import { detectAndStorePlan } from "~/services/planDetectionService.server";
 
 type AdminContext = {
-  graphql: (query: string) => Promise<Response>;
+  graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
 };
 
 /**
@@ -53,6 +54,17 @@ export async function handlePostInstall(
     select: { id: true, catalogSynced: true },
   });
   if (existing) {
+    const createdDefinition = await ensureCauseMetaobjectDefinition(admin);
+    if (createdDefinition) {
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "CauseMetaobjectDefinition",
+          action: "CAUSE_METAOBJECT_DEFINITION_CREATED",
+          actor: "system",
+        },
+      });
+    }
     console.log(`Catalog Status`, existing)
     // Backfill: if catalog hasn't been synced yet (e.g. Phase 2 deployed to an
     // existing merchant), enqueue the sync now rather than waiting for reinstall.
@@ -91,6 +103,17 @@ export async function handlePostInstall(
   });
 
   await detectAndStorePlan(shopId, admin);
+  const createdDefinition = await ensureCauseMetaobjectDefinition(admin);
+  if (createdDefinition) {
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "CauseMetaobjectDefinition",
+        action: "CAUSE_METAOBJECT_DEFINITION_CREATED",
+        actor: "system",
+      },
+    });
+  }
 
   // Enqueue catalog sync as a background job — can take many seconds for large catalogs
   await jobQueue.send("catalog.sync", { shopId });

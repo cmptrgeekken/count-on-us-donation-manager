@@ -32,15 +32,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       break;
 
     case "orders/create":
-      await jobQueue.send("webhook.orders.create", {
+      await jobQueue.send("orders.snapshot", {
         shopId: shop,
-        orderId: (payload as { id?: string | number })?.id?.toString() ?? "unknown",
-        topic,
+        shopifyOrderId:
+          (payload as { admin_graphql_api_id?: string })?.admin_graphql_api_id ??
+          (payload as { id?: string | number })?.id?.toString() ??
+          "unknown",
+        payload,
       });
       break;
 
     case "orders/updated":
+      await jobQueue.send("orders.updated", {
+        shopId: shop,
+        shopifyOrderId:
+          (payload as { admin_graphql_api_id?: string })?.admin_graphql_api_id ??
+          (payload as { id?: string | number })?.id?.toString() ??
+          "unknown",
+        payload,
+      });
+      break;
+
     case "refunds/create":
+      await jobQueue.send("orders.refund", {
+        shopId: shop,
+        payload,
+      });
+      break;
+
     case "products/update": {
       const productGid = (payload as { admin_graphql_api_id?: string })?.admin_graphql_api_id;
       if (productGid) {
