@@ -175,9 +175,10 @@ Key rules:
 - Pure calculation functions (cost engine, financial helpers) must have unit tests.
 - Bug fixes and behavior corrections should usually add a regression test that would fail if the bug returns.
 - Changes to financial resolution, validation, normalization, or state-merging logic should be assumed to need regression coverage unless there is a clear written reason they do not.
+- UI-visible workflow changes should be evaluated for Playwright coverage by default when the risk is in browser behavior rather than server logic.
 - Tests live adjacent to their source file: `costEngine.server.test.ts` alongside `costEngine.server.ts`.
 - Do not mock the database in integration tests — use a real test database.
-- Use Vitest as the test runner.
+- Use Vitest for unit/service tests and Playwright for browser-level UI and visual regression tests.
 
 ---
 
@@ -195,5 +196,6 @@ Before every commit, run a brief QA Engineer persona pass and answer: "What test
 - bug fixes that should add a regression test
 - validation changes that should add schema coverage
 - workflow or merge/reset behavior that should be covered by a service or integration test
+- UI workflow changes that should add or update Playwright coverage
 
 If no new tests are added, record the reason in the commit notes, PR description, or working notes so the omission is explicit rather than accidental.

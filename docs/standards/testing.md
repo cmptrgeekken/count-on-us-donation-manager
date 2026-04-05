@@ -100,6 +100,14 @@ Use Playwright when the risk is in real browser behavior rather than server logi
 - filtering and selection behavior
 - layout regressions after UI refactors or migrations
 
+For new features and workflow changes, explicitly evaluate whether Playwright coverage should ship in the same branch. The expected default is to consider browser-level coverage when a change affects:
+
+- real user workflows on app routes
+- staged editing or save/discard behavior
+- modal, dialog, picker, or dropdown interaction
+- filtering, selection, or bulk-action flows
+- browser-only regressions that unit and service tests would not catch
+
 Prefer a small number of durable screenshot baselines over broad, fragile snapshot coverage. Use deterministic routes or fixture states whenever possible.
 
 ---
@@ -224,6 +232,7 @@ This review is especially important when a change touches:
 - data normalization or fallback behavior
 - assignment/reset/merge workflows
 - currency or locale formatting
+- UI-visible workflow changes that may need Playwright coverage
 - bug fixes prompted by QA, review, or production-like testing
 
 The expected default is to add or update tests in the same branch as the code change. When no test is added, the reason should be explicit.

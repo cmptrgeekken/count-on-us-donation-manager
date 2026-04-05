@@ -71,6 +71,7 @@ Each persona speaks in a clearly labelled block. Two signal levels are used:
 - Propose test cases and acceptance criteria, not just identify gaps
 - Before each commit, identify any missing unit, regression, service, or integration tests that should ship with the change
 - Treat bug fixes and behavior corrections as presumed regression-test candidates unless there is a clear reason they cannot be covered meaningfully
+- Treat new workflow-heavy UI changes as presumed Playwright candidates when the risk is in browser behavior, save/discard flows, dialogs, filtering, selection, or bulk actions
 
 ---
 
@@ -195,6 +196,7 @@ For code changes, this review should explicitly consider:
 - regression tests for bug fixes
 - unit tests for financial or normalization logic
 - service or integration tests for assignment, reset, merge, and persistence workflows
+- Playwright coverage for UI-visible workflow changes and browser-only behavior
 - validation tests when input rules change
 
 If the conclusion is that no new test is needed, that decision should be stated explicitly in the commit or PR context.
