@@ -34,6 +34,9 @@ function toVariantGid(lineItem: SnapshotLineItemPayload) {
   if (lineItem.admin_graphql_api_id?.includes("ProductVariant")) {
     return lineItem.admin_graphql_api_id;
   }
+  if (typeof lineItem.variant_id === "string" && lineItem.variant_id.startsWith("gid://")) {
+    return lineItem.variant_id;
+  }
   if (lineItem.variant_id !== null && lineItem.variant_id !== undefined && lineItem.variant_id !== "") {
     return `gid://shopify/ProductVariant/${lineItem.variant_id}`;
   }
@@ -41,6 +44,9 @@ function toVariantGid(lineItem: SnapshotLineItemPayload) {
 }
 
 function toProductGid(lineItem: SnapshotLineItemPayload) {
+  if (typeof lineItem.product_id === "string" && lineItem.product_id.startsWith("gid://")) {
+    return lineItem.product_id;
+  }
   if (lineItem.product_id !== null && lineItem.product_id !== undefined && lineItem.product_id !== "") {
     return `gid://shopify/Product/${lineItem.product_id}`;
   }
@@ -78,6 +84,7 @@ export async function createSnapshot(
   shopId: string,
   order: ShopifyOrderPayload,
   db: any = prisma,
+  origin: "webhook" | "reconciliation" = "webhook",
 ): Promise<{ created: boolean; snapshotId?: string }> {
   const shopifyOrderId = order.admin_graphql_api_id ?? null;
   if (!shopifyOrderId) {
@@ -206,7 +213,7 @@ export async function createSnapshot(
         shopId,
         shopifyOrderId,
         orderNumber: order.name ?? order.order_number?.toString() ?? null,
-        origin: "webhook",
+        origin,
       },
     });
 
@@ -310,6 +317,7 @@ export async function createSnapshot(
         payload: {
           shopifyOrderId,
           lineCount: withFinalCosts.length,
+          origin,
         },
       },
     });

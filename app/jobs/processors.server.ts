@@ -2,6 +2,7 @@ import type { PgBoss } from "pg-boss";
 import { prisma } from "../db.server";
 import { fullSync, incrementalSync } from "../services/catalogSync.server";
 import { processOrderUpdate, processRefund } from "../services/adjustmentService.server";
+import { runReconciliation } from "../services/reconciliationService.server";
 import { createSnapshot } from "../services/snapshotService.server";
 import shopify from "../shopify.server";
 
@@ -11,6 +12,7 @@ const QUEUES = [
   "orders.snapshot",
   "orders.updated",
   "orders.refund",
+  "reconciliation.daily",
   "shop.delete",
   "webhook.compliance",
   "catalog.sync",
@@ -68,6 +70,17 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       await processRefund(shopId, payload as any, prisma);
     },
   );
+
+  await boss.work("reconciliation.daily", async (_jobs) => {
+    const shops = await prisma.shop.findMany({
+      select: { shopId: true },
+    });
+
+    for (const shop of shops) {
+      const { admin } = await shopify.unauthenticated.admin(shop.shopId);
+      await runReconciliation(shop.shopId, admin, prisma);
+    }
+  });
 
   await boss.work<{ shopId: string; deletionJobId: string }>(
     "shop.delete",
