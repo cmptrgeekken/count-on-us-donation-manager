@@ -9,6 +9,10 @@ const TENANT_SCOPED_MODELS = [
   // they are protected through their parent CostTemplate (cascade delete).
   "Product", "Variant", "VariantCostConfig",
   "VariantMaterialLine", "VariantEquipmentLine",
+  "Cause", "ProductCauseAssignment",
+  "OrderSnapshot", "OrderSnapshotLine",
+  "LineCauseAllocation", "Adjustment",
+  "BusinessExpense", "TaxOffsetCache",
 ];
 
 // Operations that query via a `where` clause (excludes creates which use `data`)
