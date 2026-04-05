@@ -26,6 +26,20 @@ PU-3 in particular affects what `CostEngine` and `SnapshotService` read from the
 
 ---
 
+## Readiness update
+
+Phase 2 exit work is complete. Phase 3 should assume the following baseline is already in place:
+
+- staged save/discard UX on template and variant detail routes
+- searchable picker flows on template and variant editors
+- default labor rate and shared currency/locale formatting
+- Polaris Web Components migration off Shopify React dependencies
+- Playwright coverage for template details, variant details, and variants bulk assignment workflows
+
+The pre-Phase-3 amendment list below should be treated as historical context, not remaining blocker work.
+
+---
+
 ## Scoping decisions
 
 - **POD deferred:** CostEngine POD step remains stubbed at `Decimal(0)`. `OrderSnapshotPODLine` schema is added in this phase but no rows will be written. `pod_cost_estimated` and `pod_cost_missing` flags are for when POD is configured but unavailable — they are not set when POD is simply not configured.
