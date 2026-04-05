@@ -5,6 +5,10 @@
     "build": "remix vite:build",
     "dev": "shopify app dev --tunnel-url https://shopify.mnbecks.com:443",
     "config:link": "shopify app config link",
+    "config:use:local": "shopify app config use shopify.app.toml",
+    "config:use:phase3": "shopify app config use shopify.app.phase3.toml",
+    "env:use:main-app": "shx cp .env.main-app .env",
+    "env:use:dev-store": "shx cp .env.dev-store .env",
     "generate": "shopify app generate",
     "deploy": "shopify app deploy",
     "config:use": "shopify app config use",
@@ -60,6 +64,7 @@
     "eslint": "^8.42.0",
     "eslint-config-prettier": "^10.0.1",
     "prettier": "^3.2.4",
+    "shx": "^0.4.0",
     "typescript": "^5.2.2",
     "vite": "^6.2.2",
     "vitest": "^4.1.2"

@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "d78318ac7489d7831da340569c4b9aca"
+client_id = "60ad3956ca36744f7db0a22fc338b3b1"
 name = "Count On Us"
 application_url = "https://shopify.mnbecks.com/app"
 embedded = true
@@ -13,6 +13,10 @@ api_version = "2026-04"
 
 [[webhooks.subscriptions]]
 topics = ["app/uninstalled", "products/update"]
+uri = "https://shopify.mnbecks.com/webhooks"
+
+[[webhooks.subscriptions]]
+topics = ["orders/create", "orders/updated", "refunds/create"]
 uri = "https://shopify.mnbecks.com/webhooks"
 
 [access_scopes]

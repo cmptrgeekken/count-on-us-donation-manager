@@ -17,10 +17,18 @@ A Shopify embedded app for cause-driven merchants. Tracks per-variant production
 
 ```sh
 npm run dev          # shopify app dev (tunneled)
+npm run config:use:local   # activate the local-safe Shopify app config
+npm run config:use:phase3  # activate the Phase 3 config with order/refund webhooks
+npm run env:use:main-app   # copy .env.main-app to .env
+npm run env:use:dev-store  # copy .env.dev-store to .env
 npm run lint         # eslint
 npm run setup        # prisma generate + migrate deploy
 npx tsc --noEmit     # type-check without building
 ```
+
+`shopify.app.toml` stays as the local-safe default for `shopify app dev`. The full Phase 3 webhook subscriptions currently live in [shopify.app.phase3.toml](shopify.app.phase3.toml) because those order/refund topics trigger a Shopify CLI local-storage failure on this machine during dev startup.
+
+Keep one untracked env file per Shopify app context, such as `.env.main-app` and `.env.dev-store`, and switch between them with the scripts above instead of commenting credentials in and out of `.env`.
 
 ## Architecture Decisions
 

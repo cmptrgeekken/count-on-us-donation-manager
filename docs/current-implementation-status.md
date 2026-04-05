@@ -140,3 +140,4 @@ This file is intentionally lightweight and operational. It should summarize real
 - The PRD, build plan, ADRs, and implementation plans remain authoritative for scope and architecture.
 - For immediate next work, use `docs/plans/phase-3-kickoff-checklist.md` alongside the Phase 3 implementation plan.
 - Update this file when a phase meaningfully changes state, not for every small commit.
+- Local Shopify CLI development currently uses [shopify.app.toml](../shopify.app.toml) as a safe default. The full Phase 3 webhook subscription set is tracked in [shopify.app.phase3.toml](../shopify.app.phase3.toml) until the local CLI issue around order/refund topics is resolved.
