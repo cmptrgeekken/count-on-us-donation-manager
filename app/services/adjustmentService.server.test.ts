@@ -29,19 +29,26 @@ function createDb({
 }) {
   const adjustmentCreate = vi.fn().mockResolvedValue(undefined);
   const auditLogCreate = vi.fn().mockResolvedValue(undefined);
+  const auditLogFindFirst = vi.fn().mockResolvedValue(existingAuditLog);
+  const executeRaw = vi.fn().mockResolvedValue(undefined);
 
   const tx = {
+    $executeRaw: executeRaw,
     adjustment: {
       create: adjustmentCreate,
     },
     auditLog: {
+      findFirst: auditLogFindFirst,
       create: auditLogCreate,
+    },
+    orderSnapshot: {
+      findFirst: vi.fn().mockResolvedValue(snapshot ?? null),
     },
   };
 
   return {
     auditLog: {
-      findFirst: vi.fn().mockResolvedValue(existingAuditLog),
+      findFirst: auditLogFindFirst,
       create: auditLogCreate,
     },
     orderSnapshot: {
@@ -51,6 +58,8 @@ function createDb({
     __spies: {
       adjustmentCreate,
       auditLogCreate,
+      auditLogFindFirst,
+      executeRaw,
     },
   };
 }
@@ -151,7 +160,28 @@ describe("processRefund", () => {
     );
     const refundAdjustmentData = db.__spies.adjustmentCreate.mock.calls[0]?.[0]?.data;
     expect(refundAdjustmentData.equipmentAdj.toString()).toBe("0");
+    expect(db.__spies.executeRaw).toHaveBeenCalled();
     expect(recomputeTaxOffsetCache).toHaveBeenCalled();
+  });
+
+  it("treats a previously processed refund as idempotent inside the transaction", async () => {
+    const db = createDb({
+      snapshot: { id: "snapshot-1", lines: [] },
+      existingAuditLog: { id: "audit-1" },
+    });
+
+    const result = await processRefund(
+      "shop-1",
+      {
+        id: 79,
+        order_id: 99,
+        refund_line_items: [],
+      },
+      db,
+    );
+
+    expect(result).toEqual({ created: 0, skipped: 0 });
+    expect(db.__spies.adjustmentCreate).not.toHaveBeenCalled();
   });
 });
 
@@ -204,6 +234,7 @@ describe("processOrderUpdate", () => {
         }),
       }),
     );
+    expect(db.__spies.executeRaw).toHaveBeenCalled();
     expect(recomputeTaxOffsetCache).toHaveBeenCalled();
   });
 
@@ -340,6 +371,26 @@ describe("processOrderUpdate", () => {
         }),
       }),
     );
+  });
+
+  it("treats a previously processed order update as idempotent inside the transaction", async () => {
+    const db = createDb({
+      snapshot: { id: "snapshot-1", lines: [] },
+      existingAuditLog: { id: "audit-1" },
+    });
+
+    const result = await processOrderUpdate(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/123",
+        subtotal_price: "0.00",
+        line_items: [],
+      },
+      db,
+    );
+
+    expect(result).toEqual({ created: 0, skipped: 0 });
+    expect(db.__spies.adjustmentCreate).not.toHaveBeenCalled();
   });
 });
 

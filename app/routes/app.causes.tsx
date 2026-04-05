@@ -144,11 +144,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
 
     try {
-      await ensureCauseMetaobjectDefinition(admin);
-
       if (intent === "create") {
-        const metaobject = await createCauseMetaobject(admin, causeInput);
-
         const cause = await prisma.cause.create({
           data: {
             shopId,
@@ -161,7 +157,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             websiteUrl: causeInput.websiteUrl,
             instagramUrl: causeInput.instagramUrl,
             status: "active",
-            shopifyMetaobjectId: metaobject.id,
+            shopifyMetaobjectId: null,
           },
         });
 
@@ -172,11 +168,45 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             entityId: cause.id,
             action: "CAUSE_CREATED",
             actor: "merchant",
-            payload: { shopifyMetaobjectId: metaobject.id },
           },
         });
 
-        return Response.json({ ok: true, message: "Cause created." });
+        try {
+          await ensureCauseMetaobjectDefinition(admin);
+          const metaobject = await createCauseMetaobject(admin, causeInput);
+          await prisma.cause.update({
+            where: { id: cause.id, shopId },
+            data: { shopifyMetaobjectId: metaobject.id },
+          });
+          await prisma.auditLog.create({
+            data: {
+              shopId,
+              entity: "Cause",
+              entityId: cause.id,
+              action: "CAUSE_SHOPIFY_SYNCED",
+              actor: "merchant",
+              payload: { shopifyMetaobjectId: metaobject.id },
+            },
+          });
+          return Response.json({ ok: true, message: "Cause created." });
+        } catch (error) {
+          await prisma.auditLog.create({
+            data: {
+              shopId,
+              entity: "Cause",
+              entityId: cause.id,
+              action: "CAUSE_SHOPIFY_SYNC_FAILED",
+              actor: "merchant",
+              payload: {
+                message: error instanceof Error ? error.message : "Unknown Shopify sync failure",
+              },
+            },
+          });
+          return Response.json(
+            { ok: false, message: "Cause saved locally, but Shopify sync failed. Retry by editing the Cause again." },
+            { status: 502 },
+          );
+        }
       }
 
       const idParsed = causeIdSchema.safeParse({
@@ -200,14 +230,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         return Response.json({ ok: false, message: "Cause not found." }, { status: 404 });
       }
 
-      let metaobjectId = existing.shopifyMetaobjectId;
-      if (metaobjectId) {
-        await updateCauseMetaobject(admin, metaobjectId, causeInput);
-      } else {
-        const metaobject = await createCauseMetaobject(admin, causeInput);
-        metaobjectId = metaobject.id;
-      }
-
       await prisma.cause.update({
         where: { id, shopId },
         data: {
@@ -219,22 +241,64 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           donationLink: causeInput.donationLink,
           websiteUrl: causeInput.websiteUrl,
           instagramUrl: causeInput.instagramUrl,
-          shopifyMetaobjectId: metaobjectId,
         },
       });
 
       await prisma.auditLog.create({
         data: {
-          shopId,
-          entity: "Cause",
-          entityId: id,
-          action: "CAUSE_UPDATED",
-          actor: "merchant",
-          payload: { shopifyMetaobjectId: metaobjectId },
-        },
-      });
+            shopId,
+            entity: "Cause",
+            entityId: id,
+            action: "CAUSE_UPDATED",
+            actor: "merchant",
+          },
+        });
 
-      return Response.json({ ok: true, message: "Cause updated." });
+      try {
+        await ensureCauseMetaobjectDefinition(admin);
+        let metaobjectId = existing.shopifyMetaobjectId;
+        if (metaobjectId) {
+          await updateCauseMetaobject(admin, metaobjectId, causeInput);
+        } else {
+          const metaobject = await createCauseMetaobject(admin, causeInput);
+          metaobjectId = metaobject.id;
+        }
+
+        await prisma.cause.update({
+          where: { id, shopId },
+          data: { shopifyMetaobjectId: metaobjectId },
+        });
+
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "Cause",
+            entityId: id,
+            action: "CAUSE_SHOPIFY_SYNCED",
+            actor: "merchant",
+            payload: { shopifyMetaobjectId: metaobjectId },
+          },
+        });
+
+        return Response.json({ ok: true, message: "Cause updated." });
+      } catch (error) {
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "Cause",
+            entityId: id,
+            action: "CAUSE_SHOPIFY_SYNC_FAILED",
+            actor: "merchant",
+            payload: {
+              message: error instanceof Error ? error.message : "Unknown Shopify sync failure",
+            },
+          },
+        });
+        return Response.json(
+          { ok: false, message: "Cause saved locally, but Shopify sync failed. Retry by editing the Cause again." },
+          { status: 502 },
+        );
+      }
     } catch (error) {
       console.error("[Causes] Failed to sync cause metaobject:", error);
       return Response.json(
@@ -283,8 +347,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
-      await ensureCauseMetaobjectDefinition(admin);
-
       const metaobjectInput = {
         name: cause.name,
         legalName: cause.legalName,
@@ -297,37 +359,78 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         status: nextStatus,
       };
 
-      let metaobjectId = cause.shopifyMetaobjectId;
-      if (metaobjectId) {
-        await updateCauseMetaobject(admin, metaobjectId, metaobjectInput);
-      } else {
-        const metaobject = await createCauseMetaobject(admin, metaobjectInput);
-        metaobjectId = metaobject.id;
-      }
-
       await prisma.cause.update({
         where: { id, shopId },
         data: {
           status: nextStatus,
-          shopifyMetaobjectId: metaobjectId,
         },
       });
 
       await prisma.auditLog.create({
         data: {
-          shopId,
-          entity: "Cause",
-          entityId: id,
-          action: intent === "deactivate" ? "CAUSE_DEACTIVATED" : "CAUSE_REACTIVATED",
-          actor: "merchant",
-          payload: { shopifyMetaobjectId: metaobjectId },
-        },
-      });
+            shopId,
+            entity: "Cause",
+            entityId: id,
+            action: intent === "deactivate" ? "CAUSE_DEACTIVATED" : "CAUSE_REACTIVATED",
+            actor: "merchant",
+          },
+        });
 
-      return Response.json({
-        ok: true,
-        message: intent === "deactivate" ? "Cause deactivated." : "Cause reactivated.",
-      });
+      try {
+        await ensureCauseMetaobjectDefinition(admin);
+        let metaobjectId = cause.shopifyMetaobjectId;
+        if (metaobjectId) {
+          await updateCauseMetaobject(admin, metaobjectId, metaobjectInput);
+        } else {
+          const metaobject = await createCauseMetaobject(admin, metaobjectInput);
+          metaobjectId = metaobject.id;
+        }
+
+        await prisma.cause.update({
+          where: { id, shopId },
+          data: { shopifyMetaobjectId: metaobjectId },
+        });
+
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "Cause",
+            entityId: id,
+            action: "CAUSE_SHOPIFY_SYNCED",
+            actor: "merchant",
+            payload: { shopifyMetaobjectId: metaobjectId },
+          },
+        });
+
+        return Response.json({
+          ok: true,
+          message: intent === "deactivate" ? "Cause deactivated." : "Cause reactivated.",
+        });
+      } catch (error) {
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "Cause",
+            entityId: id,
+            action: "CAUSE_SHOPIFY_SYNC_FAILED",
+            actor: "merchant",
+            payload: {
+              message: error instanceof Error ? error.message : "Unknown Shopify sync failure",
+            },
+          },
+        });
+
+        return Response.json(
+          {
+            ok: false,
+            message:
+              intent === "deactivate"
+                ? "Cause deactivated locally, but Shopify sync failed."
+                : "Cause reactivated locally, but Shopify sync failed.",
+          },
+          { status: 502 },
+        );
+      }
     } catch (error) {
       console.error("[Causes] Failed to sync Cause status to Shopify:", error);
       return Response.json(

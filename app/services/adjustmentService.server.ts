@@ -244,6 +244,10 @@ async function findSnapshotWithLines(db: any, shopId: string, shopifyOrderId: st
   });
 }
 
+async function acquireIdempotencyLock(tx: any, scope: string, key: string) {
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${scope}), hashtext(${key}))`;
+}
+
 function findIncomingSubtotalForSnapshotLine(
   snapshotLine: Pick<SnapshotLineWithAdjustments, "shopifyLineItemId">,
   currentLines: Map<string, { subtotal: Prisma.Decimal }>,
@@ -271,108 +275,111 @@ export async function processRefund(
     throw new Error("Refund payload is missing an id.");
   }
 
-  const alreadyProcessed = await db.auditLog.findFirst({
-    where: {
-      shopId,
-      entity: "Adjustment",
-      entityId: refundId,
-      action: "REFUND_PROCESSED",
-    },
-    select: { id: true },
-  });
-
-  if (alreadyProcessed) {
-    return { created: 0, skipped: 0 };
-  }
-
   const orderId = normaliseStringId(refundPayload.order_id);
   if (!orderId) {
     throw new Error("Refund payload is missing order_id.");
   }
 
   const shopifyOrderId = /^gid:\/\//.test(orderId) ? orderId : `gid://shopify/Order/${orderId}`;
-  const snapshot = await findSnapshotWithLines(db, shopId, shopifyOrderId);
-  if (!snapshot) {
-    await db.auditLog.create({
-      data: {
-        shopId,
-        entity: "Adjustment",
-        entityId: refundId,
-        action: "REFUND_SKIPPED_NO_SNAPSHOT",
-        actor: "webhook",
-        payload: { shopifyOrderId },
-      },
-    });
-    return { created: 0, skipped: 1 };
-  }
+  return db.$transaction(async (tx: any) => {
+    await acquireIdempotencyLock(tx, "refund", `${shopId}:${refundId}`);
 
-  const lineMap = new Map<string, SnapshotLineWithAdjustments>();
-  for (const line of snapshot.lines as SnapshotLineWithAdjustments[]) {
-    for (const identifier of buildLineItemIdentifiers({ id: line.shopifyLineItemId, admin_graphql_api_id: line.shopifyLineItemId })) {
-      lineMap.set(identifier, line);
-    }
-  }
-
-  const refundLines = refundPayload.refund_line_items ?? [];
-  const adjustmentsToCreate: Array<{ snapshotLineId: string } & AdjustmentBreakdown> = [];
-  let skipped = 0;
-
-  for (const refundLine of refundLines) {
-    const identifiers = buildLineItemIdentifiers({
-      line_item_id: refundLine.line_item_id,
-      id: refundLine.line_item?.id,
-      admin_graphql_api_id: refundLine.line_item?.admin_graphql_api_id,
-    });
-    const snapshotLine = [...identifiers].map((identifier) => lineMap.get(identifier)).find(Boolean) ?? null;
-
-    if (!snapshotLine) {
-      skipped += 1;
-      continue;
-    }
-
-    const refundedQuantity = Math.min(snapshotLine.quantity, Math.max(0, Number(refundLine.quantity ?? 0)));
-    if (refundedQuantity <= 0 || snapshotLine.quantity <= 0) {
-      skipped += 1;
-      continue;
-    }
-
-    const refundRatio = new Prisma.Decimal(refundedQuantity).div(snapshotLine.quantity).neg();
-    const adjustment = buildProportionalAdjustment(
-      {
-        laborCost: snapshotLine.laborCost,
-        materialCost: snapshotLine.materialCost,
-        packagingCost: snapshotLine.packagingCost,
-        equipmentCost: snapshotLine.equipmentCost,
-        netContribution: snapshotLine.netContribution,
-      },
-      refundRatio,
-    );
-
-    adjustmentsToCreate.push({
-      snapshotLineId: snapshotLine.id,
-      ...adjustment,
-    });
-  }
-
-  if (adjustmentsToCreate.length === 0) {
-    await db.auditLog.create({
-      data: {
+    const alreadyProcessed = await tx.auditLog.findFirst({
+      where: {
         shopId,
         entity: "Adjustment",
         entityId: refundId,
         action: "REFUND_PROCESSED",
-        actor: "webhook",
-        payload: {
-          shopifyOrderId,
-          created: 0,
-          skipped,
-        },
       },
+      select: { id: true },
     });
-    return { created: 0, skipped };
-  }
 
-  await db.$transaction(async (tx: any) => {
+    if (alreadyProcessed) {
+      return { created: 0, skipped: 0 };
+    }
+
+    const snapshot = await findSnapshotWithLines(tx, shopId, shopifyOrderId);
+    if (!snapshot) {
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "Adjustment",
+          entityId: refundId,
+          action: "REFUND_SKIPPED_NO_SNAPSHOT",
+          actor: "webhook",
+          payload: { shopifyOrderId },
+        },
+      });
+      return { created: 0, skipped: 1 };
+    }
+
+    const lineMap = new Map<string, SnapshotLineWithAdjustments>();
+    for (const line of snapshot.lines as SnapshotLineWithAdjustments[]) {
+      for (const identifier of buildLineItemIdentifiers({ id: line.shopifyLineItemId, admin_graphql_api_id: line.shopifyLineItemId })) {
+        lineMap.set(identifier, line);
+      }
+    }
+
+    const refundLines = refundPayload.refund_line_items ?? [];
+    const adjustmentsToCreate: Array<{ snapshotLineId: string } & AdjustmentBreakdown> = [];
+    let skipped = 0;
+
+    for (const refundLine of refundLines) {
+      const identifiers = buildLineItemIdentifiers({
+        line_item_id: refundLine.line_item_id,
+        id: refundLine.line_item?.id,
+        admin_graphql_api_id: refundLine.line_item?.admin_graphql_api_id,
+      });
+      const snapshotLine = [...identifiers].map((identifier) => lineMap.get(identifier)).find(Boolean) ?? null;
+
+      if (!snapshotLine) {
+        skipped += 1;
+        continue;
+      }
+
+      const refundedQuantity = Math.min(snapshotLine.quantity, Math.max(0, Number(refundLine.quantity ?? 0)));
+      if (refundedQuantity <= 0 || snapshotLine.quantity <= 0) {
+        skipped += 1;
+        continue;
+      }
+
+      const adjustmentBase = getEffectiveSnapshotLineState(snapshotLine);
+      const refundRatio = new Prisma.Decimal(refundedQuantity).div(snapshotLine.quantity).neg();
+      const adjustment = buildProportionalAdjustment(
+        {
+          laborCost: adjustmentBase.labor,
+          materialCost: adjustmentBase.material,
+          packagingCost: adjustmentBase.packaging,
+          equipmentCost: adjustmentBase.equipment,
+          netContribution: adjustmentBase.netContribution,
+        },
+        refundRatio,
+      );
+
+      adjustmentsToCreate.push({
+        snapshotLineId: snapshotLine.id,
+        ...adjustment,
+      });
+    }
+
+    if (adjustmentsToCreate.length === 0) {
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "Adjustment",
+          entityId: refundId,
+          action: "REFUND_PROCESSED",
+          actor: "webhook",
+          payload: {
+            shopifyOrderId,
+            created: 0,
+            skipped,
+          },
+        },
+      });
+      return { created: 0, skipped };
+    }
+
     for (const adjustment of adjustmentsToCreate) {
       await tx.adjustment.create({
         data: {
@@ -406,9 +413,8 @@ export async function processRefund(
         },
       },
     });
+    return { created: adjustmentsToCreate.length, skipped };
   });
-
-  return { created: adjustmentsToCreate.length, skipped };
 }
 
 export async function processOrderUpdate(
@@ -422,129 +428,147 @@ export async function processOrderUpdate(
   }
 
   const signature = buildOrderUpdateSignature(orderPayload);
-  const alreadyProcessed = await db.auditLog.findFirst({
-    where: {
-      shopId,
-      entity: "OrderSnapshot",
-      entityId: signature,
-      action: "ORDER_UPDATE_PROCESSED",
-    },
-    select: { id: true },
-  });
+  return db.$transaction(async (tx: any) => {
+    await acquireIdempotencyLock(tx, "order-update", `${shopId}:${signature}`);
 
-  if (alreadyProcessed) {
-    return { created: 0, skipped: 0 };
-  }
-
-  const snapshot = await findSnapshotWithLines(db, shopId, shopifyOrderId);
-  if (!snapshot) {
-    await db.auditLog.create({
-      data: {
-        shopId,
-        entity: "OrderSnapshot",
-        entityId: signature,
-        action: "ORDER_UPDATE_SKIPPED_NO_SNAPSHOT",
-        actor: "webhook",
-        payload: { shopifyOrderId },
-      },
-    });
-    return { created: 0, skipped: 1 };
-  }
-
-  const currentLines = new Map<string, { subtotal: Prisma.Decimal }>();
-  for (const lineItem of orderPayload.line_items ?? []) {
-    const quantity = Math.max(0, Number(lineItem.quantity ?? 0));
-    const subtotal = toDecimal(lineItem.price).mul(quantity);
-    for (const identifier of buildLineItemIdentifiers(lineItem)) {
-      currentLines.set(identifier, { subtotal });
-    }
-  }
-
-  const adjustmentsToCreate: Array<{ snapshotLineId: string } & AdjustmentBreakdown> = [];
-  let unmatchedSnapshotLineCount = 0;
-
-  for (const snapshotLine of snapshot.lines as SnapshotLineWithAdjustments[]) {
-    const effective = getEffectiveSnapshotLineState(snapshotLine);
-    if (effective.subtotal.eq(ZERO)) {
-      continue;
-    }
-
-    const incomingSubtotal = findIncomingSubtotalForSnapshotLine(snapshotLine, currentLines);
-    if (incomingSubtotal === null) {
-      unmatchedSnapshotLineCount += 1;
-      continue;
-    }
-    if (incomingSubtotal.eq(effective.subtotal)) {
-      continue;
-    }
-
-    const ratio = incomingSubtotal.sub(effective.subtotal).div(effective.subtotal);
-    const adjustment = buildProportionalAdjustment(
-      {
-        laborCost: effective.labor,
-        materialCost: effective.material,
-        packagingCost: effective.packaging,
-        equipmentCost: effective.equipment,
-        netContribution: effective.netContribution,
-      },
-      ratio,
-    );
-
-    adjustmentsToCreate.push({
-      snapshotLineId: snapshotLine.id,
-      ...adjustment,
-    });
-  }
-
-  if (adjustmentsToCreate.length === 0) {
-    await db.auditLog.create({
-      data: {
+    const alreadyProcessed = await tx.auditLog.findFirst({
+      where: {
         shopId,
         entity: "OrderSnapshot",
         entityId: signature,
         action: "ORDER_UPDATE_PROCESSED",
-        actor: "webhook",
-        payload: {
-          shopifyOrderId,
-          created: 0,
-        },
       },
+      select: { id: true },
     });
 
-    if (unmatchedSnapshotLineCount > 0) {
-      await db.auditLog.create({
+    if (alreadyProcessed) {
+      return { created: 0, skipped: 0 };
+    }
+
+    const snapshot = await findSnapshotWithLines(tx, shopId, shopifyOrderId);
+    if (!snapshot) {
+      await tx.auditLog.create({
         data: {
           shopId,
           entity: "OrderSnapshot",
-          entityId: shopifyOrderId,
-          action: "ORDER_UPDATE_CONTAINS_UNMATCHED_SNAPSHOT_LINES",
+          entityId: signature,
+          action: "ORDER_UPDATE_SKIPPED_NO_SNAPSHOT",
           actor: "webhook",
-          payload: {
-            unmatchedSnapshotLineCount,
-            note: "Snapshotted lines without payload matches were not auto-reversed.",
-          },
+          payload: { shopifyOrderId },
         },
+      });
+      return { created: 0, skipped: 1 };
+    }
+
+    const currentLines = new Map<string, { subtotal: Prisma.Decimal }>();
+    for (const lineItem of orderPayload.line_items ?? []) {
+      const quantity = Math.max(0, Number(lineItem.quantity ?? 0));
+      const subtotal = toDecimal(lineItem.price).mul(quantity);
+      for (const identifier of buildLineItemIdentifiers(lineItem)) {
+        currentLines.set(identifier, { subtotal });
+      }
+    }
+
+    const adjustmentsToCreate: Array<{ snapshotLineId: string } & AdjustmentBreakdown> = [];
+    let unmatchedSnapshotLineCount = 0;
+
+    for (const snapshotLine of snapshot.lines as SnapshotLineWithAdjustments[]) {
+      const effective = getEffectiveSnapshotLineState(snapshotLine);
+      if (effective.subtotal.eq(ZERO)) {
+        continue;
+      }
+
+      const incomingSubtotal = findIncomingSubtotalForSnapshotLine(snapshotLine, currentLines);
+      if (incomingSubtotal === null) {
+        unmatchedSnapshotLineCount += 1;
+        continue;
+      }
+      if (incomingSubtotal.eq(effective.subtotal)) {
+        continue;
+      }
+
+      const ratio = incomingSubtotal.sub(effective.subtotal).div(effective.subtotal);
+      const adjustment = buildProportionalAdjustment(
+        {
+          laborCost: effective.labor,
+          materialCost: effective.material,
+          packagingCost: effective.packaging,
+          equipmentCost: effective.equipment,
+          netContribution: effective.netContribution,
+        },
+        ratio,
+      );
+
+      adjustmentsToCreate.push({
+        snapshotLineId: snapshotLine.id,
+        ...adjustment,
       });
     }
 
-    return { created: 0, skipped: 0 };
-  }
-
-  const unmatchedPayloadLineCount = (orderPayload.line_items ?? []).filter((lineItem) => {
-    const identifiers = buildLineItemIdentifiers(lineItem);
-    return [...identifiers].every((identifier) => {
-      const matchingSnapshotLine = (snapshot.lines as SnapshotLineWithAdjustments[]).find((line) => {
-        const lineIdentifiers = buildLineItemIdentifiers({
-          id: line.shopifyLineItemId,
-          admin_graphql_api_id: line.shopifyLineItemId,
+    const unmatchedPayloadLineCount = (orderPayload.line_items ?? []).filter((lineItem) => {
+      const identifiers = buildLineItemIdentifiers(lineItem);
+      return [...identifiers].every((identifier) => {
+        const matchingSnapshotLine = (snapshot.lines as SnapshotLineWithAdjustments[]).find((line) => {
+          const lineIdentifiers = buildLineItemIdentifiers({
+            id: line.shopifyLineItemId,
+            admin_graphql_api_id: line.shopifyLineItemId,
+          });
+          return lineIdentifiers.has(identifier);
         });
-        return lineIdentifiers.has(identifier);
+        return !matchingSnapshotLine;
       });
-      return !matchingSnapshotLine;
-    });
-  }).length;
+    }).length;
 
-  await db.$transaction(async (tx: any) => {
+    if (adjustmentsToCreate.length === 0) {
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "OrderSnapshot",
+          entityId: signature,
+          action: "ORDER_UPDATE_PROCESSED",
+          actor: "webhook",
+          payload: {
+            shopifyOrderId,
+            created: 0,
+          },
+        },
+      });
+
+      if (unmatchedSnapshotLineCount > 0) {
+        await tx.auditLog.create({
+          data: {
+            shopId,
+            entity: "OrderSnapshot",
+            entityId: shopifyOrderId,
+            action: "ORDER_UPDATE_CONTAINS_UNMATCHED_SNAPSHOT_LINES",
+            actor: "webhook",
+            payload: {
+              unmatchedSnapshotLineCount,
+              note: "Snapshotted lines without payload matches were not auto-reversed.",
+            },
+          },
+        });
+      }
+
+      if (unmatchedPayloadLineCount > 0) {
+        await tx.auditLog.create({
+          data: {
+            shopId,
+            entity: "OrderSnapshot",
+            entityId: shopifyOrderId,
+            action: "ORDER_UPDATE_CONTAINS_UNSNAPSHOTTED_LINES",
+            actor: "webhook",
+            payload: {
+              unmatchedPayloadLineCount,
+              note: "New order line items cannot yet be represented as adjustments.",
+            },
+          },
+        });
+      }
+
+      return { created: 0, skipped: 0 };
+    }
+
     for (const adjustment of adjustmentsToCreate) {
       await tx.adjustment.create({
         data: {
@@ -609,7 +633,6 @@ export async function processOrderUpdate(
         },
       });
     }
+    return { created: adjustmentsToCreate.length, skipped: 0 };
   });
-
-  return { created: adjustmentsToCreate.length, skipped: 0 };
 }

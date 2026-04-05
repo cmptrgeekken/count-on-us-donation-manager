@@ -149,16 +149,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const causeMap = new Map(causes.map((cause) => [cause.id, cause]));
 
   try {
-    await syncProductCauseAssignmentsMetafield(
-      admin,
-      product.shopifyId,
-      assignments.map((assignment) => ({
-        causeId: assignment.causeId,
-        metaobjectId: causeMap.get(assignment.causeId)?.shopifyMetaobjectId ?? null,
-        percentage: Number(assignment.percentage).toFixed(2),
-      })),
-    );
-
     await prisma.$transaction(async (tx) => {
       await tx.productCauseAssignment.deleteMany({
         where: {
@@ -197,7 +187,50 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       });
     });
 
-    return Response.json({ ok: true, message: "Product Cause assignments saved." });
+    try {
+      await syncProductCauseAssignmentsMetafield(
+        admin,
+        product.shopifyId,
+        assignments.map((assignment) => ({
+          causeId: assignment.causeId,
+          metaobjectId: causeMap.get(assignment.causeId)?.shopifyMetaobjectId ?? null,
+          percentage: Number(assignment.percentage).toFixed(2),
+        })),
+      );
+
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "Product",
+          entityId: product.id,
+          action: "PRODUCT_CAUSE_ASSIGNMENTS_SHOPIFY_SYNCED",
+          actor: "merchant",
+          payload: {
+            shopifyProductId: product.shopifyId,
+          },
+        },
+      });
+
+      return Response.json({ ok: true, message: "Product Cause assignments saved." });
+    } catch (error) {
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "Product",
+          entityId: product.id,
+          action: "PRODUCT_CAUSE_ASSIGNMENTS_SHOPIFY_SYNC_FAILED",
+          actor: "merchant",
+          payload: {
+            message: error instanceof Error ? error.message : "Unknown Shopify sync failure",
+          },
+        },
+      });
+
+      return Response.json(
+        { ok: false, message: "Assignments saved locally, but Shopify sync failed. Save again to retry." },
+        { status: 502 },
+      );
+    }
   } catch (error) {
     console.error("[ProductDonations] Failed to save assignments:", error);
     return Response.json(
