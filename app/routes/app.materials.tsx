@@ -257,7 +257,7 @@ export default function MaterialsPage() {
   return (
     <>
       <ui-title-bar title="Material Library">
-        <button variant="primary" onClick={openCreate}>New material</button>
+        <button type="button" onClick={openCreate}>New material</button>
       </ui-title-bar>
 
       <div

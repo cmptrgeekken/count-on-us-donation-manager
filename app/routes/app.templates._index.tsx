@@ -159,7 +159,7 @@ export default function TemplatesPage() {
   return (
     <>
       <ui-title-bar title="Cost Templates">
-        <button variant="primary" onClick={openCreateDialog}>New template</button>
+        <button type="button" onClick={openCreateDialog}>New template</button>
       </ui-title-bar>
 
       <div
