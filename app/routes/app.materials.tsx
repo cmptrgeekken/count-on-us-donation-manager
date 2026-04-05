@@ -506,14 +506,18 @@ export default function MaterialsPage() {
               rows={4}
               value={form.notes}
               onChange={(event) => updateForm("notes", event.currentTarget.value)}
-              style={{
-                width: "100%",
-                padding: "0.75rem",
-                borderRadius: "0.75rem",
-                border: "1px solid var(--p-color-border)",
-                font: "inherit",
-              }}
-            />
+                style={{
+                  width: "100%",
+                  boxSizing: "border-box",
+                  padding: "0.75rem",
+                  borderRadius: "0.75rem",
+                  border: "1px solid var(--p-color-border)",
+                  background: "var(--p-color-bg-surface, #fff)",
+                  color: "var(--p-color-text, #303030)",
+                  font: "inherit",
+                  resize: "vertical",
+                }}
+              />
           </div>
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>

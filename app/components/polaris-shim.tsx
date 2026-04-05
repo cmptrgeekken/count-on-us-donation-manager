@@ -31,6 +31,17 @@ function toneColor(tone?: Tone) {
   }
 }
 
+const fieldStyle: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "0.75rem",
+  borderRadius: "0.75rem",
+  border: "1px solid var(--p-color-border, #d2d5d8)",
+  background: "var(--p-color-bg-surface, #fff)",
+  color: "var(--p-color-text, #303030)",
+  font: "inherit",
+};
+
 export function TitleBar({ title }: { title: string }) {
   return <ui-title-bar title={title} />;
 }
@@ -258,11 +269,8 @@ export function TextField({
           disabled={disabled}
           placeholder={placeholder}
           style={{
-            width: "100%",
-            padding: "0.75rem",
-            borderRadius: "0.75rem",
-            border: "1px solid var(--p-color-border, #d2d5d8)",
-            font: "inherit",
+            ...fieldStyle,
+            resize: "vertical",
           }}
         />
         {helpText ? <Text as="p" tone="subdued">{helpText}</Text> : null}
@@ -286,11 +294,7 @@ export function TextField({
         step={step}
         placeholder={placeholder}
         style={{
-          width: "100%",
-          padding: "0.75rem",
-          borderRadius: "0.75rem",
-          border: "1px solid var(--p-color-border, #d2d5d8)",
-          font: "inherit",
+          ...fieldStyle,
         }}
       />
       {helpText ? <Text as="p" tone="subdued">{helpText}</Text> : null}
@@ -320,11 +324,7 @@ export function Select({
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
         style={{
-          width: "100%",
-          padding: "0.75rem",
-          borderRadius: "0.75rem",
-          border: "1px solid var(--p-color-border, #d2d5d8)",
-          font: "inherit",
+          ...fieldStyle,
         }}
       >
         {options.map((option) => (

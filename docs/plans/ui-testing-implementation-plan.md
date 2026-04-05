@@ -14,6 +14,7 @@ Recent migration work exposed problems that static validation did not catch:
 - regressions in dropdown visibility and positioning
 - layout spacing drift after component migration
 - filter/navigation behavior that only failed in the browser
+- Shopify admin shell integration issues where local DOM interaction worked, but projected App Home actions behaved differently in the embedded admin
 
 These are exactly the kinds of issues a UI test layer should catch earlier.
 
@@ -90,6 +91,7 @@ These are exactly the kinds of issues a UI test layer should catch earlier.
   - local test bypass for specific environments
   - session bootstrap helper
 - Once stable, add workflow tests for real admin pages
+- Keep a short manual verification checklist for Shopify-admin-projected elements such as `ui-save-bar` and `ui-title-bar`, since local Playwright coverage can still miss embedded-admin behavior differences.
 
 ## Initial Test Priorities
 
@@ -98,6 +100,7 @@ These are exactly the kinds of issues a UI test layer should catch earlier.
 3. Autocomplete opens on focus and closes on selection
 4. Save/discard surfaces appear when a staged editor becomes dirty
 5. Variant bulk selection and bulk-assignment panel render correctly
+6. Shopify-admin-projected actions still work in the embedded app after UI shell changes
 
 ## Fixture Guidance
 
