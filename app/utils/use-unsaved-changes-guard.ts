@@ -19,7 +19,7 @@ export function useUnsavedChangesGuard(isDirty: boolean) {
   const confirmThenNavigate = useCallback(
     async (to: string) => {
       if (isDirty) {
-        await globalThis.shopify?.saveBar?.leaveConfirmation?.();
+        await (globalThis as any).shopify?.saveBar?.leaveConfirmation?.();
       }
 
       navigate(to);

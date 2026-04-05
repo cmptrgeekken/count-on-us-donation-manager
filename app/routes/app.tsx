@@ -1,15 +1,11 @@
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, Outlet, useLoaderData, useRouteError } from "@remix-run/react";
+import { Outlet, useLoaderData, useRouteError } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
-import { NavMenu } from "@shopify/app-bridge-react";
-import polarisStyles from "@shopify/polaris/build/esm/styles.css?url";
 
 import { prisma } from "../db.server";
 import { authenticate } from "../shopify.server";
 import { getLocaleFromRequest } from "../utils/localization.server";
-
-export const links = () => [{ rel: "stylesheet", href: polarisStyles }];
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -43,28 +39,20 @@ export default function App() {
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
       {/* Navigation renders in the Shopify admin sidebar */}
-      <NavMenu>
-        <Link to="/app/dashboard" rel="home">Dashboard</Link>
-        <Link to="/app/settings">Settings</Link>
-
-        {/* Cost Config */}
-        <Link to="/app/materials">Materials</Link>
-        <Link to="/app/equipment">Equipment</Link>
-        <Link to="/app/templates">Cost Templates</Link>
-        <Link to="/app/variants">Variants</Link>
-
-        {/* Donation Setup */}
-        <Link to="/app/causes">Causes</Link>
-        <Link to="/app/products">Products</Link>
-
-        {/* Finance */}
-        <Link to="/app/reporting">Reporting</Link>
-        <Link to="/app/expenses">Expenses</Link>
-
-        {/* Operations */}
-        <Link to="/app/provider-connections">Provider Connections</Link>
-        <Link to="/app/order-history">Order History</Link>
-      </NavMenu>
+      <ui-nav-menu>
+        <a href="/app/dashboard" rel="home">Dashboard</a>
+        <a href="/app/settings">Settings</a>
+        <a href="/app/materials">Materials</a>
+        <a href="/app/equipment">Equipment</a>
+        <a href="/app/templates">Cost Templates</a>
+        <a href="/app/variants">Variants</a>
+        <a href="/app/causes">Causes</a>
+        <a href="/app/products">Products</a>
+        <a href="/app/reporting">Reporting</a>
+        <a href="/app/expenses">Expenses</a>
+        <a href="/app/provider-connections">Provider Connections</a>
+        <a href="/app/order-history">Order History</a>
+      </ui-nav-menu>
       <Outlet />
     </AppProvider>
   );

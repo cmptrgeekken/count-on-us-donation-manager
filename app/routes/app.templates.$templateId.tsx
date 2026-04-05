@@ -15,8 +15,8 @@ import {
   Page,
   Text,
   TextField,
-} from "@shopify/polaris";
-import { TitleBar } from "@shopify/app-bridge-react";
+  TitleBar,
+} from "../components/polaris-shim";
 import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";

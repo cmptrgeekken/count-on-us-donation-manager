@@ -55,6 +55,8 @@ declare global {
       "s-table-header-row": ShopifyElementProps;
       "s-table-row": ShopifyElementProps;
       "s-text-field": ShopifyElementProps;
+      "ui-nav-menu": ShopifyElementProps;
+      "ui-save-bar": ShopifyElementProps;
       "ui-title-bar": DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement> & {
         title?: string;
       };

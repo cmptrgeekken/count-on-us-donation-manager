@@ -1,4 +1,4 @@
-import { SaveBar } from "@shopify/app-bridge-react";
+import { useEffect, useId } from "react";
 
 type AppSaveBarProps = {
   open: boolean;
@@ -19,14 +19,32 @@ export function AppSaveBar({
   saveDisabled = false,
   loading = false,
 }: AppSaveBarProps) {
+  const id = useId().replace(/:/g, "");
+
+  useEffect(() => {
+    const api = (globalThis as any).shopify?.saveBar;
+    if (!api) return;
+
+    const action = open ? api.show?.(id) : api.hide?.(id);
+    void action;
+
+    return () => {
+      void api.hide?.(id);
+    };
+  }, [id, open]);
+
   return (
-    <SaveBar open={open} discardConfirmation>
-      <button type="button" variant="primary" disabled={saveDisabled} loading={loading} onClick={onSave}>
-        {saveLabel}
+    <ui-save-bar id={id}>
+      <button
+        type="button"
+        disabled={saveDisabled || loading}
+        onClick={onSave}
+      >
+        {loading ? "Saving..." : saveLabel}
       </button>
       <button type="button" disabled={loading} onClick={onDiscard}>
         {discardLabel}
       </button>
-    </SaveBar>
+    </ui-save-bar>
   );
 }

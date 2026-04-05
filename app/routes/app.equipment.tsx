@@ -216,7 +216,7 @@ export default function EquipmentPage() {
   return (
     <>
       <ui-title-bar title="Equipment Library">
-        <button variant="primary" onClick={openCreate}>New equipment</button>
+        <button type="button" onClick={openCreate}>New equipment</button>
       </ui-title-bar>
 
       <div
