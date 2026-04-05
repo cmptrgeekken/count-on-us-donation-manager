@@ -16,9 +16,20 @@ type SnapshotListRow = {
 };
 
 const ZERO = new Prisma.Decimal(0);
+const PAGE_SIZE = 50;
 
 function normaliseOrigin(value: string | null) {
   return value === "webhook" || value === "reconciliation" ? value : "all";
+}
+
+function normaliseDate(value: string | null) {
+  if (!value) return "";
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : "";
+}
+
+function endOfDayIso(dateString: string) {
+  return new Date(`${dateString}T23:59:59.999Z`);
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -26,14 +37,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopId = session.shop;
   const url = new URL(request.url);
   const origin = normaliseOrigin(url.searchParams.get("origin"));
+  const startDate = normaliseDate(url.searchParams.get("startDate"));
+  const endDate = normaliseDate(url.searchParams.get("endDate"));
+  const cursor = url.searchParams.get("cursor")?.trim() || "";
+
+  const where = {
+    shopId,
+    ...(origin === "all" ? {} : { origin }),
+    ...((startDate || endDate)
+      ? {
+          createdAt: {
+            ...(startDate ? { gte: new Date(`${startDate}T00:00:00.000Z`) } : {}),
+            ...(endDate ? { lte: endOfDayIso(endDate) } : {}),
+          },
+        }
+      : {}),
+  };
 
   const snapshots = await prisma.orderSnapshot.findMany({
-    where: {
-      shopId,
-      ...(origin === "all" ? {} : { origin }),
-    },
-    orderBy: { createdAt: "desc" },
-    take: 100,
+    where,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    take: PAGE_SIZE + 1,
     include: {
       lines: {
         select: {
@@ -47,9 +72,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  const hasNextPage = snapshots.length > PAGE_SIZE;
+  const pageSnapshots = hasNextPage ? snapshots.slice(0, PAGE_SIZE) : snapshots;
+  const nextCursor = hasNextPage ? pageSnapshots.at(-1)?.id ?? null : null;
+
   return Response.json({
     origin,
-    snapshots: snapshots.map<SnapshotListRow>((snapshot) => ({
+    startDate,
+    endDate,
+    nextCursor,
+    snapshots: pageSnapshots.map<SnapshotListRow>((snapshot) => ({
       id: snapshot.id,
       orderNumber: snapshot.orderNumber ?? "Unnumbered order",
       origin: snapshot.origin,
@@ -69,9 +101,45 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 };
 
-function FilterLink({ currentOrigin, targetOrigin, label }: { currentOrigin: string; targetOrigin: string; label: string }) {
+function buildOrderHistoryHref({
+  origin,
+  startDate,
+  endDate,
+  cursor,
+}: {
+  origin: string;
+  startDate?: string;
+  endDate?: string;
+  cursor?: string | null;
+}) {
+  const params = new URLSearchParams();
+  if (origin && origin !== "all") params.set("origin", origin);
+  if (startDate) params.set("startDate", startDate);
+  if (endDate) params.set("endDate", endDate);
+  if (cursor) params.set("cursor", cursor);
+  const query = params.toString();
+  return query ? `/app/order-history?${query}` : "/app/order-history";
+}
+
+function FilterLink({
+  currentOrigin,
+  targetOrigin,
+  label,
+  startDate,
+  endDate,
+}: {
+  currentOrigin: string;
+  targetOrigin: string;
+  label: string;
+  startDate?: string;
+  endDate?: string;
+}) {
   const isActive = currentOrigin === targetOrigin;
-  const href = targetOrigin === "all" ? "/app/order-history" : `/app/order-history?origin=${targetOrigin}`;
+  const href = buildOrderHistoryHref({
+    origin: targetOrigin,
+    startDate,
+    endDate,
+  });
 
   return (
     <a
@@ -92,7 +160,7 @@ function FilterLink({ currentOrigin, targetOrigin, label }: { currentOrigin: str
 }
 
 export default function OrderHistoryPage() {
-  const { origin, snapshots } = useLoaderData<typeof loader>();
+  const { origin, startDate, endDate, nextCursor, snapshots } = useLoaderData<typeof loader>();
   const { formatMoney } = useAppLocalization();
 
   return (
@@ -104,10 +172,67 @@ export default function OrderHistoryPage() {
           <div style={{ display: "grid", gap: "1rem" }}>
             <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
               <strong>Origin filter</strong>
-              <FilterLink currentOrigin={origin} targetOrigin="all" label="All" />
-              <FilterLink currentOrigin={origin} targetOrigin="webhook" label="Webhook" />
-              <FilterLink currentOrigin={origin} targetOrigin="reconciliation" label="Reconciliation" />
+              <FilterLink currentOrigin={origin} targetOrigin="all" label="All" startDate={startDate} endDate={endDate} />
+              <FilterLink currentOrigin={origin} targetOrigin="webhook" label="Webhook" startDate={startDate} endDate={endDate} />
+              <FilterLink
+                currentOrigin={origin}
+                targetOrigin="reconciliation"
+                label="Reconciliation"
+                startDate={startDate}
+                endDate={endDate}
+              />
             </div>
+
+            <form method="get" style={{ display: "grid", gap: "0.75rem" }}>
+              {origin !== "all" ? <input type="hidden" name="origin" value={origin} /> : null}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                  gap: "0.75rem",
+                  alignItems: "end",
+                }}
+              >
+                <label style={{ display: "grid", gap: "0.35rem" }}>
+                  <span>Start date</span>
+                  <input
+                    type="date"
+                    name="startDate"
+                    defaultValue={startDate}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: "0.75rem",
+                      borderRadius: "0.75rem",
+                      border: "1px solid var(--p-color-border, #d2d5d8)",
+                    }}
+                  />
+                </label>
+                <label style={{ display: "grid", gap: "0.35rem" }}>
+                  <span>End date</span>
+                  <input
+                    type="date"
+                    name="endDate"
+                    defaultValue={endDate}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: "0.75rem",
+                      borderRadius: "0.75rem",
+                      border: "1px solid var(--p-color-border, #d2d5d8)",
+                    }}
+                  />
+                </label>
+                <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <s-button type="submit" variant="secondary">
+                    Apply dates
+                  </s-button>
+                  <a href={buildOrderHistoryHref({ origin })} style={{ alignSelf: "center" }}>
+                    Clear dates
+                  </a>
+                </div>
+              </div>
+            </form>
 
             {snapshots.length === 0 ? (
               <s-banner tone="warning">
@@ -145,6 +270,21 @@ export default function OrderHistoryPage() {
                 </s-table-body>
               </s-table>
             )}
+
+            {nextCursor ? (
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <a
+                  href={buildOrderHistoryHref({
+                    origin,
+                    startDate,
+                    endDate,
+                    cursor: nextCursor,
+                  })}
+                >
+                  Next page
+                </a>
+              </div>
+            ) : null}
           </div>
         </s-section>
       </s-page>

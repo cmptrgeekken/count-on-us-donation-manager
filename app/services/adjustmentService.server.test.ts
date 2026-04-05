@@ -296,6 +296,51 @@ describe("processOrderUpdate", () => {
       }),
     );
   });
+
+  it("does not auto-reverse snapshot lines that cannot be matched back to the payload", async () => {
+    const db = createDb({
+      snapshot: {
+        id: "snapshot-1",
+        lines: [
+          {
+            id: "snapshot-line-1",
+            shopifyLineItemId: "gid://shopify/LineItem/22",
+            quantity: 2,
+            subtotal: decimal("50"),
+            laborCost: decimal("10"),
+            materialCost: decimal("20"),
+            packagingCost: decimal("5"),
+            equipmentCost: decimal("0"),
+            netContribution: decimal("15"),
+            adjustments: [],
+          },
+        ],
+      },
+    });
+
+    const result = await processOrderUpdate(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/123",
+        subtotal_price: "25.00",
+        line_items: [{ id: 999, quantity: 1, price: "25.00" }],
+      },
+      db,
+    );
+
+    expect(result).toEqual({ created: 0, skipped: 0 });
+    expect(db.__spies.adjustmentCreate).not.toHaveBeenCalled();
+    expect(db.__spies.auditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "ORDER_UPDATE_CONTAINS_UNMATCHED_SNAPSHOT_LINES",
+          payload: expect.objectContaining({
+            unmatchedSnapshotLineCount: 1,
+          }),
+        }),
+      }),
+    );
+  });
 });
 
 describe("createManualAdjustment", () => {

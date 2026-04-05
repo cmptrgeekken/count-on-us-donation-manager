@@ -245,6 +245,23 @@ async function findSnapshotWithLines(db: any, shopId: string, shopifyOrderId: st
   });
 }
 
+function findIncomingSubtotalForSnapshotLine(
+  snapshotLine: Pick<SnapshotLineWithAdjustments, "shopifyLineItemId">,
+  currentLines: Map<string, { subtotal: Prisma.Decimal }>,
+) {
+  const identifiers = buildLineItemIdentifiers({
+    id: snapshotLine.shopifyLineItemId,
+    admin_graphql_api_id: snapshotLine.shopifyLineItemId,
+  });
+
+  for (const identifier of identifiers) {
+    const match = currentLines.get(identifier);
+    if (match) return match.subtotal;
+  }
+
+  return null;
+}
+
 export async function processRefund(
   shopId: string,
   refundPayload: ShopifyRefundPayload,
@@ -445,6 +462,7 @@ export async function processOrderUpdate(
   }
 
   const adjustmentsToCreate: Array<{ snapshotLineId: string } & AdjustmentBreakdown> = [];
+  let unmatchedSnapshotLineCount = 0;
 
   for (const snapshotLine of snapshot.lines as SnapshotLineWithAdjustments[]) {
     const effective = getEffectiveSnapshotLineState(snapshotLine);
@@ -452,7 +470,11 @@ export async function processOrderUpdate(
       continue;
     }
 
-    const incomingSubtotal = currentLines.get(snapshotLine.shopifyLineItemId)?.subtotal ?? ZERO;
+    const incomingSubtotal = findIncomingSubtotalForSnapshotLine(snapshotLine, currentLines);
+    if (incomingSubtotal === null) {
+      unmatchedSnapshotLineCount += 1;
+      continue;
+    }
     if (incomingSubtotal.eq(effective.subtotal)) {
       continue;
     }
@@ -489,6 +511,23 @@ export async function processOrderUpdate(
         },
       },
     });
+
+    if (unmatchedSnapshotLineCount > 0) {
+      await db.auditLog.create({
+        data: {
+          shopId,
+          entity: "OrderSnapshot",
+          entityId: shopifyOrderId,
+          action: "ORDER_UPDATE_CONTAINS_UNMATCHED_SNAPSHOT_LINES",
+          actor: "webhook",
+          payload: {
+            unmatchedSnapshotLineCount,
+            note: "Snapshotted lines without payload matches were not auto-reversed.",
+          },
+        },
+      });
+    }
+
     return { created: 0, skipped: 0 };
   }
 
@@ -551,6 +590,22 @@ export async function processOrderUpdate(
           payload: {
             unmatchedPayloadLineCount,
             note: "New order line items cannot yet be represented as adjustments.",
+          },
+        },
+      });
+    }
+
+    if (unmatchedSnapshotLineCount > 0) {
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "OrderSnapshot",
+          entityId: shopifyOrderId,
+          action: "ORDER_UPDATE_CONTAINS_UNMATCHED_SNAPSHOT_LINES",
+          actor: "webhook",
+          payload: {
+            unmatchedSnapshotLineCount,
+            note: "Snapshotted lines without payload matches were not auto-reversed.",
           },
         },
       });
