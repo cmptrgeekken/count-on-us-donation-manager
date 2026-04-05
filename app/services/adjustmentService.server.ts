@@ -148,7 +148,6 @@ export async function createManualAdjustment(
     materialAdj?: string | number | Prisma.Decimal | null;
     packagingAdj?: string | number | Prisma.Decimal | null;
     equipmentAdj?: string | number | Prisma.Decimal | null;
-    netContribAdj?: string | number | Prisma.Decimal | null;
   },
   db: any = prisma,
 ): Promise<{ adjustmentId: string }> {
@@ -380,7 +379,7 @@ export async function processRefund(
           shopId,
           snapshotLineId: adjustment.snapshotLineId,
           type: "refund",
-          reason: refundPayload.note ?? "refunds/create webhook",
+          reason: refundPayload.note?.slice(0, 500) ?? "refunds/create webhook",
           actor: "webhook",
           laborAdj: adjustment.laborAdj,
           materialAdj: adjustment.materialAdj,

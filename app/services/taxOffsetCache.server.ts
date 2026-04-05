@@ -14,7 +14,7 @@ export async function recomputeTaxOffsetCache(shopId: string, db = prisma) {
     db.lineCauseAllocation.aggregate({
       where: {
         shopId,
-        cause: { is501c3: true },
+        is501c3: true,
       },
       _sum: { amount: true },
     }),
@@ -61,6 +61,7 @@ export async function recomputeTaxOffsetCache(shopId: string, db = prisma) {
     const baseAllocations = line.causeAllocations.reduce((allocationSum, allocation) => allocationSum.add(allocation.amount), new Prisma.Decimal(0));
     const lineAdjustmentTotal = line.adjustments.reduce((adjustmentSum, adjustment) => adjustmentSum.add(adjustment.netContribAdj), new Prisma.Decimal(0));
     const ratio = lineAdjustmentTotal.div(line.netContribution);
+    if (ratio.abs().greaterThan(new Prisma.Decimal(10))) return sum;
 
     return sum.add(baseAllocations.mul(ratio));
   }, new Prisma.Decimal(0));

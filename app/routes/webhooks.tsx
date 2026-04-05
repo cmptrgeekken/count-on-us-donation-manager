@@ -17,13 +17,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const topic = request.headers.get("X-Shopify-Topic") ?? "";
   const shop = request.headers.get("X-Shopify-Shop-Domain") ?? "";
 
-  console.log(`[webhook] Received ${topic} for ${shop}`);
+  console.log(`[webhook] Received ${topic}`);
 
   let payload: unknown;
   try {
     payload = JSON.parse(rawBody.toString("utf8"));
   } catch {
-    payload = {};
+    return new Response(null, { status: 400 });
   }
 
   switch (topic) {
@@ -69,7 +69,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     default:
-      console.warn(`[webhook] Unhandled topic: ${topic} for ${shop}`);
+      console.warn(`[webhook] Unhandled topic: ${topic}`);
   }
 
   return new Response(null, { status: 200 });

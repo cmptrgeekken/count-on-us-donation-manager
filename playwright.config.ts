@@ -25,6 +25,9 @@ export default defineConfig({
   ],
   webServer: {
     command: `npx remix vite:dev --host 127.0.0.1 --port ${port}`,
+    env: {
+      PLAYWRIGHT_BYPASS_ENABLED: "true",
+    },
     url: baseURL,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

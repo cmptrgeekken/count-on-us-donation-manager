@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db.server";
 import { recomputeTaxOffsetCache } from "../services/taxOffsetCache.server";
@@ -17,6 +18,10 @@ const expenseSchema = z.object({
     .refine((value) => !Number.isNaN(Number(value)) && Number(value) > 0, "Amount must be greater than 0."),
   expenseDate: z.string().trim().min(1, "Expense date is required."),
   notes: z.string().trim().optional(),
+});
+
+const expenseIdSchema = z.object({
+  id: z.string().trim().cuid("Expense id is invalid."),
 });
 
 const SUBTYPE_OPTIONS: Record<string, Array<{ label: string; value: string }>> = {
@@ -128,44 +133,59 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    const expense = await prisma.businessExpense.create({
-      data: {
-        shopId,
-        category: parsed.data.category,
-        subType: parsed.data.subType?.trim() || null,
-        name: parsed.data.name,
-        amount: Number(parsed.data.amount),
-        expenseDate: new Date(parsed.data.expenseDate),
-        notes: parsed.data.notes?.trim() || null,
-      },
-    });
+    const result = await prisma.$transaction(async (tx) => {
+      const expense = await tx.businessExpense.create({
+        data: {
+          shopId,
+          category: parsed.data.category,
+          subType: parsed.data.subType?.trim() || null,
+          name: parsed.data.name,
+          amount: new Prisma.Decimal(parsed.data.amount),
+          expenseDate: new Date(parsed.data.expenseDate),
+          notes: parsed.data.notes?.trim() || null,
+        },
+      });
 
-    const summary = await recomputeTaxOffsetCache(shopId);
+      const summary = await recomputeTaxOffsetCache(shopId, tx as any);
 
-    await prisma.auditLog.create({
-      data: {
-        shopId,
-        entity: "BusinessExpense",
-        entityId: expense.id,
-        action: "BUSINESS_EXPENSE_CREATED",
-        actor: "merchant",
-      },
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "BusinessExpense",
+          entityId: expense.id,
+          action: "BUSINESS_EXPENSE_CREATED",
+          actor: "merchant",
+        },
+      });
+
+      return { expense, summary };
     });
 
     return Response.json({
       ok: true,
       message: "Expense created.",
       summary: {
-        deductionPool: summary.deductionPool.toString(),
-        taxableExposure: summary.taxableExposure.toString(),
-        cumulativeNetContrib: summary.cumulativeNetContrib.toString(),
-        widgetTaxSuppressed: summary.widgetTaxSuppressed,
+        deductionPool: result.summary.deductionPool.toString(),
+        taxableExposure: result.summary.taxableExposure.toString(),
+        cumulativeNetContrib: result.summary.cumulativeNetContrib.toString(),
+        widgetTaxSuppressed: result.summary.widgetTaxSuppressed,
       },
     });
   }
 
   if (intent === "delete") {
-    const id = formData.get("id")?.toString() ?? "";
+    const parsed = expenseIdSchema.safeParse({
+      id: formData.get("id")?.toString() ?? "",
+    });
+
+    if (!parsed.success) {
+      return Response.json(
+        { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid expense." },
+        { status: 400 },
+      );
+    }
+
+    const id = parsed.data.id;
     const expense = await prisma.businessExpense.findFirst({
       where: { id, shopId },
       select: { id: true },
@@ -175,20 +195,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ ok: false, message: "Expense not found." }, { status: 404 });
     }
 
-    await prisma.businessExpense.delete({
-      where: { id },
-    });
+    const summary = await prisma.$transaction(async (tx) => {
+      await tx.businessExpense.deleteMany({
+        where: { id, shopId },
+      });
 
-    const summary = await recomputeTaxOffsetCache(shopId);
+      const nextSummary = await recomputeTaxOffsetCache(shopId, tx as any);
 
-    await prisma.auditLog.create({
-      data: {
-        shopId,
-        entity: "BusinessExpense",
-        entityId: id,
-        action: "BUSINESS_EXPENSE_DELETED",
-        actor: "merchant",
-      },
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "BusinessExpense",
+          entityId: id,
+          action: "BUSINESS_EXPENSE_DELETED",
+          actor: "merchant",
+        },
+      });
+
+      return nextSummary;
     });
 
     return Response.json({
@@ -220,8 +244,11 @@ export default function ExpensesPage() {
   }>();
   const { formatMoney } = useAppLocalization();
   const dialogRef = useRef<HTMLDialogElement>(null);
+  const deleteDialogRef = useRef<HTMLDialogElement>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [form, setForm] = useState<ExpenseFormState>(EMPTY_FORM);
+  const [deleteTarget, setDeleteTarget] = useState<ExpenseRow | null>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -229,6 +256,13 @@ export default function ExpensesPage() {
     if (dialogOpen && !dialog.open) dialog.showModal();
     if (!dialogOpen && dialog.open) dialog.close();
   }, [dialogOpen]);
+
+  useEffect(() => {
+    const dialog = deleteDialogRef.current;
+    if (!dialog) return;
+    if (deleteDialogOpen && !dialog.open) dialog.showModal();
+    if (!deleteDialogOpen && dialog.open) dialog.close();
+  }, [deleteDialogOpen]);
 
   const liveSummary = fetcher.data?.summary ?? summary;
   const isSubmitting = fetcher.state !== "idle";
@@ -245,6 +279,16 @@ export default function ExpensesPage() {
   function closeDialog() {
     setDialogOpen(false);
     setForm(EMPTY_FORM);
+  }
+
+  function openDelete(expense: ExpenseRow) {
+    setDeleteTarget(expense);
+    setDeleteDialogOpen(true);
+  }
+
+  function closeDeleteDialog() {
+    setDeleteDialogOpen(false);
+    setDeleteTarget(null);
   }
 
   const subTypeOptions = SUBTYPE_OPTIONS[form.category] ?? SUBTYPE_OPTIONS.other;
@@ -343,13 +387,15 @@ export default function ExpensesPage() {
                       <s-table-cell>{expense.expenseDate}</s-table-cell>
                       <s-table-cell>{formatMoney(expense.amount)}</s-table-cell>
                       <s-table-cell>
-                        <fetcher.Form method="post">
-                          <input type="hidden" name="intent" value="delete" />
-                          <input type="hidden" name="id" value={expense.id} />
-                          <s-button type="submit" variant="secondary" tone="critical" disabled={isSubmitting}>
-                            Delete
-                          </s-button>
-                        </fetcher.Form>
+                        <s-button
+                          type="button"
+                          variant="secondary"
+                          tone="critical"
+                          disabled={isSubmitting}
+                          onClick={() => openDelete(expense)}
+                        >
+                          Delete
+                        </s-button>
                       </s-table-cell>
                     </s-table-row>
                   ))}
@@ -505,6 +551,64 @@ export default function ExpensesPage() {
               }}
             >
               Create
+            </s-button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={deleteDialogRef}
+        onClose={closeDeleteDialog}
+        style={{
+          border: "none",
+          borderRadius: "1rem",
+          padding: 0,
+          maxWidth: "32rem",
+          width: "calc(100% - 2rem)",
+        }}
+      >
+        <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <strong>Delete expense</strong>
+              <s-text color="subdued">Deleting an expense updates the tax offset cache and cannot be undone.</s-text>
+            </div>
+            <button
+              type="button"
+              aria-label="Close dialog"
+              onClick={closeDeleteDialog}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "1.5rem",
+                lineHeight: 1,
+                cursor: "pointer",
+              }}
+            >
+              ×
+            </button>
+          </div>
+
+          <s-text>
+            {deleteTarget ? `Delete ${deleteTarget.name} for ${formatMoney(deleteTarget.amount)}?` : "Delete this expense?"}
+          </s-text>
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+            <s-button variant="secondary" onClick={closeDeleteDialog}>Cancel</s-button>
+            <s-button
+              variant="primary"
+              tone="critical"
+              disabled={isSubmitting || !deleteTarget}
+              onClick={() => {
+                if (!deleteTarget) return;
+                const fd = new FormData();
+                fd.append("intent", "delete");
+                fd.append("id", deleteTarget.id);
+                fetcher.submit(fd, { method: "post" });
+                closeDeleteDialog();
+              }}
+            >
+              Delete
             </s-button>
           </div>
         </div>

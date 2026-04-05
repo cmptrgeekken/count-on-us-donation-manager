@@ -21,6 +21,10 @@ const causeSchema = z.object({
   is501c3: z.boolean(),
 });
 
+const causeIdSchema = z.object({
+  id: z.string().trim().cuid("Cause id is invalid."),
+});
+
 function normalizeOptional(value?: string) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
@@ -175,7 +179,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         return Response.json({ ok: true, message: "Cause created." });
       }
 
-      const id = formData.get("id")?.toString() ?? "";
+      const idParsed = causeIdSchema.safeParse({
+        id: formData.get("id")?.toString() ?? "",
+      });
+
+      if (!idParsed.success) {
+        return Response.json(
+          { ok: false, message: idParsed.error.issues[0]?.message ?? "Invalid Cause." },
+          { status: 400 },
+        );
+      }
+
+      const id = idParsed.data.id;
       const existing = await prisma.cause.findFirst({
         where: { id, shopId },
         select: { shopifyMetaobjectId: true },
@@ -230,7 +245,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "deactivate" || intent === "reactivate") {
-    const id = formData.get("id")?.toString() ?? "";
+    const idParsed = causeIdSchema.safeParse({
+      id: formData.get("id")?.toString() ?? "",
+    });
+
+    if (!idParsed.success) {
+      return Response.json(
+        { ok: false, message: idParsed.error.issues[0]?.message ?? "Invalid Cause." },
+        { status: 400 },
+      );
+    }
+
+    const id = idParsed.data.id;
     const nextStatus = intent === "deactivate" ? "inactive" : "active";
 
     const cause = await prisma.cause.findFirst({

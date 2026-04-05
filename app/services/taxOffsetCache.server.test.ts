@@ -74,5 +74,44 @@ describe("recomputeTaxOffsetCache", () => {
     expect(result.deductionPool.toString()).toBe("25");
     expect(result.cumulativeNetContrib.toString()).toBe("90");
     expect(result.taxableExposure.toString()).toBe("65");
+    expect(db.lineCauseAllocation.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          is501c3: true,
+        }),
+      }),
+    );
+  });
+
+  it("ignores extreme allocation ratios from near-zero net contribution lines", async () => {
+    const db = {
+      businessExpense: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("0") } }),
+      },
+      lineCauseAllocation: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("20") } }),
+      },
+      orderSnapshotLine: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribution: decimal("100") } }),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            netContribution: decimal("0.01"),
+            adjustments: [{ netContribAdj: decimal("1.00") }],
+            causeAllocations: [{ amount: decimal("20") }],
+          },
+        ]),
+      },
+      adjustment: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("1") } }),
+      },
+      taxOffsetCache: {
+        upsert: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+
+    const result = await recomputeTaxOffsetCache("shop-1", db as any);
+
+    expect(result.deductionPool.toString()).toBe("20");
+    expect(result.taxableExposure.toString()).toBe("81");
   });
 });
