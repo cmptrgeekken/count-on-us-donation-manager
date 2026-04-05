@@ -5,16 +5,16 @@ Use this document as the practical snapshot of what is implemented in the repo t
 This file is intentionally lightweight and operational. It should summarize reality, not restate full product requirements or phase specs.
 
 **Project:** Count On Us  
-**Date:** April 2, 2026  
-**Summary:** Phase 1 is complete. Phase 2 is largely implemented and currently being hardened. The team is wrapping up pre-Phase-3 issues before beginning the immutable snapshot, causes, and order accounting work.
+**Date:** April 4, 2026  
+**Summary:** Phase 1 and Phase 2 are complete. The pre-Phase-3 hardening pass is complete, including the Polaris Web Components migration and the first Playwright workflow coverage. The project is now preparing to begin Phase 3 implementation.
 
 ---
 
 ## Current Position
 
 - **Phase 1:** Complete
-- **Phase 2:** Mostly complete
-- **Current focus:** Phase 2 hardening and pre-Phase-3 cleanup
+- **Phase 2:** Complete
+- **Current focus:** Phase 3 preparation and kickoff planning
 - **Phase 3:** Not yet started in substantive backend/data-model terms
 
 ---
@@ -52,31 +52,41 @@ This file is intentionally lightweight and operational. It should summarize real
 - [x] Default labor rate groundwork
 - [x] Currency/localization groundwork
 
-### Still being hardened
+### Hardening completed during Phase 2 exit work
 
-- [~] Audit logging is present across many flows, but should be spot-checked against all documented required mutations
-- [~] Validation exists in many actions, but is not yet consistently standardized around Zod
-- [~] CostEngine behavior is implemented, but documented unit-test expectations do not appear fully in place
-- [~] Template and variant UX is still being refined as part of Phase 2 wrap-up
+- [x] Staged save/discard UX for template and variant details
+- [x] Searchable picker pattern on template and variant editors
+- [x] Currency and locale formatting rollout
+- [x] Default labor rate rollout
+- [x] Shipping-material costing behavior aligned with intended rules
+- [x] Polaris Web Components migration off Shopify React dependencies
+- [x] Playwright foundation plus real workflow coverage for key Phase 2 surfaces
 
 ### Deferred or intentionally incomplete
 
 - [ ] POD/provider connections
 - [ ] Full inline bulk editor
-- [ ] Formal Vitest setup and documented test scripts
+- [ ] Full design revisit for large-list filtering UX
 
 ---
 
-## Pre-Phase-3 Cleanup Checklist
+## Phase 2 Exit Checklist
 
-- [ ] Finish remaining Phase 2 amendment work on templates and variants
-- [ ] Clean up hardcoded localization defaults and connect formatter inputs to real shop data
-- [ ] Verify shipping-material costing behavior matches the intended rules
-- [ ] Verify default labor rate fallback everywhere costs are resolved
-- [ ] Confirm `lineItemCount` stays correct through all add/remove paths
-- [ ] Replace temporary webhook behavior that should not carry into Phase 3
-- [ ] Add or finish automated tests for CostEngine and critical validation paths
-- [ ] Reconcile docs and code before starting Phase 3 implementation
+- [x] Finish remaining Phase 2 amendment work on templates and variants
+- [x] Connect localization and formatter inputs to real shop data
+- [x] Verify shipping-material costing behavior matches the intended rules
+- [x] Verify default labor rate fallback in cost resolution
+- [x] Confirm `lineItemCount` stays correct through add/remove paths
+- [x] Replace temporary React-based admin UI dependencies
+- [x] Add automated tests for CostEngine regressions and critical UI workflows
+- [x] Reconcile docs and code before starting Phase 3 implementation
+
+## Phase 3 Readiness Notes
+
+- Shopify scopes already include `read_orders`, `read_metaobjects`, `write_metaobjects`, and `write_products`.
+- `shopify.app.toml` does not yet include the Phase 3 order webhook subscriptions for `orders/create`, `orders/updated`, and `refunds/create`.
+- Phase 3 placeholder routes already exist for `Causes`, `Products`, `Expenses`, and `Order History`, but substantive backend/data-model work has not begun.
+- Prisma schema is still Phase 2 only; no causes, snapshots, adjustments, business expenses, or tax-offset models exist yet.
 
 ---
 
@@ -134,4 +144,5 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - This file is a practical implementation snapshot, not the source of product requirements.
 - The PRD, build plan, ADRs, and implementation plans remain authoritative for scope and architecture.
+- For immediate next work, use `docs/plans/phase-3-kickoff-checklist.md` alongside the Phase 3 implementation plan.
 - Update this file when a phase meaningfully changes state, not for every small commit.
