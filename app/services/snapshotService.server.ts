@@ -105,6 +105,7 @@ export async function createSnapshot(
   }
 
   const lineItems = order.line_items ?? [];
+  const missingProductGids = new Set<string>();
 
   const firstPassResolutions = await Promise.all(
     lineItems.map(async (lineItem): Promise<SnapshotResolution> => {
@@ -123,7 +124,7 @@ export async function createSnapshot(
           : null;
 
       if (!variant && productGid) {
-        await jobQueue.send("catalog.sync.incremental", { shopId, productGid });
+        missingProductGids.add(productGid);
       }
 
       const firstPass = variant
@@ -329,6 +330,10 @@ export async function createSnapshot(
 
       return snapshot;
     });
+
+    for (const productGid of missingProductGids) {
+      await jobQueue.send("catalog.sync.incremental", { shopId, productGid });
+    }
 
     return { created: true, snapshotId: result.id };
   } catch (error) {

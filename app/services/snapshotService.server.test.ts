@@ -33,9 +33,11 @@ function decimal(value: string | number) {
 function createDb({
   existingSnapshot = null,
   orderSnapshotCreateImpl,
+  variant = { id: "variant-1" },
 }: {
   existingSnapshot?: unknown | null;
   orderSnapshotCreateImpl?: () => unknown;
+  variant?: unknown;
 } = {}) {
   const orderSnapshotCreate = orderSnapshotCreateImpl
     ? vi.fn().mockImplementation(orderSnapshotCreateImpl)
@@ -65,7 +67,7 @@ function createDb({
       findFirst: vi.fn().mockResolvedValue(existingSnapshot),
     },
     variant: {
-      findFirst: vi.fn().mockResolvedValue({ id: "variant-1" }),
+      findFirst: vi.fn().mockResolvedValue(variant),
     },
     productCauseAssignment: {
       findMany: vi.fn().mockResolvedValue([
@@ -274,5 +276,79 @@ describe("createSnapshot", () => {
     );
 
     expect(result).toEqual({ created: false, snapshotId: "existing-snapshot" });
+  });
+
+  it("queues catalog sync only after a snapshot is successfully created", async () => {
+    resolveCosts.mockReset();
+    recomputeTaxOffsetCache.mockResolvedValue(undefined);
+    jobQueueSend.mockResolvedValue(undefined);
+
+    const db = createDb({ variant: null });
+
+    const result = await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/2",
+        line_items: [
+          {
+            admin_graphql_api_id: "gid://shopify/LineItem/20",
+            variant_id: "gid://shopify/ProductVariant/200",
+            product_id: "gid://shopify/Product/300",
+            title: "Unsynced Product",
+            variant_title: "Default",
+            quantity: 1,
+            price: "15.00",
+          },
+        ],
+      },
+      db,
+    );
+
+    expect(result).toEqual({ created: true, snapshotId: "snapshot-1" });
+    expect(jobQueueSend).toHaveBeenCalledWith("catalog.sync.incremental", {
+      shopId: "shop-1",
+      productGid: "gid://shopify/Product/300",
+    });
+  });
+
+  it("does not queue catalog sync when snapshot creation loses a concurrent race", async () => {
+    resolveCosts.mockReset();
+    jobQueueSend.mockResolvedValue(undefined);
+
+    const db = createDb({
+      existingSnapshot: null,
+      variant: null,
+      orderSnapshotCreateImpl: () => {
+        const error = new Error("Unique constraint failed");
+        (error as Error & { code?: string }).code = "P2002";
+        throw error;
+      },
+    });
+    db.orderSnapshot.findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: "existing-snapshot" });
+
+    const result = await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/3",
+        line_items: [
+          {
+            admin_graphql_api_id: "gid://shopify/LineItem/30",
+            variant_id: "gid://shopify/ProductVariant/300",
+            product_id: "gid://shopify/Product/400",
+            title: "Race Product",
+            variant_title: "Default",
+            quantity: 1,
+            price: "15.00",
+          },
+        ],
+      },
+      db,
+    );
+
+    expect(result).toEqual({ created: false, snapshotId: "existing-snapshot" });
+    expect(jobQueueSend).not.toHaveBeenCalled();
   });
 });
