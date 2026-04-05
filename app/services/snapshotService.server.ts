@@ -25,6 +25,10 @@ type ShopifyOrderPayload = {
 const ZERO = new Prisma.Decimal(0);
 const ONE = new Prisma.Decimal(1);
 
+function isUniqueConstraintError(error: unknown) {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "P2002";
+}
+
 function toDecimal(value: string | number | null | undefined) {
   if (value === null || value === undefined || value === "") return ZERO;
   return new Prisma.Decimal(value);
@@ -207,123 +211,139 @@ export async function createSnapshot(
     }),
   );
 
-  const result = await db.$transaction(async (tx: any) => {
-    const snapshot = await tx.orderSnapshot.create({
-      data: {
-        shopId,
-        shopifyOrderId,
-        orderNumber: order.name ?? order.order_number?.toString() ?? null,
-        origin,
-      },
-    });
-
-    for (const line of withFinalCosts) {
-      const snapshotLine = await tx.orderSnapshotLine.create({
+  try {
+    const result = await db.$transaction(async (tx: any) => {
+      const snapshot = await tx.orderSnapshot.create({
         data: {
           shopId,
-          snapshotId: snapshot.id,
-          shopifyLineItemId: line.lineItemId,
-          shopifyVariantId: line.variantGid ?? "unknown",
-          variantTitle: line.variantTitle,
-          productTitle: line.productTitle,
-          quantity: line.quantity,
-          salePrice: line.salePrice,
-          subtotal: line.subtotal,
-          laborCost: line.finalCosts.laborCost.mul(line.quantity),
-          materialCost: line.finalCosts.materialCost.mul(line.quantity),
-          packagingCost: line.finalCosts.packagingCost.mul(line.quantity),
-          equipmentCost: line.finalCosts.equipmentCost.mul(line.quantity),
-          podCost: line.finalCosts.podCost.mul(line.quantity),
-          mistakeBufferAmount: line.finalCosts.mistakeBufferAmount.mul(line.quantity),
-          totalCost: line.finalCosts.totalCost.mul(line.quantity),
-          netContribution: (line.finalCosts.netContribution ?? ZERO).mul(line.quantity),
-          laborMinutes: line.variantId
-            ? (
-                await tx.variantCostConfig.findFirst({
-                  where: { variantId: line.variantId, shopId },
-                  select: { laborMinutes: true },
-                })
-              )?.laborMinutes?.mul(line.quantity) ?? null
-            : null,
-          laborRate: line.variantId
-            ? (
-                await tx.variantCostConfig.findFirst({
-                  where: { variantId: line.variantId, shopId },
-                  select: { laborRate: true },
-                })
-              )?.laborRate ?? null
-            : null,
+          shopifyOrderId,
+          orderNumber: order.name ?? order.order_number?.toString() ?? null,
+          origin,
         },
       });
 
-      if (line.finalCosts.materialLines.length > 0) {
-        await tx.orderSnapshotMaterialLine.createMany({
-          data: line.finalCosts.materialLines.map((materialLine) => ({
-            snapshotLineId: snapshotLine.id,
-            materialId: materialLine.materialId,
-            materialName: materialLine.name,
-            materialType: materialLine.type,
-            costingModel: materialLine.costingModel,
-            purchasePrice: materialLine.purchasePrice ?? ZERO,
-            purchaseQty: materialLine.purchaseQty ?? ONE,
-            perUnitCost: materialLine.perUnitCost ?? ZERO,
-            yield_: materialLine.yield,
-            usesPerVariant: scaleDecimal(materialLine.usesPerVariant, line.quantity),
-            quantity: materialLine.quantity.mul(line.quantity),
-            lineCost: materialLine.lineCost.mul(line.quantity),
-          })),
-        });
-      }
-
-      if (line.finalCosts.equipmentLines.length > 0) {
-        await tx.orderSnapshotEquipmentLine.createMany({
-          data: line.finalCosts.equipmentLines.map((equipmentLine) => ({
-            snapshotLineId: snapshotLine.id,
-            equipmentId: equipmentLine.equipmentId,
-            equipmentName: equipmentLine.name,
-            hourlyRate: equipmentLine.hourlyRate,
-            perUseCost: equipmentLine.perUseCost,
-            minutes: scaleDecimal(equipmentLine.minutes, line.quantity),
-            uses: scaleDecimal(equipmentLine.uses, line.quantity),
-            lineCost: equipmentLine.lineCost.mul(line.quantity),
-          })),
-        });
-      }
-
-      if (line.allocations.length > 0) {
-        await tx.lineCauseAllocation.createMany({
-          data: line.allocations.map((allocation) => ({
+      for (const line of withFinalCosts) {
+        const snapshotLine = await tx.orderSnapshotLine.create({
+          data: {
             shopId,
-            snapshotLineId: snapshotLine.id,
-            causeId: allocation.causeId,
-            causeName: allocation.causeName,
-            is501c3: allocation.is501c3,
-            percentage: allocation.percentage,
-            amount: allocation.amount,
-          })),
+            snapshotId: snapshot.id,
+            shopifyLineItemId: line.lineItemId,
+            shopifyVariantId: line.variantGid ?? "unknown",
+            variantTitle: line.variantTitle,
+            productTitle: line.productTitle,
+            quantity: line.quantity,
+            salePrice: line.salePrice,
+            subtotal: line.subtotal,
+            laborCost: line.finalCosts.laborCost.mul(line.quantity),
+            materialCost: line.finalCosts.materialCost.mul(line.quantity),
+            packagingCost: line.finalCosts.packagingCost.mul(line.quantity),
+            equipmentCost: line.finalCosts.equipmentCost.mul(line.quantity),
+            podCost: line.finalCosts.podCost.mul(line.quantity),
+            mistakeBufferAmount: line.finalCosts.mistakeBufferAmount.mul(line.quantity),
+            totalCost: line.finalCosts.totalCost.mul(line.quantity),
+            netContribution: (line.finalCosts.netContribution ?? ZERO).mul(line.quantity),
+            laborMinutes: line.variantId
+              ? (
+                  await tx.variantCostConfig.findFirst({
+                    where: { variantId: line.variantId, shopId },
+                    select: { laborMinutes: true },
+                  })
+                )?.laborMinutes?.mul(line.quantity) ?? null
+              : null,
+            laborRate: line.variantId
+              ? (
+                  await tx.variantCostConfig.findFirst({
+                    where: { variantId: line.variantId, shopId },
+                    select: { laborRate: true },
+                  })
+                )?.laborRate ?? null
+              : null,
+          },
         });
+
+        if (line.finalCosts.materialLines.length > 0) {
+          await tx.orderSnapshotMaterialLine.createMany({
+            data: line.finalCosts.materialLines.map((materialLine) => ({
+              snapshotLineId: snapshotLine.id,
+              materialId: materialLine.materialId,
+              materialName: materialLine.name,
+              materialType: materialLine.type,
+              costingModel: materialLine.costingModel,
+              purchasePrice: materialLine.purchasePrice ?? ZERO,
+              purchaseQty: materialLine.purchaseQty ?? ONE,
+              perUnitCost: materialLine.perUnitCost ?? ZERO,
+              yield_: materialLine.yield,
+              usesPerVariant: scaleDecimal(materialLine.usesPerVariant, line.quantity),
+              quantity: materialLine.quantity.mul(line.quantity),
+              lineCost: materialLine.lineCost.mul(line.quantity),
+            })),
+          });
+        }
+
+        if (line.finalCosts.equipmentLines.length > 0) {
+          await tx.orderSnapshotEquipmentLine.createMany({
+            data: line.finalCosts.equipmentLines.map((equipmentLine) => ({
+              snapshotLineId: snapshotLine.id,
+              equipmentId: equipmentLine.equipmentId,
+              equipmentName: equipmentLine.name,
+              hourlyRate: equipmentLine.hourlyRate,
+              perUseCost: equipmentLine.perUseCost,
+              minutes: scaleDecimal(equipmentLine.minutes, line.quantity),
+              uses: scaleDecimal(equipmentLine.uses, line.quantity),
+              lineCost: equipmentLine.lineCost.mul(line.quantity),
+            })),
+          });
+        }
+
+        if (line.allocations.length > 0) {
+          await tx.lineCauseAllocation.createMany({
+            data: line.allocations.map((allocation) => ({
+              shopId,
+              snapshotLineId: snapshotLine.id,
+              causeId: allocation.causeId,
+              causeName: allocation.causeName,
+              is501c3: allocation.is501c3,
+              percentage: allocation.percentage,
+              amount: allocation.amount,
+            })),
+          });
+        }
       }
-    }
 
-    await recomputeTaxOffsetCache(shopId, tx);
+      await recomputeTaxOffsetCache(shopId, tx);
 
-    await tx.auditLog.create({
-      data: {
-        shopId,
-        entity: "OrderSnapshot",
-        entityId: snapshot.id,
-        action: "ORDER_SNAPSHOT_CREATED",
-        actor: "system",
-        payload: {
-          shopifyOrderId,
-          lineCount: withFinalCosts.length,
-          origin,
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "OrderSnapshot",
+          entityId: snapshot.id,
+          action: "ORDER_SNAPSHOT_CREATED",
+          actor: "system",
+          payload: {
+            shopifyOrderId,
+            lineCount: withFinalCosts.length,
+            origin,
+          },
         },
-      },
+      });
+
+      return snapshot;
     });
 
-    return snapshot;
-  });
+    return { created: true, snapshotId: result.id };
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
 
-  return { created: true, snapshotId: result.id };
+    const existingSnapshot = await db.orderSnapshot.findFirst({
+      where: { shopId, shopifyOrderId },
+      select: { id: true },
+    });
+
+    return {
+      created: false,
+      snapshotId: existingSnapshot?.id,
+    };
+  }
 }

@@ -207,6 +207,50 @@ describe("processOrderUpdate", () => {
     expect(recomputeTaxOffsetCache).toHaveBeenCalled();
   });
 
+  it("caps refunds at the original snapshotted quantity", async () => {
+    const db = createDb({
+      snapshot: {
+        id: "snapshot-1",
+        lines: [
+          {
+            id: "snapshot-line-1",
+            shopifyLineItemId: "gid://shopify/LineItem/11",
+            quantity: 4,
+            subtotal: decimal("40"),
+            laborCost: decimal("8"),
+            materialCost: decimal("12"),
+            packagingCost: decimal("4"),
+            equipmentCost: decimal("0"),
+            netContribution: decimal("16"),
+            adjustments: [],
+          },
+        ],
+      },
+    });
+
+    const result = await processRefund(
+      "shop-1",
+      {
+        id: 78,
+        order_id: 99,
+        refund_line_items: [{ line_item_id: 11, quantity: 9 }],
+      },
+      db,
+    );
+
+    expect(result).toEqual({ created: 1, skipped: 0 });
+    expect(db.__spies.adjustmentCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          laborAdj: decimal("-8"),
+          materialAdj: decimal("-12"),
+          packagingAdj: decimal("-4"),
+          netContribAdj: decimal("-16"),
+        }),
+      }),
+    );
+  });
+
   it("writes an audit log when the payload contains line items missing from the snapshot", async () => {
     const db = createDb({
       snapshot: {
@@ -284,7 +328,7 @@ describe("createManualAdjustment", () => {
         snapshotLineId: "snapshot-line-1",
         reason: "COGS true-up",
         materialAdj: "3.25",
-        netContribAdj: "-1.50",
+        laborAdj: "1.00",
       },
       db,
     );
@@ -296,11 +340,11 @@ describe("createManualAdjustment", () => {
           type: "manual",
           actor: "merchant",
           reason: "COGS true-up",
-          laborAdj: decimal("0"),
+          laborAdj: decimal("1.00"),
           materialAdj: decimal("3.25"),
           packagingAdj: decimal("0"),
           equipmentAdj: decimal("0"),
-          netContribAdj: decimal("-1.50"),
+          netContribAdj: decimal("-4.25"),
         }),
       }),
     );

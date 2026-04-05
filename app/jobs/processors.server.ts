@@ -13,6 +13,7 @@ const QUEUES = [
   "orders.updated",
   "orders.refund",
   "reconciliation.daily",
+  "reconciliation.shop",
   "shop.delete",
   "webhook.compliance",
   "catalog.sync",
@@ -77,8 +78,38 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     });
 
     for (const shop of shops) {
-      const { admin } = await shopify.unauthenticated.admin(shop.shopId);
-      await runReconciliation(shop.shopId, admin, prisma);
+      await boss.send(
+        "reconciliation.shop",
+        { shopId: shop.shopId },
+        {
+          singletonKey: shop.shopId,
+          singletonSeconds: 6 * 60 * 60,
+        },
+      );
+    }
+  });
+
+  await boss.work<{ shopId: string }>("reconciliation.shop", async (jobs) => {
+    const job = jobs[0];
+    if (!job) return;
+
+    const { shopId } = job.data;
+    try {
+      const { admin } = await shopify.unauthenticated.admin(shopId);
+      await runReconciliation(shopId, admin, prisma);
+    } catch (error) {
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "OrderSnapshot",
+          action: "RECONCILIATION_RUN_FAILED",
+          actor: "system",
+          payload: {
+            message: error instanceof Error ? error.message : "Unknown reconciliation failure",
+          },
+        },
+      });
+      throw error;
     }
   });
 

@@ -30,8 +30,16 @@ function decimal(value: string | number) {
   return new Prisma.Decimal(value);
 }
 
-function createDb({ existingSnapshot = null }: { existingSnapshot?: unknown | null } = {}) {
-  const orderSnapshotCreate = vi.fn().mockResolvedValue({ id: "snapshot-1" });
+function createDb({
+  existingSnapshot = null,
+  orderSnapshotCreateImpl,
+}: {
+  existingSnapshot?: unknown | null;
+  orderSnapshotCreateImpl?: () => unknown;
+} = {}) {
+  const orderSnapshotCreate = orderSnapshotCreateImpl
+    ? vi.fn().mockImplementation(orderSnapshotCreateImpl)
+    : vi.fn().mockResolvedValue({ id: "snapshot-1" });
   const orderSnapshotLineCreate = vi.fn().mockResolvedValue({ id: "snapshot-line-1" });
   const materialLineCreateMany = vi.fn().mockResolvedValue(undefined);
   const equipmentLineCreateMany = vi.fn().mockResolvedValue(undefined);
@@ -240,5 +248,31 @@ describe("createSnapshot", () => {
       }),
     );
     expect(recomputeTaxOffsetCache).toHaveBeenCalled();
+  });
+
+  it("returns the existing snapshot when a concurrent create hits the unique constraint", async () => {
+    const db = createDb({
+      existingSnapshot: null,
+      orderSnapshotCreateImpl: () => {
+        const error = new Error("Unique constraint failed");
+        (error as Error & { code?: string }).code = "P2002";
+        throw error;
+      },
+    });
+    db.orderSnapshot.findFirst = vi
+      .fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: "existing-snapshot" });
+
+    const result = await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/1",
+        line_items: [],
+      },
+      db,
+    );
+
+    expect(result).toEqual({ created: false, snapshotId: "existing-snapshot" });
   });
 });

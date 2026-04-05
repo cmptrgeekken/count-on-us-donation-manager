@@ -152,6 +152,12 @@ export async function createManualAdjustment(
   },
   db: any = prisma,
 ): Promise<{ adjustmentId: string }> {
+  const laborAdj = toDecimal(input.laborAdj);
+  const materialAdj = toDecimal(input.materialAdj);
+  const packagingAdj = toDecimal(input.packagingAdj);
+  const equipmentAdj = toDecimal(input.equipmentAdj);
+  const netContribAdj = laborAdj.add(materialAdj).add(packagingAdj).add(equipmentAdj).neg();
+
   const adjustment = await db.$transaction(async (tx: any) => {
     const snapshotLine = await tx.orderSnapshotLine.findFirst({
       where: {
@@ -172,11 +178,11 @@ export async function createManualAdjustment(
         type: "manual",
         reason: input.reason?.trim() || "Manual adjustment",
         actor: "merchant",
-        laborAdj: toDecimal(input.laborAdj),
-        materialAdj: toDecimal(input.materialAdj),
-        packagingAdj: toDecimal(input.packagingAdj),
-        equipmentAdj: toDecimal(input.equipmentAdj),
-        netContribAdj: toDecimal(input.netContribAdj),
+        laborAdj,
+        materialAdj,
+        packagingAdj,
+        equipmentAdj,
+        netContribAdj,
       },
     });
 
@@ -308,7 +314,7 @@ export async function processRefund(
       continue;
     }
 
-    const refundedQuantity = Math.max(0, Number(refundLine.quantity ?? 0));
+    const refundedQuantity = Math.min(snapshotLine.quantity, Math.max(0, Number(refundLine.quantity ?? 0)));
     if (refundedQuantity <= 0 || snapshotLine.quantity <= 0) {
       skipped += 1;
       continue;

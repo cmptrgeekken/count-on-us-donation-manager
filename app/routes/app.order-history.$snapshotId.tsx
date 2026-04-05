@@ -23,7 +23,6 @@ const manualAdjustmentSchema = z.object({
   materialAdj: decimalField,
   packagingAdj: decimalField,
   equipmentAdj: decimalField,
-  netContribAdj: decimalField,
 });
 
 function sumDecimals(values: Array<Prisma.Decimal | null | undefined>) {
@@ -57,7 +56,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     materialAdj: formData.get("materialAdj")?.toString() ?? "",
     packagingAdj: formData.get("packagingAdj")?.toString() ?? "",
     equipmentAdj: formData.get("equipmentAdj")?.toString() ?? "",
-    netContribAdj: formData.get("netContribAdj")?.toString() ?? "",
   });
 
   if (!parsed.success) {
@@ -65,6 +63,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid manual adjustment." },
       { status: 400 },
     );
+  }
+
+  const snapshotLine = await prisma.orderSnapshotLine.findFirst({
+    where: {
+      id: parsed.data.snapshotLineId,
+      snapshotId,
+      shopId,
+    },
+    select: { id: true },
+  });
+
+  if (!snapshotLine) {
+    return Response.json({ ok: false, message: "Snapshot line not found for this order." }, { status: 404 });
   }
 
   await createManualAdjustment(
@@ -76,7 +87,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       materialAdj: parsed.data.materialAdj,
       packagingAdj: parsed.data.packagingAdj,
       equipmentAdj: parsed.data.equipmentAdj,
-      netContribAdj: parsed.data.netContribAdj,
     },
     prisma,
   );
@@ -118,9 +128,27 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       origin: snapshot.origin,
       createdAt: snapshot.createdAt.toISOString(),
       lines: snapshot.lines.map((line) => {
+        const effectiveLaborCost = line.laborCost.add(
+          sumDecimals(line.adjustments.map((adjustment) => adjustment.laborAdj ?? ZERO)),
+        );
+        const effectiveMaterialCost = line.materialCost.add(
+          sumDecimals(line.adjustments.map((adjustment) => adjustment.materialAdj ?? ZERO)),
+        );
+        const effectivePackagingCost = line.packagingCost.add(
+          sumDecimals(line.adjustments.map((adjustment) => adjustment.packagingAdj ?? ZERO)),
+        );
+        const effectiveEquipmentCost = line.equipmentCost.add(
+          sumDecimals(line.adjustments.map((adjustment) => adjustment.equipmentAdj ?? ZERO)),
+        );
         const effectiveNetContribution = line.netContribution.add(
           sumDecimals(line.adjustments.map((adjustment) => adjustment.netContribAdj ?? ZERO)),
         );
+        const effectiveTotalCost = effectiveLaborCost
+          .add(effectiveMaterialCost)
+          .add(effectivePackagingCost)
+          .add(effectiveEquipmentCost)
+          .add(line.mistakeBufferAmount)
+          .add(line.podCost);
 
         return {
           id: line.id,
@@ -133,9 +161,14 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           materialCost: line.materialCost.toString(),
           packagingCost: line.packagingCost.toString(),
           equipmentCost: line.equipmentCost.toString(),
+          effectiveLaborCost: effectiveLaborCost.toString(),
+          effectiveMaterialCost: effectiveMaterialCost.toString(),
+          effectivePackagingCost: effectivePackagingCost.toString(),
+          effectiveEquipmentCost: effectiveEquipmentCost.toString(),
           podCost: line.podCost.toString(),
           mistakeBufferAmount: line.mistakeBufferAmount.toString(),
           totalCost: line.totalCost.toString(),
+          effectiveTotalCost: effectiveTotalCost.toString(),
           netContribution: line.netContribution.toString(),
           effectiveNetContribution: effectiveNetContribution.toString(),
           laborMinutes: line.laborMinutes?.toString() ?? null,
@@ -276,11 +309,12 @@ export default function OrderSnapshotDetailPage() {
                     gap: "0.75rem",
                   }}
                 >
-                  <SummaryTile label="Labor" value={formatMoney(line.laborCost)} />
-                  <SummaryTile label="Materials" value={formatMoney(line.materialCost)} />
-                  <SummaryTile label="Packaging" value={formatMoney(line.packagingCost)} />
-                  <SummaryTile label="Equipment" value={formatMoney(line.equipmentCost)} />
+                  <SummaryTile label="Labor" value={formatMoney(line.effectiveLaborCost)} />
+                  <SummaryTile label="Materials" value={formatMoney(line.effectiveMaterialCost)} />
+                  <SummaryTile label="Packaging" value={formatMoney(line.effectivePackagingCost)} />
+                  <SummaryTile label="Equipment" value={formatMoney(line.effectiveEquipmentCost)} />
                   <SummaryTile label="Buffer" value={formatMoney(line.mistakeBufferAmount)} />
+                  <SummaryTile label="Effective total cost" value={formatMoney(line.effectiveTotalCost)} />
                   <SummaryTile label="Net contribution" value={formatMoney(line.effectiveNetContribution)} />
                 </div>
 
@@ -451,7 +485,6 @@ export default function OrderSnapshotDetailPage() {
                           { name: "materialAdj", label: "Material adj" },
                           { name: "packagingAdj", label: "Packaging adj" },
                           { name: "equipmentAdj", label: "Equipment adj" },
-                          { name: "netContribAdj", label: "Net contribution adj" },
                         ].map((field) => (
                           <div key={field.name} style={{ display: "grid", gap: "0.35rem" }}>
                             <label htmlFor={`${field.name}-${line.id}`}>{field.label}</label>
