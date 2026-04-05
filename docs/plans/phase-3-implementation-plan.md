@@ -569,13 +569,13 @@ Register in `processors.server.ts`: `reconciliation.daily` queue. Schedule via p
 
 ### Step 12 — Order History page
 
-**`app/routes/app.orders.tsx`** — list
+**`app/routes/app.order-history.tsx`** — list
 
 Loader: `prisma.orderSnapshot.findMany` with include of snapshot lines and aggregated cause allocations. Paginate (50 per page, cursor-based). Filter: `origin` (all / webhook / reconciliation), date range.
 
 UI: `IndexTable` with order number, date, line count, total net contribution, origin badge, POD flags. Clicking a row navigates to detail.
 
-**`app/routes/app.orders.$snapshotId.tsx`** — detail
+**`app/routes/app.order-history.$snapshotId.tsx`** — detail
 
 Loader: full snapshot tree — `OrderSnapshot` → `OrderSnapshotLine[]` → all three child tables → `LineCauseAllocation[]` → `Adjustment[]`.
 
@@ -610,8 +610,8 @@ UI: Order metadata card. Per-line cards showing four category totals with expand
 | `app/routes/app.products.tsx` | New — product list |
 | `app/routes/app.products.$productId.tsx` | New — cause assignment |
 | `app/routes/app.expenses.tsx` | New — Business Expenses |
-| `app/routes/app.orders.tsx` | New — Order History list |
-| `app/routes/app.orders.$snapshotId.tsx` | New — Order History detail |
+| `app/routes/app.order-history.tsx` | New — Order History list |
+| `app/routes/app.order-history.$snapshotId.tsx` | New — Order History detail |
 | `app/routes/app.tsx` | Navigation: add Causes, Products, Orders, Expenses |
 
 ---

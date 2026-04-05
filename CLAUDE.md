@@ -7,7 +7,7 @@ A Shopify embedded app for cause-driven merchants. Tracks per-variant production
 | Layer | Technology |
 |---|---|
 | Framework | Remix (Vite) |
-| UI | React 18, Shopify Polaris v12, App Bridge React v4 |
+| UI | React 18, Shopify Web Components / App Home UI elements |
 | Auth | Shopify OAuth via `@shopify/shopify-app-remix` |
 | Database | PostgreSQL + Prisma 6 |
 | Job Queue | pg-boss |
@@ -24,7 +24,7 @@ npx tsc --noEmit     # type-check without building
 
 ## Architecture Decisions
 
-See [docs/adr/](docs/adr/) for ADRs covering immutable order snapshots (ADR-001), dual-track financial models (ADR-002), cost resolution rules (ADR-003), and more.
+See [docs/adrs/](docs/adrs/) for ADRs covering immutable order snapshots (ADR-001), dual-track financial models (ADR-002), cost resolution rules (ADR-003), and more.
 
 ---
 
@@ -127,25 +127,24 @@ export function ErrorBoundary() {
   const error = useRouteError();
   console.error("[RouteName] ErrorBoundary caught:", error);
   return (
-    <Page>
-      <TitleBar title="Page Title" />
-      <Banner tone="critical">
-        <BlockStack gap="200">
-          <Text as="p" variant="bodyMd" fontWeight="bold">Something went wrong.</Text>
-          <Text as="p" variant="bodyMd">Please refresh the page. If the problem persists, contact support.</Text>
-        </BlockStack>
-      </Banner>
-    </Page>
+    <>
+      <ui-title-bar title="Page Title" />
+      <s-page>
+        <s-banner tone="critical">
+          <s-text>Something went wrong. Please refresh the page.</s-text>
+        </s-banner>
+      </s-page>
+    </>
   );
 }
 ```
 
 ### 8. Shopify UI
 
-- Use Polaris components exclusively. Do not introduce third-party component libraries.
-- All status feedback (success, error) must use a Polaris `Banner` paired with a visually-hidden `aria-live="polite"` region so screen readers announce the result. See `app/routes/app.variants._index.tsx` for the established pattern.
-- Page titles must use `TitleBar` from App Bridge React — do not use the `Page title` prop.
-- Destructive or irreversible actions must be gated behind a confirmation modal using Polaris `Modal` with `destructive: true` on the primary action.
+- Use Shopify Web Components and the established local shims/helpers. Do not introduce third-party component libraries.
+- All status feedback should use `s-banner` paired with a visually-hidden `aria-live="polite"` region so screen readers announce the result.
+- Page titles should use `ui-title-bar`.
+- Destructive or irreversible actions must be gated behind a confirmation dialog or clearly isolated destructive flow.
 
 ### 9. Security
 

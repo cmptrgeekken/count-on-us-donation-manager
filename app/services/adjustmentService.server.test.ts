@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildOrderUpdateSignature,
   buildProportionalAdjustment,
+  createManualAdjustment,
   processOrderUpdate,
   processRefund,
 } from "./adjustmentService.server";
@@ -204,5 +205,112 @@ describe("processOrderUpdate", () => {
       }),
     );
     expect(recomputeTaxOffsetCache).toHaveBeenCalled();
+  });
+
+  it("writes an audit log when the payload contains line items missing from the snapshot", async () => {
+    const db = createDb({
+      snapshot: {
+        id: "snapshot-1",
+        lines: [
+          {
+            id: "snapshot-line-1",
+            shopifyLineItemId: "gid://shopify/LineItem/22",
+            quantity: 2,
+            subtotal: decimal("50"),
+            laborCost: decimal("10"),
+            materialCost: decimal("20"),
+            packagingCost: decimal("5"),
+            equipmentCost: decimal("0"),
+            netContribution: decimal("15"),
+            adjustments: [],
+          },
+        ],
+      },
+    });
+
+    await processOrderUpdate(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/123",
+        subtotal_price: "100.00",
+        line_items: [
+          { id: 22, quantity: 3, price: "25.00" },
+          { id: 99, quantity: 1, price: "25.00" },
+        ],
+      },
+      db,
+    );
+
+    expect(db.__spies.auditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "ORDER_UPDATE_CONTAINS_UNSNAPSHOTTED_LINES",
+          payload: expect.objectContaining({
+            unmatchedPayloadLineCount: 1,
+          }),
+        }),
+      }),
+    );
+  });
+});
+
+describe("createManualAdjustment", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("creates an append-only merchant adjustment and recomputes tax cache", async () => {
+    const adjustmentCreate = vi.fn().mockResolvedValue({ id: "adjustment-1" });
+    const auditLogCreate = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      $transaction: vi.fn().mockImplementation(async (callback: (tx: any) => Promise<unknown>) =>
+        callback({
+          orderSnapshotLine: {
+            findFirst: vi.fn().mockResolvedValue({ id: "snapshot-line-1" }),
+          },
+          adjustment: {
+            create: adjustmentCreate,
+          },
+          auditLog: {
+            create: auditLogCreate,
+          },
+        }),
+      ),
+    };
+
+    const result = await createManualAdjustment(
+      "shop-1",
+      {
+        snapshotLineId: "snapshot-line-1",
+        reason: "COGS true-up",
+        materialAdj: "3.25",
+        netContribAdj: "-1.50",
+      },
+      db,
+    );
+
+    expect(result).toEqual({ adjustmentId: "adjustment-1" });
+    expect(adjustmentCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          type: "manual",
+          actor: "merchant",
+          reason: "COGS true-up",
+          laborAdj: decimal("0"),
+          materialAdj: decimal("3.25"),
+          packagingAdj: decimal("0"),
+          equipmentAdj: decimal("0"),
+          netContribAdj: decimal("-1.50"),
+        }),
+      }),
+    );
+    expect(recomputeTaxOffsetCache).toHaveBeenCalled();
+    expect(auditLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "MANUAL_ADJUSTMENT_CREATED",
+        }),
+      }),
+    );
   });
 });

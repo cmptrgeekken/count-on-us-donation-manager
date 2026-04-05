@@ -5,8 +5,8 @@ Use this document as the practical snapshot of what is implemented in the repo t
 This file is intentionally lightweight and operational. It should summarize reality, not restate full product requirements or phase specs.
 
 **Project:** Count On Us  
-**Date:** April 4, 2026  
-**Summary:** Phase 1 and Phase 2 are complete. The pre-Phase-3 hardening pass is complete, including the Polaris Web Components migration and the first Playwright workflow coverage. The project is now preparing to begin Phase 3 implementation.
+**Date:** April 5, 2026  
+**Summary:** Phase 1 and Phase 2 are complete. Phase 3 is actively in progress on the implementation branch, including the schema foundation, causes/products/expenses, snapshot and adjustment services, reconciliation, and the first Order History admin surface.
 
 ---
 
@@ -14,8 +14,8 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Phase 3 preparation and kickoff planning
-- **Phase 3:** Not yet started in substantive backend/data-model terms
+- **Current focus:** Phase 3 implementation
+- **Phase 3:** In progress
 
 ---
 
@@ -81,27 +81,21 @@ This file is intentionally lightweight and operational. It should summarize real
 - [x] Add automated tests for CostEngine regressions and critical UI workflows
 - [x] Reconcile docs and code before starting Phase 3 implementation
 
-## Phase 3 Readiness Notes
-
-- Shopify scopes already include `read_orders`, `read_metaobjects`, `write_metaobjects`, and `write_products`.
-- `shopify.app.toml` does not yet include the Phase 3 order webhook subscriptions for `orders/create`, `orders/updated`, and `refunds/create`.
-- Phase 3 placeholder routes already exist for `Causes`, `Products`, `Expenses`, and `Order History`, but substantive backend/data-model work has not begun.
-- Prisma schema is still Phase 2 only; no causes, snapshots, adjustments, business expenses, or tax-offset models exist yet.
-
----
-
 ## Phase 3 Checklist
 
-- [ ] Cause schema and metaobject sync
-- [ ] Product cause assignment
-- [ ] Snapshot schema
-- [ ] Snapshot service
-- [ ] Refund/adjustment service
-- [ ] Tax offset cache
-- [ ] Business expenses
-- [ ] Reconciliation job
-- [ ] Order history pages
-- [ ] Real `orders/create`, `orders/updated`, and `refunds/create` processing
+- [x] Cause schema and metaobject sync
+- [x] Product cause assignment
+- [x] Snapshot schema
+- [x] Snapshot service
+- [x] Refund/adjustment service
+- [x] Tax offset cache
+- [x] Business expenses
+- [x] Reconciliation job
+- [x] Order history pages
+- [x] Real `orders/create`, `orders/updated`, and `refunds/create` processing
+- [ ] Manual adjustment admin flow polish
+- [ ] Order History filtering/pagination polish
+- [ ] Additional Playwright coverage for new Phase 3 admin workflows
 
 ---
 

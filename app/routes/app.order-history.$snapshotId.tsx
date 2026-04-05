@@ -1,15 +1,88 @@
-import type { LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useRouteError } from "@remix-run/react";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "../db.server";
+import { createManualAdjustment } from "../services/adjustmentService.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const ZERO = new Prisma.Decimal(0);
 
+const decimalField = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value) => value ?? "")
+  .refine((value) => value === "" || !Number.isNaN(Number(value)), "Adjustments must be valid decimal values.");
+
+const manualAdjustmentSchema = z.object({
+  snapshotLineId: z.string().trim().min(1, "Snapshot line is required."),
+  reason: z.string().trim().optional(),
+  laborAdj: decimalField,
+  materialAdj: decimalField,
+  packagingAdj: decimalField,
+  equipmentAdj: decimalField,
+  netContribAdj: decimalField,
+});
+
 function sumDecimals(values: Array<Prisma.Decimal | null | undefined>) {
   return values.reduce<Prisma.Decimal>((sum, value) => sum.add(value ?? ZERO), ZERO);
 }
+
+export const action = async ({ request, params }: ActionFunctionArgs) => {
+  const { session } = await authenticateAdminRequest(request);
+  const shopId = session.shop;
+  const snapshotId = params.snapshotId ?? "";
+  const formData = await request.formData();
+  const intent = formData.get("intent")?.toString();
+
+  if (intent !== "create-manual-adjustment") {
+    return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  }
+
+  const snapshot = await prisma.orderSnapshot.findFirst({
+    where: { id: snapshotId, shopId },
+    select: { id: true },
+  });
+
+  if (!snapshot) {
+    return Response.json({ ok: false, message: "Snapshot not found." }, { status: 404 });
+  }
+
+  const parsed = manualAdjustmentSchema.safeParse({
+    snapshotLineId: formData.get("snapshotLineId")?.toString() ?? "",
+    reason: formData.get("reason")?.toString() ?? "",
+    laborAdj: formData.get("laborAdj")?.toString() ?? "",
+    materialAdj: formData.get("materialAdj")?.toString() ?? "",
+    packagingAdj: formData.get("packagingAdj")?.toString() ?? "",
+    equipmentAdj: formData.get("equipmentAdj")?.toString() ?? "",
+    netContribAdj: formData.get("netContribAdj")?.toString() ?? "",
+  });
+
+  if (!parsed.success) {
+    return Response.json(
+      { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid manual adjustment." },
+      { status: 400 },
+    );
+  }
+
+  await createManualAdjustment(
+    shopId,
+    {
+      snapshotLineId: parsed.data.snapshotLineId,
+      reason: parsed.data.reason,
+      laborAdj: parsed.data.laborAdj,
+      materialAdj: parsed.data.materialAdj,
+      packagingAdj: parsed.data.packagingAdj,
+      equipmentAdj: parsed.data.equipmentAdj,
+      netContribAdj: parsed.data.netContribAdj,
+    },
+    prisma,
+  );
+
+  return Response.json({ ok: true, message: "Manual adjustment created." });
+};
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -85,6 +158,13 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
             uses: equipmentLine.uses?.toString() ?? null,
             lineCost: equipmentLine.lineCost.toString(),
           })),
+          podLines: line.podLines.map((podLine) => ({
+            id: podLine.id,
+            provider: podLine.provider,
+            costLineType: podLine.costLineType,
+            description: podLine.description,
+            amount: podLine.amount.toString(),
+          })),
           causeAllocations: line.causeAllocations.map((allocation) => ({
             id: allocation.id,
             causeName: allocation.causeName,
@@ -128,6 +208,7 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
 
 export default function OrderSnapshotDetailPage() {
   const { snapshot } = useLoaderData<typeof loader>();
+  const adjustmentFetcher = useFetcher<{ ok: boolean; message: string }>();
   const { formatMoney } = useAppLocalization();
   const effectiveNetContributionTotal = snapshot.lines.reduce(
     (sum: Prisma.Decimal, line: (typeof snapshot.lines)[number]) =>
@@ -140,9 +221,15 @@ export default function OrderSnapshotDetailPage() {
       <ui-title-bar title={`Order ${snapshot.orderNumber}`} />
 
       <s-page>
+        {adjustmentFetcher.data ? (
+          <s-banner tone={adjustmentFetcher.data.ok ? "success" : "critical"}>
+            <s-text>{adjustmentFetcher.data.message}</s-text>
+          </s-banner>
+        ) : null}
+
         <s-section heading="Snapshot metadata">
           <div style={{ display: "grid", gap: "1rem" }}>
-            <a href="/app/order-history">← Back to Order History</a>
+            <a href="/app/order-history">Back to Order History</a>
 
             <div
               style={{
@@ -210,7 +297,10 @@ export default function OrderSnapshotDetailPage() {
                       <s-text color="subdued">No material lines captured.</s-text>
                     ) : (
                       line.materialLines.map((materialLine: (typeof line.materialLines)[number]) => (
-                        <div key={materialLine.id} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+                        <div
+                          key={materialLine.id}
+                          style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}
+                        >
                           <span>
                             {materialLine.materialName} · {materialLine.materialType}
                           </span>
@@ -232,7 +322,10 @@ export default function OrderSnapshotDetailPage() {
                       <s-text color="subdued">No equipment lines captured.</s-text>
                     ) : (
                       line.equipmentLines.map((equipmentLine: (typeof line.equipmentLines)[number]) => (
-                        <div key={equipmentLine.id} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+                        <div
+                          key={equipmentLine.id}
+                          style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}
+                        >
                           <span>{equipmentLine.equipmentName}</span>
                           <span>
                             {equipmentLine.minutes ? `Minutes ${equipmentLine.minutes}` : ""}
@@ -247,13 +340,37 @@ export default function OrderSnapshotDetailPage() {
                 </details>
 
                 <details>
+                  <summary>POD lines ({line.podLines.length})</summary>
+                  <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
+                    {line.podLines.length === 0 ? (
+                      <s-text color="subdued">No POD lines captured.</s-text>
+                    ) : (
+                      line.podLines.map((podLine: (typeof line.podLines)[number]) => (
+                        <div
+                          key={podLine.id}
+                          style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}
+                        >
+                          <span>
+                            {podLine.provider} · {podLine.costLineType} · {podLine.description}
+                          </span>
+                          <span>{formatMoney(podLine.amount)}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </details>
+
+                <details>
                   <summary>Cause allocations ({line.causeAllocations.length})</summary>
                   <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
                     {line.causeAllocations.length === 0 ? (
                       <s-text color="subdued">No cause allocations for this line.</s-text>
                     ) : (
                       line.causeAllocations.map((allocation: (typeof line.causeAllocations)[number]) => (
-                        <div key={allocation.id} style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+                        <div
+                          key={allocation.id}
+                          style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}
+                        >
                           <span>
                             {allocation.causeName}
                             {allocation.is501c3 ? " · 501(c)(3)" : ""}
@@ -272,8 +389,23 @@ export default function OrderSnapshotDetailPage() {
                       <s-text color="subdued">No adjustments recorded yet.</s-text>
                     ) : (
                       line.adjustments.map((adjustment: (typeof line.adjustments)[number]) => (
-                        <div key={adjustment.id} style={{ border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "0.75rem", padding: "0.75rem", display: "grid", gap: "0.35rem" }}>
-                          <strong>{adjustment.type === "refund" ? "Refund" : "Order update"}</strong>
+                        <div
+                          key={adjustment.id}
+                          style={{
+                            border: "1px solid var(--p-color-border, #d2d5d8)",
+                            borderRadius: "0.75rem",
+                            padding: "0.75rem",
+                            display: "grid",
+                            gap: "0.35rem",
+                          }}
+                        >
+                          <strong>
+                            {adjustment.type === "refund"
+                              ? "Refund"
+                              : adjustment.reason === "orders/updated webhook"
+                                ? "Order update"
+                                : "Manual adjustment"}
+                          </strong>
                           <s-text color="subdued">{new Date(adjustment.createdAt).toLocaleString()}</s-text>
                           {adjustment.reason ? <s-text>{adjustment.reason}</s-text> : null}
                           <s-text>
@@ -282,6 +414,74 @@ export default function OrderSnapshotDetailPage() {
                         </div>
                       ))
                     )}
+
+                    <adjustmentFetcher.Form method="post" style={{ display: "grid", gap: "0.75rem" }}>
+                      <input type="hidden" name="intent" value="create-manual-adjustment" />
+                      <input type="hidden" name="snapshotLineId" value={line.id} />
+
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor={`reason-${line.id}`}>Reason</label>
+                        <input
+                          id={`reason-${line.id}`}
+                          name="reason"
+                          type="text"
+                          placeholder="e.g. Inventory true-up"
+                          style={{
+                            width: "100%",
+                            boxSizing: "border-box",
+                            padding: "0.75rem",
+                            borderRadius: "0.75rem",
+                            border: "1px solid var(--p-color-border, #d2d5d8)",
+                            background: "var(--p-color-bg-surface, #fff)",
+                            color: "var(--p-color-text, #303030)",
+                            font: "inherit",
+                          }}
+                        />
+                      </div>
+
+                      <div
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                          gap: "0.75rem",
+                        }}
+                      >
+                        {[
+                          { name: "laborAdj", label: "Labor adj" },
+                          { name: "materialAdj", label: "Material adj" },
+                          { name: "packagingAdj", label: "Packaging adj" },
+                          { name: "equipmentAdj", label: "Equipment adj" },
+                          { name: "netContribAdj", label: "Net contribution adj" },
+                        ].map((field) => (
+                          <div key={field.name} style={{ display: "grid", gap: "0.35rem" }}>
+                            <label htmlFor={`${field.name}-${line.id}`}>{field.label}</label>
+                            <input
+                              id={`${field.name}-${line.id}`}
+                              name={field.name}
+                              type="number"
+                              step="0.01"
+                              defaultValue="0"
+                              style={{
+                                width: "100%",
+                                boxSizing: "border-box",
+                                padding: "0.75rem",
+                                borderRadius: "0.75rem",
+                                border: "1px solid var(--p-color-border, #d2d5d8)",
+                                background: "var(--p-color-bg-surface, #fff)",
+                                color: "var(--p-color-text, #303030)",
+                                font: "inherit",
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+
+                      <div>
+                        <s-button type="submit" variant="secondary" disabled={adjustmentFetcher.state !== "idle"}>
+                          Add manual adjustment
+                        </s-button>
+                      </div>
+                    </adjustmentFetcher.Form>
                   </div>
                 </details>
               </div>

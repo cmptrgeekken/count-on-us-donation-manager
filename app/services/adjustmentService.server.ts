@@ -139,6 +139,68 @@ export function buildProportionalAdjustment(
   };
 }
 
+export async function createManualAdjustment(
+  shopId: string,
+  input: {
+    snapshotLineId: string;
+    reason?: string | null;
+    laborAdj?: string | number | Prisma.Decimal | null;
+    materialAdj?: string | number | Prisma.Decimal | null;
+    packagingAdj?: string | number | Prisma.Decimal | null;
+    equipmentAdj?: string | number | Prisma.Decimal | null;
+    netContribAdj?: string | number | Prisma.Decimal | null;
+  },
+  db: any = prisma,
+): Promise<{ adjustmentId: string }> {
+  const adjustment = await db.$transaction(async (tx: any) => {
+    const snapshotLine = await tx.orderSnapshotLine.findFirst({
+      where: {
+        id: input.snapshotLineId,
+        shopId,
+      },
+      select: { id: true },
+    });
+
+    if (!snapshotLine) {
+      throw new Error("Snapshot line not found.");
+    }
+
+    const created = await tx.adjustment.create({
+      data: {
+        shopId,
+        snapshotLineId: input.snapshotLineId,
+        type: "manual",
+        reason: input.reason?.trim() || "Manual adjustment",
+        actor: "merchant",
+        laborAdj: toDecimal(input.laborAdj),
+        materialAdj: toDecimal(input.materialAdj),
+        packagingAdj: toDecimal(input.packagingAdj),
+        equipmentAdj: toDecimal(input.equipmentAdj),
+        netContribAdj: toDecimal(input.netContribAdj),
+      },
+    });
+
+    await recomputeTaxOffsetCache(shopId, tx);
+
+    await tx.auditLog.create({
+      data: {
+        shopId,
+        entity: "Adjustment",
+        entityId: created.id,
+        action: "MANUAL_ADJUSTMENT_CREATED",
+        actor: "merchant",
+        payload: {
+          snapshotLineId: input.snapshotLineId,
+        },
+      },
+    });
+
+    return created;
+  });
+
+  return { adjustmentId: adjustment.id };
+}
+
 export function buildOrderUpdateSignature(order: ShopifyOrderPayload) {
   const orderId = normaliseStringId(order.admin_graphql_api_id) ?? "unknown-order";
   const lineSignature = (order.line_items ?? [])
@@ -424,6 +486,20 @@ export async function processOrderUpdate(
     return { created: 0, skipped: 0 };
   }
 
+  const unmatchedPayloadLineCount = (orderPayload.line_items ?? []).filter((lineItem) => {
+    const identifiers = buildLineItemIdentifiers(lineItem);
+    return [...identifiers].every((identifier) => {
+      const matchingSnapshotLine = (snapshot.lines as SnapshotLineWithAdjustments[]).find((line) => {
+        const lineIdentifiers = buildLineItemIdentifiers({
+          id: line.shopifyLineItemId,
+          admin_graphql_api_id: line.shopifyLineItemId,
+        });
+        return lineIdentifiers.has(identifier);
+      });
+      return !matchingSnapshotLine;
+    });
+  }).length;
+
   await db.$transaction(async (tx: any) => {
     for (const adjustment of adjustmentsToCreate) {
       await tx.adjustment.create({
@@ -457,6 +533,22 @@ export async function processOrderUpdate(
         },
       },
     });
+
+    if (unmatchedPayloadLineCount > 0) {
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "OrderSnapshot",
+          entityId: shopifyOrderId,
+          action: "ORDER_UPDATE_CONTAINS_UNSNAPSHOTTED_LINES",
+          actor: "webhook",
+          payload: {
+            unmatchedPayloadLineCount,
+            note: "New order line items cannot yet be represented as adjustments.",
+          },
+        },
+      });
+    }
   });
 
   return { created: adjustmentsToCreate.length, skipped: 0 };
