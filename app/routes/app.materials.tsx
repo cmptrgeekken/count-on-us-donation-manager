@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { z } from "zod";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
+
+const materialFormSchema = z.object({
+  name: z.string().trim().min(1, "Name is required."),
+  type: z.enum(["production", "shipping"]),
+  costingModel: z.enum(["yield", "uses"]),
+  purchaseLink: z.union([z.literal(""), z.string().url("Purchase link must be a valid URL.")]),
+});
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -28,6 +36,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       purchaseQty: m.purchaseQty.toString(),
       perUnitCost: m.perUnitCost.toString(),
       totalUsesPerUnit: m.totalUsesPerUnit?.toString() ?? null,
+      purchaseLink: m.purchaseLink ?? "",
+      weightGrams: m.weightGrams?.toString() ?? "",
       unitDescription: m.unitDescription ?? "",
       status: m.status,
       notes: m.notes ?? "",
@@ -45,22 +55,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent")?.toString();
 
   if (intent === "create" || intent === "update") {
-    const name = formData.get("name")?.toString().trim() ?? "";
-    const type = formData.get("type")?.toString() ?? "production";
-    const rawCostingModel = formData.get("costingModel")?.toString() ?? "yield";
-    const costingModel = rawCostingModel === "uses" ? "uses" : "yield";
+    const parsed = materialFormSchema.safeParse({
+      name: formData.get("name")?.toString() ?? "",
+      type: formData.get("type")?.toString() ?? "production",
+      costingModel: formData.get("costingModel")?.toString() ?? "yield",
+      purchaseLink: formData.get("purchaseLink")?.toString().trim() ?? "",
+    });
+    if (!parsed.success) {
+      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid material." }, { status: 400 });
+    }
+
+    const { name, type, costingModel } = parsed.data;
     const purchasePrice = parseFloat(formData.get("purchasePrice")?.toString() ?? "0");
     const purchaseQty = parseFloat(formData.get("purchaseQty")?.toString() ?? "1");
     const totalUsesPerUnit =
       costingModel === "uses"
         ? parseFloat(formData.get("totalUsesPerUnit")?.toString() ?? "0")
         : null;
+    const weightGramsRaw = formData.get("weightGrams")?.toString().trim() ?? "";
+    const weightGrams = weightGramsRaw ? parseFloat(weightGramsRaw) : null;
+    const purchaseLink = parsed.data.purchaseLink.trim() || null;
     const unitDescription = formData.get("unitDescription")?.toString().trim() || null;
     const notes = formData.get("notes")?.toString().trim() || null;
 
-    if (!name) {
-      return Response.json({ ok: false, message: "Name is required." }, { status: 400 });
-    }
     if (isNaN(purchasePrice) || purchasePrice <= 0) {
       return Response.json({ ok: false, message: "Purchase price must be greater than 0." }, { status: 400 });
     }
@@ -76,6 +93,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         { status: 400 },
       );
     }
+    if (weightGramsRaw && (weightGrams === null || isNaN(weightGrams) || weightGrams <= 0)) {
+      return Response.json({ ok: false, message: "Material weight must be greater than 0 grams." }, { status: 400 });
+    }
 
     const perUnitCost = purchasePrice / purchaseQty;
     const data = {
@@ -87,6 +107,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       purchaseQty,
       perUnitCost,
       totalUsesPerUnit,
+      purchaseLink,
+      weightGrams,
       unitDescription,
       notes,
     };
@@ -150,6 +172,8 @@ type Material = {
   purchaseQty: string;
   perUnitCost: string;
   totalUsesPerUnit: string | null;
+  purchaseLink: string;
+  weightGrams: string;
   unitDescription: string;
   status: string;
   notes: string;
@@ -165,6 +189,8 @@ const EMPTY_FORM = {
   purchasePrice: "",
   purchaseQty: "",
   totalUsesPerUnit: "",
+  purchaseLink: "",
+  weightGrams: "",
   unitDescription: "",
   notes: "",
 };
@@ -217,6 +243,8 @@ export default function MaterialsPage() {
       purchasePrice: material.purchasePrice,
       purchaseQty: material.purchaseQty,
       totalUsesPerUnit: material.totalUsesPerUnit ?? "",
+      purchaseLink: material.purchaseLink,
+      weightGrams: material.weightGrams,
       unitDescription: material.unitDescription,
       notes: material.notes,
     });
@@ -310,6 +338,8 @@ export default function MaterialsPage() {
                 <s-table-header listSlot="inline">Type</s-table-header>
                 <s-table-header listSlot="labeled">Costing model</s-table-header>
                 <s-table-header listSlot="labeled" format="currency">Per-unit cost</s-table-header>
+                <s-table-header listSlot="labeled">Weight</s-table-header>
+                <s-table-header listSlot="labeled">Purchase link</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Used by</s-table-header>
                 <s-table-header listSlot="inline">Status</s-table-header>
                 <s-table-header>Actions</s-table-header>
@@ -328,6 +358,14 @@ export default function MaterialsPage() {
                           : "Flat per unit"}
                     </s-table-cell>
                     <s-table-cell>{formatMoney(material.perUnitCost)}</s-table-cell>
+                    <s-table-cell>{material.weightGrams ? `${material.weightGrams} g` : "—"}</s-table-cell>
+                    <s-table-cell>
+                      {material.purchaseLink ? (
+                        <a href={material.purchaseLink} target="_blank" rel="noreferrer">
+                          Open
+                        </a>
+                      ) : "—"}
+                    </s-table-cell>
                     <s-table-cell>{material.templateCount + material.variantCount} uses</s-table-cell>
                     <s-table-cell>
                       <s-badge tone={material.status === "active" ? "success" : "enabled"}>
@@ -503,6 +541,35 @@ export default function MaterialsPage() {
             details="Optional, e.g. metres, grams, sheets."
           />
 
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: "1rem",
+            }}
+          >
+            <s-text-field
+              label="Material purchase link"
+              type="url"
+              value={form.purchaseLink}
+              onChange={(event) =>
+                updateForm("purchaseLink", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              details="Optional. Use a supplier URL merchants can open directly from the library."
+            />
+            <s-text-field
+              label="Material weight (g)"
+              type="number"
+              min={0}
+              step={0.001}
+              value={form.weightGrams}
+              onChange={(event) =>
+                updateForm("weightGrams", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              details="Optional. Store a canonical gram value for purchasing and future shipping logic."
+            />
+          </div>
+
           <div style={{ display: "grid", gap: "0.35rem" }}>
             <label htmlFor="material-notes">Notes</label>
             <textarea
@@ -541,6 +608,8 @@ export default function MaterialsPage() {
                 if (form.costingModel === "uses") {
                   fd.append("totalUsesPerUnit", form.totalUsesPerUnit);
                 }
+                fd.append("purchaseLink", form.purchaseLink);
+                fd.append("weightGrams", form.weightGrams);
                 fd.append("unitDescription", form.unitDescription);
                 fd.append("notes", form.notes);
                 fetcher.submit(fd, { method: "post" });

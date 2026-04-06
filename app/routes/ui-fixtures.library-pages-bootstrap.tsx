@@ -15,12 +15,53 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     create: { shopId, shopifyDomain, currency: "USD" },
   });
 
-  await prisma.materialLibraryItem.deleteMany({
+  await prisma.costTemplate.deleteMany({
     where: {
       shopId,
       name: {
-        startsWith: "Playwright Material UI",
+        startsWith: "Playwright Template UI",
       },
+    },
+  });
+
+  const materialFixtureIds = (
+    await prisma.materialLibraryItem.findMany({
+      where: {
+        shopId,
+        OR: [
+          {
+            name: {
+              startsWith: "Playwright Material UI",
+            },
+          },
+          { name: "Fixture Laminate" },
+        ],
+      },
+      select: { id: true },
+    })
+  ).map((material) => material.id);
+
+  if (materialFixtureIds.length > 0) {
+    await prisma.costTemplateMaterialLine.deleteMany({
+      where: { materialId: { in: materialFixtureIds } },
+    });
+
+    await prisma.variantMaterialLine.deleteMany({
+      where: { shopId, materialId: { in: materialFixtureIds } },
+    });
+  }
+
+  await prisma.materialLibraryItem.deleteMany({
+    where: {
+      shopId,
+      OR: [
+        {
+          name: {
+            startsWith: "Playwright Material UI",
+          },
+        },
+        { name: "Fixture Laminate" },
+      ],
     },
   });
 
@@ -33,12 +74,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  await prisma.costTemplate.deleteMany({
-    where: {
+  await prisma.materialLibraryItem.create({
+    data: {
       shopId,
-      name: {
-        startsWith: "Playwright Template UI",
-      },
+      name: "Fixture Laminate",
+      type: "production",
+      costingModel: "yield",
+      purchasePrice: "12.00",
+      purchaseQty: "1.00",
+      perUnitCost: "12.000000",
+      totalUsesPerUnit: null,
+      purchaseLink: "https://example.com/fixture-laminate",
+      weightGrams: "250.000",
+      status: "active",
+      notes: null,
     },
   });
 
