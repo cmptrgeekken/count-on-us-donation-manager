@@ -113,15 +113,17 @@ model MaterialLibraryItem {
 }
 
 model EquipmentLibraryItem {
-  id         String   @id @default(cuid())
-  shopId     String
-  name       String
-  hourlyRate Decimal? @db.Decimal(10, 4)
-  perUseCost Decimal? @db.Decimal(10, 4)
-  status     String   @default("active")
-  notes      String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id            String   @id @default(cuid())
+  shopId        String
+  name          String
+  hourlyRate    Decimal? @db.Decimal(10, 4)
+  perUseCost    Decimal? @db.Decimal(10, 4)
+  purchaseLink  String?
+  equipmentCost Decimal? @db.Decimal(10, 2)
+  status        String   @default("active")
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   templateLines CostTemplateEquipmentLine[]
   variantLines  VariantEquipmentLine[]

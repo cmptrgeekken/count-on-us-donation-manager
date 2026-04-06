@@ -16,10 +16,10 @@ const causeSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   legalName: z.string().trim().optional(),
   description: z.string().trim().optional(),
-  iconUrl: z.union([z.literal(""), z.string().url("Icon URL must be a valid URL.")]).optional(),
-  donationLink: z.union([z.literal(""), z.string().url("Donation link must be a valid URL.")]).optional(),
-  websiteUrl: z.union([z.literal(""), z.string().url("Website URL must be a valid URL.")]).optional(),
-  instagramUrl: z.union([z.literal(""), z.string().url("Instagram URL must be a valid URL.")]).optional(),
+  iconUrl: z.union([z.literal(""), z.url({ message: "Icon URL must be a valid URL." })]).optional(),
+  donationLink: z.union([z.literal(""), z.url({ message: "Donation link must be a valid URL." })]).optional(),
+  websiteUrl: z.union([z.literal(""), z.url({ message: "Website URL must be a valid URL." })]).optional(),
+  instagramUrl: z.union([z.literal(""), z.url({ message: "Instagram URL must be a valid URL." })]).optional(),
   is501c3: z.boolean(),
 });
 
