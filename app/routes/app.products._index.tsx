@@ -1,5 +1,5 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, useLoaderData, useRouteError } from "@remix-run/react";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 
@@ -89,8 +89,8 @@ export default function ProductsPage() {
                       </s-badge>
                     </s-table-cell>
                     <s-table-cell>
-                      <a
-                        href={`/app/products/${product.id}`}
+                      <Link
+                        to={`/app/products/${product.id}`}
                         style={{
                           display: "inline-flex",
                           alignItems: "center",
@@ -104,7 +104,7 @@ export default function ProductsPage() {
                         }}
                       >
                         Manage donations
-                      </a>
+                      </Link>
                     </s-table-cell>
                   </s-table-row>
                 ))}

@@ -37,6 +37,22 @@ export default function App() {
           href="https://cdn.shopify.com/static/fonts/inter/v4/styles.css"
         />
         <script src="https://cdn.shopify.com/shopifycloud/polaris.js"></script>
+        <style>{`
+          input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),
+          textarea,
+          select {
+            box-sizing: border-box;
+            border-radius: 0.75rem;
+            border: 1px solid var(--p-color-border, #d2d5d8);
+            background: var(--p-color-bg-surface, #fff);
+            color: var(--p-color-text, #303030);
+            font: inherit;
+          }
+
+          textarea {
+            resize: vertical;
+          }
+        `}</style>
         <Meta />
         <Links />
       </head>

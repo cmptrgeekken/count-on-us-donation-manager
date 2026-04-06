@@ -1,6 +1,7 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
+import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
@@ -142,8 +143,8 @@ function FilterLink({
   });
 
   return (
-    <a
-      href={href}
+    <Link
+      to={href}
       style={{
         padding: "0.55rem 0.9rem",
         borderRadius: "999px",
@@ -155,13 +156,32 @@ function FilterLink({
       }}
     >
       {label}
-    </a>
+    </Link>
   );
 }
 
 export default function OrderHistoryPage() {
   const { origin, startDate, endDate, nextCursor, snapshots } = useLoaderData<typeof loader>();
   const { formatMoney } = useAppLocalization();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+
+  function applyDateFilters(form: HTMLFormElement) {
+    const formData = new FormData(form);
+    const params = new URLSearchParams(searchParams);
+    const nextStartDate = normaliseDate(formData.get("startDate")?.toString() ?? "");
+    const nextEndDate = normaliseDate(formData.get("endDate")?.toString() ?? "");
+
+    params.delete("cursor");
+
+    if (nextStartDate) params.set("startDate", nextStartDate);
+    else params.delete("startDate");
+
+    if (nextEndDate) params.set("endDate", nextEndDate);
+    else params.delete("endDate");
+
+    navigate(`?${params.toString()}`);
+  }
 
   return (
     <>
@@ -170,6 +190,7 @@ export default function OrderHistoryPage() {
       <s-page>
         <s-section heading="Snapshots">
           <div style={{ display: "grid", gap: "1rem" }}>
+            <HelpText>Order History shows immutable financial snapshots captured at order time or later reconciliation. Net contribution here means revenue remaining after resolved production costs for the order lines.</HelpText>
             <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
               <strong>Origin filter</strong>
               <FilterLink currentOrigin={origin} targetOrigin="all" label="All" startDate={startDate} endDate={endDate} />
@@ -183,7 +204,14 @@ export default function OrderHistoryPage() {
               />
             </div>
 
-            <form method="get" style={{ display: "grid", gap: "0.75rem" }}>
+            <form
+              method="get"
+              style={{ display: "grid", gap: "0.75rem" }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                applyDateFilters(event.currentTarget);
+              }}
+            >
               {origin !== "all" ? <input type="hidden" name="origin" value={origin} /> : null}
               <div
                 style={{
@@ -195,6 +223,7 @@ export default function OrderHistoryPage() {
               >
                 <label style={{ display: "grid", gap: "0.35rem" }}>
                   <span>Start date</span>
+                  <HelpText>Show snapshots created on or after this UTC date.</HelpText>
                   <input
                     type="date"
                     name="startDate"
@@ -210,6 +239,7 @@ export default function OrderHistoryPage() {
                 </label>
                 <label style={{ display: "grid", gap: "0.35rem" }}>
                   <span>End date</span>
+                  <HelpText>Show snapshots created on or before this UTC date.</HelpText>
                   <input
                     type="date"
                     name="endDate"
@@ -227,9 +257,9 @@ export default function OrderHistoryPage() {
                   <s-button type="submit" variant="secondary">
                     Apply dates
                   </s-button>
-                  <a href={buildOrderHistoryHref({ origin })} style={{ alignSelf: "center" }}>
+                  <Link to={buildOrderHistoryHref({ origin })} style={{ alignSelf: "center" }}>
                     Clear dates
-                  </a>
+                  </Link>
                 </div>
               </div>
             </form>
@@ -263,7 +293,7 @@ export default function OrderHistoryPage() {
                       <s-table-cell>{snapshot.adjustmentCount}</s-table-cell>
                       <s-table-cell>{formatMoney(snapshot.totalNetContribution)}</s-table-cell>
                       <s-table-cell>
-                        <a href={`/app/order-history/${snapshot.id}`}>View</a>
+                        <Link to={`/app/order-history/${snapshot.id}`}>View</Link>
                       </s-table-cell>
                     </s-table-row>
                   ))}
@@ -273,8 +303,8 @@ export default function OrderHistoryPage() {
 
             {nextCursor ? (
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <a
-                  href={buildOrderHistoryHref({
+                <Link
+                  to={buildOrderHistoryHref({
                     origin,
                     startDate,
                     endDate,
@@ -282,7 +312,7 @@ export default function OrderHistoryPage() {
                   })}
                 >
                   Next page
-                </a>
+                </Link>
               </div>
             ) : null}
           </div>

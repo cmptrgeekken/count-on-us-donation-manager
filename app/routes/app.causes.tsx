@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { z } from "zod";
+import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import {
   createCauseMetaobject,
@@ -55,6 +56,12 @@ type CauseRecord = {
   status: string;
   metaobjectId: string | null;
   assignmentCount: number;
+};
+
+type CauseActionData = {
+  ok: boolean;
+  message: string;
+  fieldErrors?: Partial<Record<keyof Omit<CauseFormState, "id">, string[]>>;
 };
 
 const EMPTY_FORM: CauseFormState = {
@@ -126,7 +133,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (!parsed.success) {
       return Response.json(
-        { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid cause details." },
+        {
+          ok: false,
+          message: parsed.error.issues[0]?.message ?? "Invalid cause details.",
+          fieldErrors: parsed.error.flatten().fieldErrors,
+        },
         { status: 400 },
       );
     }
@@ -445,7 +456,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function CausesPage() {
   const { causes } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const fetcher = useFetcher<CauseActionData>();
   const causeDialogRef = useRef<HTMLDialogElement>(null);
   const deactivateDialogRef = useRef<HTMLDialogElement>(null);
 
@@ -453,6 +464,7 @@ export default function CausesPage() {
   const [causeDialogOpen, setCauseDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
   const [deactivateTarget, setDeactivateTarget] = useState<CauseRecord | null>(null);
+  const [lastSubmittedIntent, setLastSubmittedIntent] = useState<string | null>(null);
 
   useEffect(() => {
     const dialog = causeDialogRef.current;
@@ -500,23 +512,52 @@ export default function CausesPage() {
     setCauseDialogOpen(true);
   }
 
-  function closeCauseDialog() {
+  const closeCauseDialog = useCallback(() => {
     setCauseDialogOpen(false);
     setForm(EMPTY_FORM);
-  }
+    if (lastSubmittedIntent === "create" || lastSubmittedIntent === "update") {
+      setLastSubmittedIntent(null);
+    }
+  }, [lastSubmittedIntent]);
 
   function confirmDeactivate(cause: CauseRecord) {
     setDeactivateTarget(cause);
     setDeactivateDialogOpen(true);
   }
 
-  function closeDeactivateDialog() {
+  const closeDeactivateDialog = useCallback(() => {
     setDeactivateDialogOpen(false);
     setDeactivateTarget(null);
-  }
+    if (lastSubmittedIntent === "deactivate") {
+      setLastSubmittedIntent(null);
+    }
+  }, [lastSubmittedIntent]);
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data?.ok) return;
+
+    if (lastSubmittedIntent === "create" || lastSubmittedIntent === "update") {
+      closeCauseDialog();
+    }
+
+    if (lastSubmittedIntent === "deactivate" || lastSubmittedIntent === "reactivate") {
+      closeDeactivateDialog();
+    }
+  }, [fetcher.state, fetcher.data, lastSubmittedIntent, closeCauseDialog, closeDeactivateDialog]);
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
+  const modalFieldErrors = useMemo(
+    () => ((lastSubmittedIntent === "create" || lastSubmittedIntent === "update") ? fetcher.data?.fieldErrors ?? {} : {}),
+    [fetcher.data?.fieldErrors, lastSubmittedIntent],
+  );
+  const showPageError =
+    fetcher.data && !fetcher.data.ok && !(lastSubmittedIntent === "create" || lastSubmittedIntent === "update" || lastSubmittedIntent === "deactivate");
+  const showPageSuccess = fetcher.data?.ok && lastSubmittedIntent === "reactivate";
+
+  function fieldError(name: keyof Omit<CauseFormState, "id">) {
+    return modalFieldErrors[name]?.[0] ?? null;
+  }
 
   return (
     <>
@@ -540,9 +581,14 @@ export default function CausesPage() {
       </div>
 
       <s-page>
-        {fetcher.data && !fetcher.data.ok && (
+        {showPageError && (
           <s-banner tone="critical">
-            <s-text>{fetcher.data.message}</s-text>
+            <s-text>{fetcher.data?.message}</s-text>
+          </s-banner>
+        )}
+        {showPageSuccess && (
+          <s-banner tone="success">
+            <s-text>{fetcher.data?.message}</s-text>
           </s-banner>
         )}
 
@@ -571,7 +617,7 @@ export default function CausesPage() {
               >
                 <div style={{ display: "grid", gap: "0.2rem" }}>
                   <strong>Cause Library</strong>
-                  <s-text color="subdued">Nonprofit and impact recipients used for product-level donation assignment.</s-text>
+                  <HelpText>Nonprofit and impact recipients used for product-level donation assignment and later order-level allocations.</HelpText>
                 </div>
                 <s-button variant="primary" onClick={openCreate}>New cause</s-button>
               </div>
@@ -615,7 +661,14 @@ export default function CausesPage() {
                           <fetcher.Form method="post">
                             <input type="hidden" name="intent" value="reactivate" />
                             <input type="hidden" name="id" value={cause.id} />
-                            <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
+                            <s-button
+                              type="submit"
+                              variant="secondary"
+                              disabled={isSubmitting}
+                              onClick={() => setLastSubmittedIntent("reactivate")}
+                            >
+                              Reactivate
+                            </s-button>
                           </fetcher.Form>
                         )}
                       </div>
@@ -661,36 +714,79 @@ export default function CausesPage() {
             </button>
           </div>
 
-          <s-text-field
-            label="Display name"
-            value={form.name}
-            onChange={(event) => updateForm("name", (event.target as HTMLInputElement | null)?.value ?? "")}
-          />
-          <s-text-field
-            label="Legal nonprofit name"
-            value={form.legalName}
-            onChange={(event) => updateForm("legalName", (event.target as HTMLInputElement | null)?.value ?? "")}
-          />
+          {fetcher.data && !fetcher.data.ok && (lastSubmittedIntent === "create" || lastSubmittedIntent === "update") ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
 
           <div style={{ display: "grid", gap: "0.35rem" }}>
-            <label htmlFor="cause-description">Description</label>
-            <textarea
-              id="cause-description"
-              rows={4}
-              value={form.description}
-              onChange={(event) => updateForm("description", event.currentTarget.value)}
+            <label htmlFor="cause-name">Display name *</label>
+            <HelpText>The merchant-facing name used in assignments, order snapshots, and future storefront displays.</HelpText>
+            <input
+              id="cause-name"
+              type="text"
+              value={form.name}
+              onChange={(event) => updateForm("name", event.currentTarget.value)}
+              aria-invalid={fieldError("name") ? true : undefined}
               style={{
                 width: "100%",
                 boxSizing: "border-box",
                 padding: "0.75rem",
                 borderRadius: "0.75rem",
-                border: "1px solid var(--p-color-border)",
+                border: `1px solid ${fieldError("name") ? "#8e1f1f" : "var(--p-color-border, #d2d5d8)"}`,
+                background: "var(--p-color-bg-surface, #fff)",
+                color: "var(--p-color-text, #303030)",
+                font: "inherit",
+              }}
+            />
+            {fieldError("name") ? <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>{fieldError("name")}</div> : null}
+          </div>
+          <div style={{ display: "grid", gap: "0.35rem" }}>
+            <label htmlFor="cause-legal-name">Legal nonprofit name</label>
+            <HelpText>Use the registered legal entity name if it differs from the shorter display name.</HelpText>
+            <input
+              id="cause-legal-name"
+              type="text"
+              value={form.legalName}
+              onChange={(event) => updateForm("legalName", event.currentTarget.value)}
+              aria-invalid={fieldError("legalName") ? true : undefined}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "0.75rem",
+                borderRadius: "0.75rem",
+                border: `1px solid ${fieldError("legalName") ? "#8e1f1f" : "var(--p-color-border, #d2d5d8)"}`,
+                background: "var(--p-color-bg-surface, #fff)",
+                color: "var(--p-color-text, #303030)",
+                font: "inherit",
+              }}
+            />
+            {fieldError("legalName") ? <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>{fieldError("legalName")}</div> : null}
+          </div>
+
+          <div style={{ display: "grid", gap: "0.35rem" }}>
+            <label htmlFor="cause-description">Description</label>
+            <HelpText>Optional internal summary for merchants and future storefront/metaobject use.</HelpText>
+            <textarea
+              id="cause-description"
+              rows={4}
+              value={form.description}
+              onChange={(event) => updateForm("description", event.currentTarget.value)}
+              aria-invalid={fieldError("description") ? true : undefined}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "0.75rem",
+                borderRadius: "0.75rem",
+                border: `1px solid ${fieldError("description") ? "#8e1f1f" : "var(--p-color-border, #d2d5d8)"}`,
                 background: "var(--p-color-bg-surface, #fff)",
                 color: "var(--p-color-text, #303030)",
                 font: "inherit",
                 resize: "vertical",
               }}
             />
+            {fieldError("description") ? <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>{fieldError("description")}</div> : null}
           </div>
 
           <div
@@ -700,26 +796,38 @@ export default function CausesPage() {
               gap: "1rem",
             }}
           >
-            <s-text-field
-              label="Icon URL"
-              value={form.iconUrl}
-              onChange={(event) => updateForm("iconUrl", (event.target as HTMLInputElement | null)?.value ?? "")}
-            />
-            <s-text-field
-              label="Donation link"
-              value={form.donationLink}
-              onChange={(event) => updateForm("donationLink", (event.target as HTMLInputElement | null)?.value ?? "")}
-            />
-            <s-text-field
-              label="Website URL"
-              value={form.websiteUrl}
-              onChange={(event) => updateForm("websiteUrl", (event.target as HTMLInputElement | null)?.value ?? "")}
-            />
-            <s-text-field
-              label="Instagram URL"
-              value={form.instagramUrl}
-              onChange={(event) => updateForm("instagramUrl", (event.target as HTMLInputElement | null)?.value ?? "")}
-            />
+            {[
+              { key: "iconUrl", label: "Icon URL" },
+              { key: "donationLink", label: "Donation link" },
+              { key: "websiteUrl", label: "Website URL" },
+              { key: "instagramUrl", label: "Instagram URL" },
+            ].map(({ key, label }) => (
+              <div key={key} style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor={`cause-${key}`}>{label}</label>
+                <input
+                  id={`cause-${key}`}
+                  type="url"
+                  value={form[key as keyof Omit<CauseFormState, "id" | "is501c3">] as string}
+                  onChange={(event) => updateForm(key as keyof CauseFormState, event.currentTarget.value as never)}
+                  aria-invalid={fieldError(key as keyof Omit<CauseFormState, "id">) ? true : undefined}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "0.75rem",
+                    borderRadius: "0.75rem",
+                    border: `1px solid ${fieldError(key as keyof Omit<CauseFormState, "id">) ? "#8e1f1f" : "var(--p-color-border, #d2d5d8)"}`,
+                    background: "var(--p-color-bg-surface, #fff)",
+                    color: "var(--p-color-text, #303030)",
+                    font: "inherit",
+                  }}
+                />
+                {fieldError(key as keyof Omit<CauseFormState, "id">) ? (
+                  <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>
+                    {fieldError(key as keyof Omit<CauseFormState, "id">)}
+                  </div>
+                ) : null}
+              </div>
+            ))}
           </div>
 
           <label style={{ display: "flex", gap: "0.6rem", alignItems: "center" }}>
@@ -748,8 +856,8 @@ export default function CausesPage() {
                 fd.append("websiteUrl", form.websiteUrl);
                 fd.append("instagramUrl", form.instagramUrl);
                 fd.append("is501c3", String(form.is501c3));
+                setLastSubmittedIntent(form.id ? "update" : "create");
                 fetcher.submit(fd, { method: "post" });
-                closeCauseDialog();
               }}
             >
               {form.id ? "Save" : "Create"}
@@ -791,6 +899,12 @@ export default function CausesPage() {
             </button>
           </div>
 
+          {fetcher.data && !fetcher.data.ok && lastSubmittedIntent === "deactivate" ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
+
           <s-text>
             {deactivateTarget
               ? `Deactivating ${deactivateTarget.name} will remove it from new product assignments.`
@@ -816,8 +930,8 @@ export default function CausesPage() {
                 const fd = new FormData();
                 fd.append("intent", "deactivate");
                 fd.append("id", deactivateTarget.id);
+                setLastSubmittedIntent("deactivate");
                 fetcher.submit(fd, { method: "post" });
-                closeDeactivateDialog();
               }}
             >
               Deactivate

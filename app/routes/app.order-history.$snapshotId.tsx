@@ -1,7 +1,8 @@
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { createManualAdjustment } from "../services/adjustmentService.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
@@ -262,7 +263,8 @@ export default function OrderSnapshotDetailPage() {
 
         <s-section heading="Snapshot metadata">
           <div style={{ display: "grid", gap: "1rem" }}>
-            <a href="/app/order-history">Back to Order History</a>
+            <Link to="/app/order-history">Back to Order History</Link>
+            <HelpText>Snapshot totals are immutable captures of the order's resolved financial picture. Effective values include any later adjustments recorded against the snapshot.</HelpText>
 
             <div
               style={{
@@ -300,6 +302,7 @@ export default function OrderSnapshotDetailPage() {
                   <s-text color="subdued">
                     {line.variantTitle} · Qty {line.quantity} · Subtotal {formatMoney(line.subtotal)}
                   </s-text>
+                  <HelpText>Subtotal is sales revenue for this line before costs. Net contribution is what remains after effective costs, POD cost, and buffer.</HelpText>
                 </div>
 
                 <div
@@ -397,6 +400,7 @@ export default function OrderSnapshotDetailPage() {
                 <details>
                   <summary>Cause allocations ({line.causeAllocations.length})</summary>
                   <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
+                    <HelpText>These amounts are the line's net contribution split by the product-level Cause percentages active when the snapshot was created.</HelpText>
                     {line.causeAllocations.length === 0 ? (
                       <s-text color="subdued">No cause allocations for this line.</s-text>
                     ) : (
@@ -419,6 +423,7 @@ export default function OrderSnapshotDetailPage() {
                 <details>
                   <summary>Adjustments ({line.adjustments.length})</summary>
                   <div style={{ display: "grid", gap: "0.75rem", marginTop: "0.75rem" }}>
+                    <HelpText>Adjustments capture changes after the original snapshot, such as refunds, order updates, or merchant-entered corrections.</HelpText>
                     {line.adjustments.length === 0 ? (
                       <s-text color="subdued">No adjustments recorded yet.</s-text>
                     ) : (
@@ -455,6 +460,7 @@ export default function OrderSnapshotDetailPage() {
 
                       <div style={{ display: "grid", gap: "0.35rem" }}>
                         <label htmlFor={`reason-${line.id}`}>Reason</label>
+                        <HelpText>Short explanation for why this manual correction is being added.</HelpText>
                         <input
                           id={`reason-${line.id}`}
                           name="reason"
@@ -488,6 +494,7 @@ export default function OrderSnapshotDetailPage() {
                         ].map((field) => (
                           <div key={field.name} style={{ display: "grid", gap: "0.35rem" }}>
                             <label htmlFor={`${field.name}-${line.id}`}>{field.label}</label>
+                            <HelpText>Positive values add cost back in; negative values reduce that cost bucket.</HelpText>
                             <input
                               id={`${field.name}-${line.id}`}
                               name={field.name}

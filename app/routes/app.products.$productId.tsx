@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { z } from "zod";
+import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
@@ -18,6 +19,17 @@ const assignmentsSchema = z.object({
 type AssignmentRow = {
   causeId: string;
   percentage: string;
+};
+
+const fieldStyle = {
+  width: "100%",
+  boxSizing: "border-box" as const,
+  padding: "0.75rem",
+  borderRadius: "0.75rem",
+  border: "1px solid var(--p-color-border, #d2d5d8)",
+  background: "var(--p-color-bg-surface, #fff)",
+  color: "var(--p-color-text, #303030)",
+  font: "inherit",
 };
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -263,9 +275,9 @@ export default function ProductDetailPage() {
   }, [fetcher.data, rows]);
 
   function addCause() {
+    if (rows.length >= causes.length) return;
     const nextCause = availableToAdd[0];
-    if (!nextCause) return;
-    setRows((current) => [...current, { causeId: nextCause.id, percentage: "" }]);
+    setRows((current) => [...current, { causeId: nextCause?.id ?? "", percentage: "" }]);
   }
 
   function updateRow(index: number, patch: Partial<AssignmentRow>) {
@@ -322,6 +334,7 @@ export default function ProductDetailPage() {
             <s-text>
               Assign one or more active Causes to this product. Total allocation must be 100% or less.
             </s-text>
+            <HelpText>These percentages control how this product's future order-level net contribution is split across Causes when a snapshot is created.</HelpText>
 
             {rows.length === 0 ? (
               <s-banner tone="warning">
@@ -341,27 +354,20 @@ export default function ProductDetailPage() {
                       style={{
                         display: "grid",
                         gap: "0.75rem",
-                        gridTemplateColumns: "minmax(240px, 2fr) minmax(140px, 1fr) auto",
+                        gridTemplateColumns: "minmax(260px, 2fr) minmax(180px, 1fr) auto",
                         alignItems: "end",
                       }}
                     >
                       <div style={{ display: "grid", gap: "0.35rem" }}>
                         <label htmlFor={`cause-${index}`}>Cause</label>
+                        <HelpText>The recipient that should receive a share of this product's future donation pool.</HelpText>
                         <select
                           id={`cause-${index}`}
                           value={row.causeId}
                           onChange={(event) => updateRow(index, { causeId: event.currentTarget.value })}
-                          style={{
-                            width: "100%",
-                            boxSizing: "border-box",
-                            padding: "0.75rem",
-                            borderRadius: "0.75rem",
-                            border: "1px solid var(--p-color-border, #d2d5d8)",
-                            background: "var(--p-color-bg-surface, #fff)",
-                            color: "var(--p-color-text, #303030)",
-                            font: "inherit",
-                          }}
+                          style={fieldStyle}
                         >
+                          {!row.causeId ? <option value="">Select cause</option> : null}
                           {selectableCauses.map((cause: (typeof causes)[number]) => (
                             <option key={cause.id} value={cause.id}>
                               {cause.name}
@@ -370,17 +376,21 @@ export default function ProductDetailPage() {
                         </select>
                       </div>
 
-                      <s-text-field
-                        label="Percentage"
-                        type="number"
-                        min={0}
-                        max={100}
-                        step={0.01}
-                        value={row.percentage}
-                        onChange={(event) =>
-                          updateRow(index, { percentage: (event.target as HTMLInputElement | null)?.value ?? "" })
-                        }
-                      />
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor={`percentage-${index}`}>Percentage</label>
+                        <HelpText>Percent of this product's net contribution allocated to the selected Cause.</HelpText>
+                        <input
+                          id={`percentage-${index}`}
+                          type="number"
+                          inputMode="decimal"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={row.percentage}
+                          onChange={(event) => updateRow(index, { percentage: event.currentTarget.value })}
+                          style={fieldStyle}
+                        />
+                      </div>
 
                       <s-button variant="secondary" tone="critical" onClick={() => removeRow(index)}>
                         Remove
@@ -398,7 +408,7 @@ export default function ProductDetailPage() {
                 </span>
               </s-text>
               <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <s-button variant="secondary" onClick={addCause} disabled={availableToAdd.length === 0}>
+                <s-button variant="secondary" onClick={addCause} disabled={rows.length >= causes.length}>
                   Add cause
                 </s-button>
                 <s-button variant="primary" onClick={saveAssignments} disabled={isSubmitting}>

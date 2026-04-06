@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { recomputeTaxOffsetCache } from "../services/taxOffsetCache.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
@@ -55,6 +56,18 @@ type ExpenseFormState = {
   amount: string;
   expenseDate: string;
   notes: string;
+};
+
+type ExpenseActionData = {
+  ok: boolean;
+  message: string;
+  summary?: {
+    deductionPool: string;
+    taxableExposure: string;
+    cumulativeNetContrib: string;
+    widgetTaxSuppressed: boolean;
+  };
+  fieldErrors?: Partial<Record<keyof ExpenseFormState, string[]>>;
 };
 
 const EMPTY_FORM: ExpenseFormState = {
@@ -128,7 +141,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (!parsed.success) {
       return Response.json(
-        { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid expense." },
+        {
+          ok: false,
+          message: parsed.error.issues[0]?.message ?? "Invalid expense.",
+          fieldErrors: parsed.error.flatten().fieldErrors,
+        },
         { status: 400 },
       );
     }
@@ -232,16 +249,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
 export default function ExpensesPage() {
   const { expenses, summary } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<{
-    ok: boolean;
-    message: string;
-    summary?: {
-      deductionPool: string;
-      taxableExposure: string;
-      cumulativeNetContrib: string;
-      widgetTaxSuppressed: boolean;
-    };
-  }>();
+  const fetcher = useFetcher<ExpenseActionData>();
   const { formatMoney } = useAppLocalization();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const deleteDialogRef = useRef<HTMLDialogElement>(null);
@@ -249,6 +257,7 @@ export default function ExpensesPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [form, setForm] = useState<ExpenseFormState>(EMPTY_FORM);
   const [deleteTarget, setDeleteTarget] = useState<ExpenseRow | null>(null);
+  const [lastSubmittedIntent, setLastSubmittedIntent] = useState<string | null>(null);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -276,22 +285,37 @@ export default function ExpensesPage() {
     setDialogOpen(true);
   }
 
-  function closeDialog() {
+  const closeDialog = useCallback(() => {
     setDialogOpen(false);
     setForm(EMPTY_FORM);
-  }
+    if (lastSubmittedIntent === "create") setLastSubmittedIntent(null);
+  }, [lastSubmittedIntent]);
 
   function openDelete(expense: ExpenseRow) {
     setDeleteTarget(expense);
     setDeleteDialogOpen(true);
   }
 
-  function closeDeleteDialog() {
+  const closeDeleteDialog = useCallback(() => {
     setDeleteDialogOpen(false);
     setDeleteTarget(null);
-  }
+    if (lastSubmittedIntent === "delete") setLastSubmittedIntent(null);
+  }, [lastSubmittedIntent]);
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data?.ok) return;
+
+    if (lastSubmittedIntent === "create") closeDialog();
+    if (lastSubmittedIntent === "delete") closeDeleteDialog();
+  }, [fetcher.state, fetcher.data, lastSubmittedIntent, closeDialog, closeDeleteDialog]);
 
   const subTypeOptions = SUBTYPE_OPTIONS[form.category] ?? SUBTYPE_OPTIONS.other;
+  const modalFieldErrors = lastSubmittedIntent === "create" ? fetcher.data?.fieldErrors ?? {} : {};
+  const showPageError = fetcher.data && !fetcher.data.ok && lastSubmittedIntent !== "create" && lastSubmittedIntent !== "delete";
+
+  function fieldError(name: keyof ExpenseFormState) {
+    return modalFieldErrors[name]?.[0] ?? null;
+  }
 
   return (
     <>
@@ -315,9 +339,9 @@ export default function ExpensesPage() {
       </div>
 
       <s-page>
-        {fetcher.data && !fetcher.data.ok && (
+        {showPageError && (
           <s-banner tone="critical">
-            <s-text>{fetcher.data.message}</s-text>
+            <s-text>{fetcher.data?.message}</s-text>
           </s-banner>
         )}
 
@@ -331,14 +355,17 @@ export default function ExpensesPage() {
           >
             <div style={{ border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "1rem", padding: "1rem", display: "grid", gap: "0.35rem" }}>
               <strong>Deduction pool</strong>
+              <HelpText>Total deductible activity currently available to offset taxable exposure, including eligible charitable allocations and recorded expenses.</HelpText>
               <s-text>{formatMoney(liveSummary.deductionPool)}</s-text>
             </div>
             <div style={{ border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "1rem", padding: "1rem", display: "grid", gap: "0.35rem" }}>
               <strong>Cumulative net contribution</strong>
+              <HelpText>Running total of order-level net contribution. This belongs to the donation-pool track, not gross sales.</HelpText>
               <s-text>{formatMoney(liveSummary.cumulativeNetContrib)}</s-text>
             </div>
             <div style={{ border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "1rem", padding: "1rem", display: "grid", gap: "0.35rem" }}>
               <strong>Taxable exposure</strong>
+              <HelpText>Net contribution that is not yet covered by the deduction pool. Negative values mean a deductible surplus remains.</HelpText>
               <s-text>{formatMoney(liveSummary.taxableExposure)}</s-text>
             </div>
           </div>
@@ -359,6 +386,7 @@ export default function ExpensesPage() {
             <s-text color="subdued">
               Count On Us currently assumes cash-basis expense timing. This view is operational support and not tax advice.
             </s-text>
+            <HelpText>Expenses affect the tax-estimation track only. They do not rewrite past order production costs or donation allocations.</HelpText>
 
             {expenses.length === 0 ? (
               <s-banner tone="warning">
@@ -439,8 +467,15 @@ export default function ExpensesPage() {
             </button>
           </div>
 
+          {fetcher.data && !fetcher.data.ok && lastSubmittedIntent === "create" ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
+
           <div style={{ display: "grid", gap: "0.35rem" }}>
-            <label htmlFor="expense-category">Category</label>
+            <label htmlFor="expense-category">Category *</label>
+            <HelpText>High-level bucket used in tax offset reporting and future summaries.</HelpText>
             <select
               id="expense-category"
               value={form.category}
@@ -468,6 +503,7 @@ export default function ExpensesPage() {
 
           <div style={{ display: "grid", gap: "0.35rem" }}>
             <label htmlFor="expense-subtype">Sub-type</label>
+            <HelpText>Optional finer classification inside the selected category.</HelpText>
             <select
               id="expense-subtype"
               value={form.subType}
@@ -491,28 +527,79 @@ export default function ExpensesPage() {
             </select>
           </div>
 
-          <s-text-field
-            label="Name"
-            value={form.name}
-            onChange={(event) => updateForm("name", (event.target as HTMLInputElement | null)?.value ?? "")}
-          />
-          <s-text-field
-            label="Amount"
-            type="number"
-            min={0}
-            step={0.01}
-            value={form.amount}
-            onChange={(event) => updateForm("amount", (event.target as HTMLInputElement | null)?.value ?? "")}
-          />
-          <s-text-field
-            label="Expense date"
-            type="date"
-            value={form.expenseDate}
-            onChange={(event) => updateForm("expenseDate", (event.target as HTMLInputElement | null)?.value ?? "")}
-          />
+          <div style={{ display: "grid", gap: "0.35rem" }}>
+            <label htmlFor="expense-name">Name *</label>
+            <HelpText>Short merchant-facing description of the expense entry.</HelpText>
+            <input
+              id="expense-name"
+              type="text"
+              value={form.name}
+              onChange={(event) => updateForm("name", event.currentTarget.value)}
+              aria-invalid={fieldError("name") ? true : undefined}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "0.75rem",
+                borderRadius: "0.75rem",
+                border: `1px solid ${fieldError("name") ? "#8e1f1f" : "var(--p-color-border, #d2d5d8)"}`,
+                background: "var(--p-color-bg-surface, #fff)",
+                color: "var(--p-color-text, #303030)",
+                font: "inherit",
+              }}
+            />
+            {fieldError("name") ? <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>{fieldError("name")}</div> : null}
+          </div>
+          <div style={{ display: "grid", gap: "0.35rem" }}>
+            <label htmlFor="expense-amount">Amount *</label>
+            <HelpText>Enter the deductible amount for this expense entry in shop currency.</HelpText>
+            <input
+              id="expense-amount"
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.01"
+              value={form.amount}
+              onChange={(event) => updateForm("amount", event.currentTarget.value)}
+              aria-invalid={fieldError("amount") ? true : undefined}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "0.75rem",
+                borderRadius: "0.75rem",
+                border: `1px solid ${fieldError("amount") ? "#8e1f1f" : "var(--p-color-border, #d2d5d8)"}`,
+                background: "var(--p-color-bg-surface, #fff)",
+                color: "var(--p-color-text, #303030)",
+                font: "inherit",
+              }}
+            />
+            {fieldError("amount") ? <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>{fieldError("amount")}</div> : null}
+          </div>
+          <div style={{ display: "grid", gap: "0.35rem" }}>
+            <label htmlFor="expense-date">Expense date *</label>
+            <HelpText>Date used when this expense is included in the cash-basis tax offset timeline.</HelpText>
+            <input
+              id="expense-date"
+              type="date"
+              value={form.expenseDate}
+              onChange={(event) => updateForm("expenseDate", event.currentTarget.value)}
+              aria-invalid={fieldError("expenseDate") ? true : undefined}
+              style={{
+                width: "100%",
+                boxSizing: "border-box",
+                padding: "0.75rem",
+                borderRadius: "0.75rem",
+                border: `1px solid ${fieldError("expenseDate") ? "#8e1f1f" : "var(--p-color-border, #d2d5d8)"}`,
+                background: "var(--p-color-bg-surface, #fff)",
+                color: "var(--p-color-text, #303030)",
+                font: "inherit",
+              }}
+            />
+            {fieldError("expenseDate") ? <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>{fieldError("expenseDate")}</div> : null}
+          </div>
 
           <div style={{ display: "grid", gap: "0.35rem" }}>
             <label htmlFor="expense-notes">Notes</label>
+            <HelpText>Optional internal notes for source documents, approvals, or later review.</HelpText>
             <textarea
               id="expense-notes"
               rows={4}
@@ -530,6 +617,7 @@ export default function ExpensesPage() {
                 resize: "vertical",
               }}
             />
+            {fieldError("notes") ? <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>{fieldError("notes")}</div> : null}
           </div>
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
@@ -546,13 +634,19 @@ export default function ExpensesPage() {
                 fd.append("amount", form.amount);
                 fd.append("expenseDate", form.expenseDate);
                 fd.append("notes", form.notes);
+                setLastSubmittedIntent("create");
                 fetcher.submit(fd, { method: "post" });
-                closeDialog();
               }}
             >
               Create
             </s-button>
           </div>
+
+          {fetcher.data && !fetcher.data.ok && lastSubmittedIntent === "delete" ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
         </div>
       </dialog>
 
@@ -604,8 +698,8 @@ export default function ExpensesPage() {
                 const fd = new FormData();
                 fd.append("intent", "delete");
                 fd.append("id", deleteTarget.id);
+                setLastSubmittedIntent("delete");
                 fetcher.submit(fd, { method: "post" });
-                closeDeleteDialog();
               }}
             >
               Delete
