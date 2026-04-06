@@ -59,10 +59,27 @@ function parseOptionalNumber(value: string | null | undefined, field: string) {
   return parsed;
 }
 
+function parseOptionalWholeNumber(value: string | null | undefined, field: string) {
+  if (!value || !value.trim()) return null;
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+    throw new Response(`${field} must be a non-negative whole number.`, { status: 400 });
+  }
+  return parsed;
+}
+
 function parseRequiredNumber(value: string, field: string) {
   const parsed = Number(value);
   if (Number.isNaN(parsed) || parsed < 0) {
     throw new Response(`${field} must be a non-negative number.`, { status: 400 });
+  }
+  return parsed;
+}
+
+function parseRequiredWholeNumber(value: string, field: string) {
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+    throw new Response(`${field} must be a non-negative whole number.`, { status: 400 });
   }
   return parsed;
 }
@@ -286,9 +303,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     for (const line of draft.materialLines) {
       const data = {
-        quantity: parseRequiredNumber(line.quantity, "Material quantity"),
-        yield: parseOptionalNumber(line.yield, "Material yield"),
-        usesPerVariant: parseOptionalNumber(line.usesPerVariant, "Material uses per variant"),
+        quantity: parseRequiredWholeNumber(line.quantity, "Material quantity"),
+        yield: parseOptionalWholeNumber(line.yield, "Material yield"),
+        usesPerVariant: parseOptionalWholeNumber(line.usesPerVariant, "Material uses per variant"),
       };
 
       if (existingMaterialLines.has(line.id)) {
@@ -310,7 +327,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     for (const line of draft.equipmentLines) {
       const data = {
         minutes: parseOptionalNumber(line.minutes, "Equipment minutes"),
-        uses: parseOptionalNumber(line.uses, "Equipment uses"),
+        uses: parseOptionalWholeNumber(line.uses, "Equipment uses"),
       };
 
       if (existingEquipmentLines.has(line.id)) {
@@ -792,13 +809,13 @@ export default function TemplateDetailPage() {
                 }
               />
             )}
-            <TextField label="Quantity" type="number" min={0} step={0.001} value={matQty} onChange={setMatQty} autoComplete="off" />
+            <TextField label="Quantity" type="number" min={0} step={1} value={matQty} onChange={setMatQty} autoComplete="off" />
             {selectedMaterial?.costingModel === "yield" && (
               <TextField
                 label="Yield (units produced per purchased unit)"
                 type="number"
                 min={0}
-                step={0.001}
+                step={1}
                 value={matYield}
                 onChange={setMatYield}
                 autoComplete="off"
