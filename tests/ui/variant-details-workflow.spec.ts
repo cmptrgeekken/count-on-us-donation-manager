@@ -43,6 +43,23 @@ test("variant details default new yield-based material lines to 1", async ({ pag
   await expect(page.getByLabel("Yield per piece")).toHaveValue("1");
 });
 
+test("variant details groups additional shipping material lines separately", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/variant-details-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.variantUrl);
+
+  await page.getByRole("button", { name: "Add material" }).click();
+  await page.getByLabel("Material", { exact: true }).selectOption({ label: "ZZZ Playwright Shipping Material" });
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "Shipping materials" })).toBeVisible();
+  await expect(
+    page.getByRole("paragraph").filter({ hasText: "ZZZ Playwright Shipping Material" }),
+  ).toBeVisible();
+});
+
 test("variant details persist production and shipping template assignments", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/variant-details-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();

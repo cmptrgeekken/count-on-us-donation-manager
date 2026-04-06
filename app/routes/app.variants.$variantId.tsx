@@ -1339,6 +1339,12 @@ export default function VariantDetailPage() {
     templates.find((template: TemplateCatalogEntry) => template.id === effectiveTemplateSelection.shippingTemplateId) ?? null;
   const preview = previewFetcher.data?.preview;
   const selectedMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === selectedMaterialId);
+  const additionalProductionMaterialLines = draft.materialLines.filter(
+    (line: SerializedMaterialLine) => line.materialType === "production",
+  );
+  const additionalShippingMaterialLines = draft.materialLines.filter(
+    (line: SerializedMaterialLine) => line.materialType === "shipping",
+  );
   const materialOverrideTarget =
     draft.templateMaterialLines.find((line) => line.templateLineId === materialOverrideTargetId) ?? null;
   const equipmentOverrideTarget =
@@ -1835,17 +1841,44 @@ export default function VariantDetailPage() {
             {draft.materialLines.length === 0 ? (
               <Text as="p" variant="bodyMd" tone="subdued">No variant-only material lines.</Text>
             ) : (
-              <BlockStack gap="300">
-                {draft.materialLines.map((line: SerializedMaterialLine) => (
-                  <InlineStack key={line.id} align="space-between" blockAlign="center">
-                    <BlockStack gap="100">
-                      <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                      <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
-                    </BlockStack>
-                    <Button variant="plain" tone="critical" onClick={() => removeAdditionalMaterialLine(line.id)}>
-                      Remove
-                    </Button>
-                  </InlineStack>
+              <BlockStack gap="400">
+                {[
+                  {
+                    heading: "Production materials",
+                    lines: additionalProductionMaterialLines,
+                    emptyText: "No additional production materials.",
+                  },
+                  {
+                    heading: "Shipping materials",
+                    lines: additionalShippingMaterialLines,
+                    emptyText: "No additional shipping materials.",
+                  },
+                ].map((section) => (
+                  <BlockStack key={section.heading} gap="200">
+                    <Text as="h3" variant="headingSm">{section.heading}</Text>
+                    {section.lines.length === 0 ? (
+                      <Text as="p" variant="bodyMd" tone="subdued">{section.emptyText}</Text>
+                    ) : (
+                      <BlockStack gap="300">
+                        {section.lines.map((line: SerializedMaterialLine) => (
+                          <InlineStack key={line.id} align="space-between" blockAlign="center">
+                            <BlockStack gap="100">
+                              <InlineStack gap="200" blockAlign="center">
+                                <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
+                                <Badge tone={line.materialType === "shipping" ? "info" : "success"}>
+                                  {line.materialType === "shipping" ? "Shipping" : "Production"}
+                                </Badge>
+                              </InlineStack>
+                              <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
+                            </BlockStack>
+                            <Button variant="plain" tone="critical" onClick={() => removeAdditionalMaterialLine(line.id)}>
+                              Remove
+                            </Button>
+                          </InlineStack>
+                        ))}
+                      </BlockStack>
+                    )}
+                  </BlockStack>
                 ))}
               </BlockStack>
             )}

@@ -123,6 +123,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.materialLibraryItem.deleteMany({
+    where: {
+      shopId,
+      name: {
+        in: ["Playwright Yield Material", "ZZZ Playwright Shipping Material"],
+      },
+    },
+  });
+
   await prisma.materialLibraryItem.create({
     data: {
       shopId,
@@ -132,6 +141,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       purchasePrice: "8.00",
       purchaseQty: "1.00",
       perUnitCost: "8.000000",
+      totalUsesPerUnit: null,
+      status: "active",
+    },
+  });
+
+  await prisma.materialLibraryItem.create({
+    data: {
+      shopId,
+      name: "ZZZ Playwright Shipping Material",
+      type: "shipping",
+      costingModel: "yield",
+      purchasePrice: "3.00",
+      purchaseQty: "1.00",
+      perUnitCost: "3.000000",
       totalUsesPerUnit: null,
       status: "active",
     },
