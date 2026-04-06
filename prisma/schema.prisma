@@ -132,19 +132,26 @@ model EquipmentLibraryItem {
 }
 
 model CostTemplate {
-  id          String   @id @default(cuid())
-  shopId      String
-  name        String
-  description String?
-  status      String   @default("active")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                       String       @id @default(cuid())
+  shopId                   String
+  name                     String
+  type                     String       @default("production") // "production" | "shipping"
+  defaultShippingTemplateId String?
+  defaultShippingTemplate  CostTemplate? @relation("DefaultShippingTemplate", fields: [defaultShippingTemplateId], references: [id])
+  productionTemplates      CostTemplate[] @relation("DefaultShippingTemplate")
+  description              String?
+  status                   String       @default("active")
+  createdAt                DateTime     @default(now())
+  updatedAt                DateTime     @updatedAt
 
   materialLines  CostTemplateMaterialLine[]
   equipmentLines CostTemplateEquipmentLine[]
   variantConfigs VariantCostConfig[]
+  productionVariantConfigs VariantCostConfig[] @relation("ProductionTemplate")
+  shippingVariantConfigs   VariantCostConfig[] @relation("ShippingTemplate")
 
   @@index([shopId, status])
+  @@index([shopId, type, status])
 }
 
 model CostTemplateMaterialLine {
@@ -208,18 +215,22 @@ model Variant {
 }
 
 model VariantCostConfig {
-  id            String        @id @default(cuid())
-  shopId        String
-  variantId     String        @unique
-  variant       Variant       @relation(fields: [variantId], references: [id], onDelete: Cascade)
-  templateId    String?
-  template      CostTemplate? @relation(fields: [templateId], references: [id])
-  laborMinutes  Decimal?      @db.Decimal(10, 4)
-  laborRate     Decimal?      @db.Decimal(10, 4) // overrides Shop.defaultLaborRate when set
-  mistakeBuffer Decimal?      @db.Decimal(5, 4) // overrides Shop.mistakeBuffer when set
-  lineItemCount Int           @default(0) // maintained on insert/delete of material+equipment lines (ADR-004)
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  id                   String        @id @default(cuid())
+  shopId               String
+  variantId            String        @unique
+  variant              Variant       @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  templateId           String?
+  template             CostTemplate? @relation(fields: [templateId], references: [id])
+  productionTemplateId String?
+  productionTemplate   CostTemplate? @relation("ProductionTemplate", fields: [productionTemplateId], references: [id])
+  shippingTemplateId   String?
+  shippingTemplate     CostTemplate? @relation("ShippingTemplate", fields: [shippingTemplateId], references: [id])
+  laborMinutes         Decimal?      @db.Decimal(10, 4)
+  laborRate            Decimal?      @db.Decimal(10, 4) // overrides Shop.defaultLaborRate when set
+  mistakeBuffer        Decimal?      @db.Decimal(5, 4) // overrides Shop.mistakeBuffer when set
+  lineItemCount        Int           @default(0) // maintained on insert/delete of material+equipment lines (ADR-004)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 
   materialLines  VariantMaterialLine[]
   equipmentLines VariantEquipmentLine[]
