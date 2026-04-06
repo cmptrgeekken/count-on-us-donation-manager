@@ -32,6 +32,7 @@ import {
   createClientId,
   normalizeVariantDraft,
   type TemplateCatalogEntry,
+  type TemplateCatalogMaterialLine,
   type VariantDraft,
   type VariantTemplateEquipmentDraftLine,
   type VariantTemplateMaterialDraftLine,
@@ -1337,6 +1338,7 @@ export default function VariantDetailPage() {
     templates.find((template: TemplateCatalogEntry) => template.id === effectiveTemplateSelection.productionTemplateId) ?? null;
   const effectiveShippingTemplate =
     templates.find((template: TemplateCatalogEntry) => template.id === effectiveTemplateSelection.shippingTemplateId) ?? null;
+  const shippingTemplateMaterialLines = effectiveShippingTemplate?.materialLines ?? [];
   const preview = previewFetcher.data?.preview;
   const selectedMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === selectedMaterialId);
   const additionalProductionMaterialLines = draft.materialLines.filter(
@@ -1670,7 +1672,7 @@ export default function VariantDetailPage() {
             </InlineStack>
             <Divider />
             {effectiveShippingTemplate ? (
-              <BlockStack gap="100">
+              <BlockStack gap="300">
                 <Text as="p" variant="bodyMd">{effectiveShippingTemplate.name}</Text>
                 <Text as="p" variant="bodyMd" tone="subdued">
                   {effectiveTemplateSelection.shippingSource === "explicit"
@@ -1679,6 +1681,31 @@ export default function VariantDetailPage() {
                       ? "This shipping template is inherited from the assigned production template."
                       : "No active shipping templates are available yet."}
                 </Text>
+                <BlockStack gap="200">
+                  <Text as="h3" variant="headingSm">Shipping material lines</Text>
+                  {shippingTemplateMaterialLines.length === 0 ? (
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      This Shipping template has no material lines.
+                    </Text>
+                  ) : (
+                    <BlockStack gap="200">
+                      {shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => (
+                        <BlockStack key={line.templateLineId} gap="100">
+                          <InlineStack gap="200" blockAlign="center">
+                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
+                            <Badge tone="info">Shipping</Badge>
+                          </InlineStack>
+                          <Text as="p" variant="bodyMd" tone="subdued">
+                            {describeMaterialLine(line)}
+                          </Text>
+                        </BlockStack>
+                      ))}
+                    </BlockStack>
+                  )}
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Edit these line items on the Shipping template itself. Use variant-only Shipping materials below for one-off additions.
+                  </Text>
+                </BlockStack>
               </BlockStack>
             ) : (
               <Text as="p" variant="bodyMd" tone="subdued">

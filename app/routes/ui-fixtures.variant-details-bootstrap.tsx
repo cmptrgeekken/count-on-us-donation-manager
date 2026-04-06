@@ -146,7 +146,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  await prisma.materialLibraryItem.create({
+  const shippingMaterial = await prisma.materialLibraryItem.create({
     data: {
       shopId,
       name: "ZZZ Playwright Shipping Material",
@@ -166,6 +166,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       name: "Playwright Shipping Template",
       type: "shipping",
       status: "active",
+    },
+  });
+
+  await prisma.costTemplateMaterialLine.create({
+    data: {
+      templateId: inheritedShippingTemplate.id,
+      materialId: shippingMaterial.id,
+      quantity: "1",
+      yield: "1",
+      usesPerVariant: null,
     },
   });
 

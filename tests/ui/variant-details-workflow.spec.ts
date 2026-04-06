@@ -68,11 +68,17 @@ test("variant details persist production and shipping template assignments", asy
   await page.goto(bootstrap.variantUrl);
 
   await page.getByRole("button", { name: "Assign production template" }).click();
-  await page.getByLabel("Production template").selectOption({ label: "Playwright Production Template" });
-  await page.getByRole("button", { name: "Assign", exact: true }).click();
+  const productionDialog = page.getByRole("dialog").filter({ hasText: "Assign production template" });
+  await productionDialog.getByLabel("Production template").selectOption({ label: "Playwright Production Template" });
+  await productionDialog.getByRole("button", { name: "Assign", exact: true }).click();
 
   await expect(page.getByText("Inherited from production template")).toBeVisible();
   await expect(page.locator("p").filter({ hasText: "Playwright Shipping Template" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Shipping material lines" })).toBeVisible();
+  await expect(page.getByRole("paragraph").filter({ hasText: "ZZZ Playwright Shipping Material" })).toBeVisible();
+  await expect(
+    page.getByText("Edit these line items on the Shipping template itself."),
+  ).toBeVisible();
 
   await page.getByRole("button", { name: "Set override" }).click();
   const shippingDialog = page.getByRole("dialog").filter({ hasText: "Assign shipping template override" });
