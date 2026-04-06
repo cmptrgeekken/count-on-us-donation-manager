@@ -1,3 +1,3 @@
 export default function Extensions () {
-  return <html></html>;
+  return <html lang="en"></html>;
 }

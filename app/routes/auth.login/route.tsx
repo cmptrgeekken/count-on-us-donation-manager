@@ -31,7 +31,7 @@ export default function Auth() {
       <s-section heading="Log in">
         <Form method="post">
           <div style={{ display: "grid", gap: "1rem", maxWidth: "28rem" }}>
-            <s-text>Enter your store's `.myshopify.com` domain to continue.</s-text>
+            <s-text>Enter your store&apos;s `.myshopify.com` domain to continue.</s-text>
 
             {errors.shop && (
               <s-banner tone="critical">

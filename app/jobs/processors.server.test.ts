@@ -33,6 +33,9 @@ vi.mock("../services/snapshotService.server", () => ({
 }));
 
 vi.mock("../shopify.server", () => ({
+  unauthenticated: {
+    admin: mocks.adminFactory,
+  },
   default: {
     unauthenticated: {
       admin: mocks.adminFactory,
