@@ -79,12 +79,44 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  const materialFixtureIds = (
+    await prisma.materialLibraryItem.findMany({
+      where: {
+        shopId,
+        OR: [
+          {
+            name: {
+              startsWith: "Playwright Material UI",
+            },
+          },
+          { name: "Fixture Laminate" },
+        ],
+      },
+      select: { id: true },
+    })
+  ).map((material) => material.id);
+
+  if (materialFixtureIds.length > 0) {
+    await prisma.costTemplateMaterialLine.deleteMany({
+      where: { materialId: { in: materialFixtureIds } },
+    });
+
+    await prisma.variantMaterialLine.deleteMany({
+      where: { shopId, materialId: { in: materialFixtureIds } },
+    });
+  }
+
   await prisma.materialLibraryItem.deleteMany({
     where: {
       shopId,
-      name: {
-        startsWith: "Playwright Material UI",
-      },
+      OR: [
+        {
+          name: {
+            startsWith: "Playwright Material UI",
+          },
+        },
+        { name: "Fixture Laminate" },
+      ],
     },
   });
 
@@ -94,6 +126,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       name: {
         startsWith: "Playwright Equipment UI",
       },
+    },
+  });
+
+  const fixtureLaminate = await prisma.materialLibraryItem.create({
+    data: {
+      shopId,
+      name: "Fixture Laminate",
+      type: "production",
+      costingModel: "yield",
+      purchasePrice: "12.00",
+      purchaseQty: "1.00",
+      perUnitCost: "12.000000",
+      totalUsesPerUnit: null,
+      purchaseLink: "https://example.com/fixture-laminate",
+      weightGrams: "250.000",
+      status: "active",
+      notes: null,
     },
   });
 
@@ -107,7 +156,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       purchaseQty: "1.00",
       perUnitCost: "12.000000",
       totalUsesPerUnit: null,
+      purchaseLink: null,
+      weightGrams: null,
       status: "active",
+      notes: null,
     },
   });
 
@@ -121,7 +173,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       purchaseQty: "1.00",
       perUnitCost: "10.000000",
       totalUsesPerUnit: null,
+      purchaseLink: null,
+      weightGrams: null,
       status: "active",
+      notes: null,
     },
   });
 
@@ -142,11 +197,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       description: "Used by a fixture variant config",
       status: "active",
       materialLines: {
-        create: {
-          materialId: usedMaterial.id,
-          quantity: "1.00",
-          yield: "12.00",
-        },
+        create: [
+          {
+            materialId: usedMaterial.id,
+            quantity: "1.00",
+            yield: "12.00",
+          },
+          {
+            materialId: fixtureLaminate.id,
+            quantity: "1.00",
+            yield: "12.00",
+          },
+        ],
       },
       equipmentLines: {
         create: {

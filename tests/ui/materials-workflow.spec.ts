@@ -48,3 +48,34 @@ test("unused materials can be deleted and used materials show a blocked delete e
   await expect(deleteDialog.getByText("This material is still used in 1 template(s) and 0 variant config(s), so deletion is blocked.")).toBeVisible();
   await expect(deleteDialog.getByRole("button", { name: "Delete" })).toBeDisabled();
 });
+
+test("materials can save purchase link and weight metadata", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.materialsUrl);
+
+  await page.locator("ui-title-bar button").filter({ hasText: "New material" }).click();
+  const materialDialog = page.getByRole("dialog").filter({ hasText: "New material" });
+  await expect(materialDialog).toBeVisible();
+
+  await materialDialog.getByLabel("Name").fill("Playwright Material UI Metadata");
+  await materialDialog.getByLabel("Purchase price").fill("10.00");
+  await materialDialog.getByLabel("Purchase quantity").fill("2");
+  await materialDialog.getByLabel("Material purchase link").fill("https://example.com/material");
+  await materialDialog.getByLabel("Material weight (g)").fill("125.5");
+  await materialDialog.getByRole("button", { name: "Create" }).click();
+
+  await expect(page.getByText("Material created.")).toBeVisible();
+  const materialRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Material UI Metadata") });
+  await expect(materialRow).toBeVisible();
+  await expect(materialRow.getByText("125.5 g")).toBeVisible();
+  await expect(materialRow.getByRole("link", { name: "Open" })).toHaveAttribute("href", "https://example.com/material");
+
+  await materialRow.getByRole("button", { name: "Edit" }).click();
+  const editDialog = page.getByRole("dialog").filter({ hasText: "Edit material" });
+  await expect(editDialog).toBeVisible();
+  await expect(editDialog.getByLabel("Material purchase link")).toHaveValue("https://example.com/material");
+  await expect(editDialog.getByLabel("Material weight (g)")).toHaveValue("125.5");
+});
