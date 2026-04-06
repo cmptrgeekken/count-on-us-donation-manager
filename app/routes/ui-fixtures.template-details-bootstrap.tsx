@@ -81,6 +81,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.materialLibraryItem.create({
+    data: {
+      shopId,
+      name: "Fixture Shipping Mailer",
+      type: "shipping",
+      costingModel: "yield",
+      purchasePrice: "4.00",
+      purchaseQty: "1.00",
+      perUnitCost: "4.000000",
+      totalUsesPerUnit: null,
+      status: "active",
+    },
+  });
+
   const shippingTemplateB = await prisma.costTemplate.create({
     data: {
       shopId,
@@ -113,10 +127,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  const shippingTemplate = await prisma.costTemplate.create({
+    data: {
+      shopId,
+      name: "Playwright Shipping Detail Template",
+      type: "shipping",
+      status: "active",
+    },
+  });
+
   return Response.json({
     shopId,
     templateId: template.id,
+    shippingTemplateId: shippingTemplate.id,
     shippingTemplateBId: shippingTemplateB.id,
     templateUrl: `${baseUrl}/app/templates/${template.id}?__playwrightShop=${encodeURIComponent(shopId)}`,
+    shippingTemplateUrl: `${baseUrl}/app/templates/${shippingTemplate.id}?__playwrightShop=${encodeURIComponent(shopId)}`,
   });
 };

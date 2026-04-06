@@ -23,7 +23,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     orderBy: { createdAt: "asc" },
     include: {
       _count: {
-        select: { materialLines: true, equipmentLines: true, variantConfigs: true },
+        select: {
+          materialLines: true,
+          equipmentLines: true,
+          productionVariantConfigs: true,
+          shippingVariantConfigs: true,
+          productionTemplates: true,
+        },
       },
     },
   });
@@ -37,7 +43,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       status: t.status,
       materialLineCount: t._count.materialLines,
       equipmentLineCount: t._count.equipmentLines,
-      variantCount: t._count.variantConfigs,
+      variantCount: t._count.productionVariantConfigs + t._count.shippingVariantConfigs,
+      defaultForTemplateCount: t._count.productionTemplates,
     })),
   });
 };
@@ -114,7 +121,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { id: parsed.data.id, shopId },
       include: {
         _count: {
-          select: { variantConfigs: true, materialLines: true, equipmentLines: true },
+          select: {
+            productionVariantConfigs: true,
+            shippingVariantConfigs: true,
+            productionTemplates: true,
+            materialLines: true,
+            equipmentLines: true,
+          },
         },
       },
     });
@@ -123,11 +136,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ ok: false, message: "Template not found." }, { status: 404 });
     }
 
-    if (template._count.variantConfigs > 0) {
+    const assignedVariantCount =
+      template._count.productionVariantConfigs + template._count.shippingVariantConfigs;
+    const defaultForTemplateCount = template._count.productionTemplates;
+
+    if (assignedVariantCount > 0 || defaultForTemplateCount > 0) {
       return Response.json(
         {
           ok: false,
-          message: `This template is still assigned to ${template._count.variantConfigs} variant(s). Remove those assignments before deleting it.`,
+          message: `This template is still assigned to ${assignedVariantCount} variant(s) and used as the default shipping template for ${defaultForTemplateCount} production template(s). Remove those references before deleting it.`,
         },
         { status: 400 },
       );
@@ -159,6 +176,7 @@ type Template = {
   materialLineCount: number;
   equipmentLineCount: number;
   variantCount: number;
+  defaultForTemplateCount: number;
 };
 
 export default function TemplatesPage() {
@@ -341,6 +359,9 @@ export default function TemplatesPage() {
                     <s-table-cell>{template.materialLineCount + template.equipmentLineCount} lines</s-table-cell>
                     <s-table-cell>
                       {template.variantCount} variant{template.variantCount !== 1 ? "s" : ""}
+                      {template.defaultForTemplateCount > 0
+                        ? `; ${template.defaultForTemplateCount} default${template.defaultForTemplateCount !== 1 ? "s" : ""}`
+                        : ""}
                     </s-table-cell>
                     <s-table-cell>
                       <s-badge tone={template.status === "active" ? "success" : "enabled"}>
@@ -363,7 +384,7 @@ export default function TemplatesPage() {
                             <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
                           </fetcher.Form>
                         )}
-                        {(template.variantCount ?? 0) === 0 ? (
+                        {(template.variantCount ?? 0) === 0 && (template.defaultForTemplateCount ?? 0) === 0 ? (
                           <s-button tone="critical" variant="secondary" onClick={() => openDeleteDialog(template)}>
                             Delete
                           </s-button>
@@ -523,6 +544,14 @@ export default function TemplatesPage() {
             </s-banner>
           )}
 
+          {deactivateTarget && deactivateTarget.defaultForTemplateCount > 0 && (
+            <s-banner tone="warning">
+              <s-text>
+                {deactivateTarget.defaultForTemplateCount} production template(s) currently inherit this as their default Shipping template.
+              </s-text>
+            </s-banner>
+          )}
+
           <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
             <s-button variant="secondary" onClick={closeDeactivateDialog}>Cancel</s-button>
             <s-button
@@ -589,10 +618,10 @@ export default function TemplatesPage() {
               : "Delete this template permanently?"}
           </s-text>
 
-          {deleteTarget && deleteTarget.variantCount > 0 ? (
+          {deleteTarget && (deleteTarget.variantCount > 0 || deleteTarget.defaultForTemplateCount > 0) ? (
             <s-banner tone="warning">
               <s-text>
-                This template is still assigned to {deleteTarget.variantCount} variant(s), so deletion is blocked.
+                This template is still referenced by {deleteTarget.variantCount} variant assignment(s) and {deleteTarget.defaultForTemplateCount} production template default(s), so deletion is blocked.
               </s-text>
             </s-banner>
           ) : null}
@@ -602,7 +631,11 @@ export default function TemplatesPage() {
             <s-button
               variant="primary"
               tone="critical"
-              disabled={isSubmitting || (deleteTarget?.variantCount ?? 0) > 0}
+              disabled={
+                isSubmitting ||
+                (deleteTarget?.variantCount ?? 0) > 0 ||
+                (deleteTarget?.defaultForTemplateCount ?? 0) > 0
+              }
               onClick={() => {
                 if (!deleteTarget) return;
                 const fd = new FormData();

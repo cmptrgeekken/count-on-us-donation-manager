@@ -76,3 +76,19 @@ test("materials can save purchase link and weight metadata", async ({ page, requ
   await expect(editDialog.getByLabel("Material purchase link")).toHaveValue("https://example.com/material");
   await expect(editDialog.getByLabel("Material weight (g)")).toHaveValue("125.5");
 });
+
+test("materials page separates production and shipping materials", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.materialsUrl);
+
+  const productionSection = page.locator("s-section").filter({ has: page.getByText("Production Materials") });
+  const shippingSection = page.locator("s-section").filter({ has: page.getByText("Shipping Materials") });
+
+  await expect(productionSection).toContainText("Fixture Laminate");
+  await expect(productionSection).not.toContainText("Fixture Mailer");
+  await expect(shippingSection).toContainText("Fixture Mailer");
+  await expect(shippingSection).not.toContainText("Fixture Laminate");
+});
