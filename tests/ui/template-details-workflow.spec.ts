@@ -43,3 +43,49 @@ test("template details default new yield-based material lines to 1", async ({ pa
 
   await expect(page.getByLabel("Yield (units produced per purchased unit)")).toHaveValue("1");
 });
+
+test("template details can set a default shipping template", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/template-details-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.templateUrl);
+
+  const saveButton = page.locator("ui-save-bar button", { hasText: "Save" });
+  const defaultShippingSelect = page.getByLabel("Default shipping template");
+
+  await defaultShippingSelect.selectOption(bootstrap.shippingTemplateBId);
+  await expect(defaultShippingSelect).toHaveValue(bootstrap.shippingTemplateBId);
+  const saveResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/app/templates/${bootstrap.templateId}`) &&
+      response.request().method() === "POST" &&
+      response.ok(),
+  );
+  await saveButton.click();
+  await saveResponse;
+
+  await expect(defaultShippingSelect).toHaveValue(bootstrap.shippingTemplateBId);
+  await page.reload();
+  await expect(defaultShippingSelect).toHaveValue(bootstrap.shippingTemplateBId);
+});
+
+test("template details only offer materials matching the template type", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/template-details-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+
+  await page.goto(bootstrap.templateUrl);
+  await page.getByRole("button", { name: "Add material" }).click();
+  await page.getByPlaceholder("Search materials").click();
+  await expect(page.getByRole("button", { name: "Fixture Backer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Fixture Shipping Mailer" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Cancel" }).click();
+
+  await page.goto(bootstrap.shippingTemplateUrl);
+  await page.getByRole("button", { name: "Add material" }).click();
+  await page.getByPlaceholder("Search materials").click();
+  await expect(page.getByRole("button", { name: "Fixture Shipping Mailer" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Fixture Backer" })).toHaveCount(0);
+});

@@ -89,7 +89,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     data: {
       shopId,
       variantId: configuredVariant.id,
-      templateId: oldTemplate.id,
+      productionTemplateId: oldTemplate.id,
     },
   });
 

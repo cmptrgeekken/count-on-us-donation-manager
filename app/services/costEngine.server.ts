@@ -125,7 +125,19 @@ export async function resolveCosts(
   const config = await db.variantCostConfig.findUnique({
     where: { variantId, shopId },
     include: {
-      template: {
+      productionTemplate: {
+        include: {
+          defaultShippingTemplate: {
+            include: {
+              materialLines: { include: { material: true } },
+              equipmentLines: { include: { equipment: true } },
+            },
+          },
+          materialLines: { include: { material: true } },
+          equipmentLines: { include: { equipment: true } },
+        },
+      },
+      shippingTemplate: {
         include: {
           materialLines: { include: { material: true } },
           equipmentLines: { include: { equipment: true } },
@@ -158,9 +170,14 @@ export async function resolveCosts(
     select: { mistakeBuffer: true, defaultLaborRate: true },
   });
 
+  const productionTemplate = config.productionTemplate;
+  const effectiveShippingTemplate =
+    config.shippingTemplate ?? productionTemplate?.defaultShippingTemplate ?? null;
+
   // Step 3: Merge material lines — variant overrides take precedence over template
   // Build a map from materialId → variant override line
-  const templateMaterialLines = config.template?.materialLines ?? [];
+  const templateMaterialLines = productionTemplate?.materialLines ?? [];
+  const shippingTemplateMaterialLines = effectiveShippingTemplate?.materialLines ?? [];
   const explicitMaterialOverrideMap = new Map(
     config.materialLines
       .filter((line) => line.templateLineId)
@@ -207,6 +224,16 @@ export async function resolveCosts(
       usesPerVariant: override?.usesPerVariant ?? tl.usesPerVariant,
     });
     if (override) consumedVariantMaterialLineIds.add(override.id);
+  }
+
+  for (const tl of shippingTemplateMaterialLines) {
+    allMaterialLines.push({
+      materialId: tl.materialId,
+      material: tl.material,
+      yield_: tl.yield,
+      quantity: tl.quantity,
+      usesPerVariant: tl.usesPerVariant,
+    });
   }
 
   // Add variant-only lines (not in template)
@@ -256,7 +283,7 @@ export async function resolveCosts(
   });
 
   // Step 3 (continued): Merge equipment lines
-  const templateEquipmentLines = config.template?.equipmentLines ?? [];
+  const templateEquipmentLines = productionTemplate?.equipmentLines ?? [];
   const explicitEquipmentOverrideMap = new Map(
     config.equipmentLines
       .filter((line) => line.templateLineId)

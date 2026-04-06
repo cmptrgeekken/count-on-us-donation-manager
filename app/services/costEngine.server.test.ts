@@ -61,7 +61,7 @@ describe("resolveCosts", () => {
       laborMinutes: null,
       laborRate: null,
       mistakeBuffer: null,
-      template: {
+      productionTemplate: {
         materialLines: [
           {
             id: "template-line-1",
@@ -117,7 +117,7 @@ describe("resolveCosts", () => {
       laborMinutes: null,
       laborRate: null,
       mistakeBuffer: null,
-      template: {
+      productionTemplate: {
         materialLines: [
           {
             id: "template-unique",
@@ -195,7 +195,7 @@ describe("resolveCosts", () => {
       laborMinutes: null,
       laborRate: null,
       mistakeBuffer: null,
-      template: {
+      productionTemplate: {
         materialLines: [],
         equipmentLines: [
           {
@@ -261,7 +261,8 @@ describe("resolveCosts shipping material uses costing", () => {
       laborMinutes: null,
       laborRate: null,
       mistakeBuffer: null,
-      template: null,
+      productionTemplate: null,
+      shippingTemplate: null,
       materialLines: [
         {
           id: "shipping-line",
@@ -309,7 +310,8 @@ describe("resolveCosts shipping material uses costing", () => {
       laborMinutes: null,
       laborRate: null,
       mistakeBuffer: null,
-      template: null,
+      productionTemplate: null,
+      shippingTemplate: null,
       materialLines: [
         {
           id: "box-line",
@@ -364,7 +366,8 @@ describe("resolveCosts shipping material uses costing", () => {
       laborMinutes: null,
       laborRate: null,
       mistakeBuffer: decimal("0.1"),
-      template: null,
+      productionTemplate: null,
+      shippingTemplate: null,
       materialLines: [
         {
           id: "production-line",
@@ -398,5 +401,88 @@ describe("resolveCosts shipping material uses costing", () => {
     expect(result.packagingCost.toString()).toBe("0.3");
     expect(result.mistakeBufferAmount.toString()).toBe("2.4");
     expect(result.totalCost.toString()).toBe("26.7");
+  });
+
+  it("uses an explicit shipping template override before the production default", async () => {
+    const productionMaterial = createMaterial({
+      id: "fabric",
+      type: "production",
+      costingModel: "yield",
+      purchasePrice: "12",
+      purchaseQty: "1",
+    });
+    const inheritedShippingMaterial = createMaterial({
+      id: "mailer",
+      type: "shipping",
+      costingModel: null,
+      purchasePrice: "2",
+      purchaseQty: "1",
+    });
+    const explicitShippingMaterial = createMaterial({
+      id: "box",
+      type: "shipping",
+      costingModel: null,
+      purchasePrice: "5",
+      purchaseQty: "1",
+    });
+
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: {
+        materialLines: [
+          {
+            id: "prod-line",
+            materialId: "fabric",
+            material: productionMaterial,
+            quantity: decimal("2"),
+            yield: decimal("1"),
+            usesPerVariant: null,
+          },
+        ],
+        equipmentLines: [],
+        defaultShippingTemplate: {
+          materialLines: [
+            {
+              id: "default-ship-line",
+              materialId: "mailer",
+              material: inheritedShippingMaterial,
+              quantity: decimal("1"),
+              yield: null,
+              usesPerVariant: null,
+            },
+          ],
+          equipmentLines: [],
+        },
+      },
+      shippingTemplate: {
+        materialLines: [
+          {
+            id: "explicit-ship-line",
+            materialId: "box",
+            material: explicitShippingMaterial,
+            quantity: decimal("1"),
+            yield: null,
+            usesPerVariant: null,
+          },
+        ],
+        equipmentLines: [],
+      },
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config),
+    );
+
+    expect(result.materialCost.toString()).toBe("24");
+    expect(result.packagingCost.toString()).toBe("5");
+    expect(result.totalCost.toString()).toBe("29");
   });
 });

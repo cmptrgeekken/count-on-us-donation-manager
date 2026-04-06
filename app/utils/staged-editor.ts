@@ -23,6 +23,7 @@ export type TemplateDraftEquipmentLine = {
 export type TemplateDraft = {
   name: string;
   description: string;
+  defaultShippingTemplateId?: string | null;
   materialLines: TemplateDraftMaterialLine[];
   equipmentLines: TemplateDraftEquipmentLine[];
 };
@@ -49,6 +50,8 @@ export type TemplateCatalogEquipmentLine = {
 export type TemplateCatalogEntry = {
   id: string;
   name: string;
+  type?: string | null;
+  defaultShippingTemplateId?: string | null;
   materialLines: TemplateCatalogMaterialLine[];
   equipmentLines: TemplateCatalogEquipmentLine[];
 };
@@ -89,7 +92,8 @@ export type VariantAdditionalEquipmentDraftLine = {
 };
 
 export type VariantDraft = {
-  templateId: string | null;
+  productionTemplateId?: string | null;
+  shippingTemplateId?: string | null;
   laborMinutes: string;
   laborRate: string;
   mistakeBuffer: string;
@@ -111,6 +115,7 @@ export function normalizeTemplateDraft(draft: TemplateDraft) {
   return {
     name: draft.name.trim(),
     description: draft.description.trim(),
+    defaultShippingTemplateId: draft.defaultShippingTemplateId ?? "",
     materialLines: draft.materialLines.map((line) => ({
       id: line.id,
       materialId: line.materialId,
@@ -156,15 +161,26 @@ export function applyTemplateSelectionToVariantDraft(
 ): VariantDraft {
   return {
     ...draft,
-    templateId: template?.id ?? null,
+    productionTemplateId: template?.id ?? null,
     templateMaterialLines: buildVariantTemplateMaterialDraftLines(template),
     templateEquipmentLines: buildVariantTemplateEquipmentDraftLines(template),
   };
 }
 
+export function applyShippingTemplateSelectionToVariantDraft(
+  draft: VariantDraft,
+  template: TemplateCatalogEntry | null,
+): VariantDraft {
+  return {
+    ...draft,
+    shippingTemplateId: template?.id ?? null,
+  };
+}
+
 export function normalizeVariantDraft(draft: VariantDraft) {
   return {
-    templateId: draft.templateId ?? "",
+    productionTemplateId: draft.productionTemplateId ?? "",
+    shippingTemplateId: draft.shippingTemplateId ?? "",
     laborMinutes: draft.laborMinutes,
     laborRate: draft.laborRate,
     mistakeBuffer: draft.mistakeBuffer,
@@ -199,7 +215,8 @@ export function normalizeVariantDraft(draft: VariantDraft) {
 
 export function hasMeaningfulVariantDraft(draft: VariantDraft) {
   return Boolean(
-    draft.templateId ||
+    draft.productionTemplateId ||
+      draft.shippingTemplateId ||
       draft.laborMinutes ||
       draft.laborRate ||
       draft.mistakeBuffer ||

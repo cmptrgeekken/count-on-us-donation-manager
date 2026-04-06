@@ -89,6 +89,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             },
           },
           { name: "Fixture Laminate" },
+          { name: "Fixture Mailer" },
         ],
       },
       select: { id: true },
@@ -115,6 +116,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           },
         },
         { name: "Fixture Laminate" },
+        { name: "Fixture Mailer" },
       ],
     },
   });
@@ -222,8 +224,25 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     data: {
       shopId,
       variantId: variant.id,
-      templateId: usedTemplate.id,
+      productionTemplateId: usedTemplate.id,
       lineItemCount: 0,
+    },
+  });
+
+  await prisma.materialLibraryItem.create({
+    data: {
+      shopId,
+      name: "Fixture Mailer",
+      type: "shipping",
+      costingModel: "yield",
+      purchasePrice: "3.00",
+      purchaseQty: "1.00",
+      perUnitCost: "3.000000",
+      totalUsesPerUnit: null,
+      purchaseLink: "https://example.com/fixture-mailer",
+      weightGrams: "40.000",
+      status: "active",
+      notes: null,
     },
   });
 

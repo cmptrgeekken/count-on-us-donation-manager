@@ -13,6 +13,7 @@ import {
   InlineStack,
   Modal,
   Page,
+  Select,
   Text,
   TextField,
   TitleBar,
@@ -35,6 +36,7 @@ import {
 const templateDraftSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   description: z.string(),
+  defaultShippingTemplateId: z.string().nullable().optional(),
   materialLines: z.array(z.object({
     id: z.string(),
     materialId: z.string().min(1),
@@ -87,6 +89,8 @@ function parseRequiredWholeNumber(value: string, field: string) {
 function serializeTemplate(template: {
   id: string;
   name: string;
+  type: string;
+  defaultShippingTemplateId: string | null;
   description: string | null;
   status: string;
   materialLines: Array<{
@@ -108,6 +112,8 @@ function serializeTemplate(template: {
   return {
     id: template.id,
     name: template.name,
+    type: template.type,
+    defaultShippingTemplateId: template.defaultShippingTemplateId,
     description: template.description ?? "",
     status: template.status,
     materialLines: template.materialLines.map((line) => ({
@@ -137,6 +143,7 @@ function buildTemplateDraft(template: ReturnType<typeof serializeTemplate>): Tem
   return {
     name: template.name,
     description: template.description,
+    defaultShippingTemplateId: template.defaultShippingTemplateId,
     materialLines: cloneDraft(template.materialLines),
     equipmentLines: cloneDraft(template.equipmentLines),
   };
@@ -159,7 +166,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const [materials, equipment] = await Promise.all([
+  const [materials, equipment, shippingTemplates] = await Promise.all([
     prisma.materialLibraryItem.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
@@ -169,6 +176,16 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
       select: { id: true, name: true, hourlyRate: true, perUseCost: true },
+    }),
+    prisma.costTemplate.findMany({
+      where: {
+        shopId,
+        status: "active",
+        type: "shipping",
+        id: { not: templateId },
+      },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
     }),
   ]);
 
@@ -188,6 +205,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       hourlyRate: item.hourlyRate?.toString() ?? null,
       perUseCost: item.perUseCost?.toString() ?? null,
     })),
+    availableShippingTemplates: shippingTemplates,
   });
 };
 
@@ -229,8 +247,34 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   const draft = parsedDraft.data;
+  const normalizedDefaultShippingTemplateId = draft.defaultShippingTemplateId?.trim() || null;
   const existingMaterialLines = new Map(template.materialLines.map((line) => [line.id, line]));
   const existingEquipmentLines = new Map(template.equipmentLines.map((line) => [line.id, line]));
+
+  if (template.type === "shipping" && normalizedDefaultShippingTemplateId) {
+    return Response.json(
+      { ok: false, message: "Shipping templates cannot define a default shipping template." },
+      { status: 400 },
+    );
+  }
+
+  if (normalizedDefaultShippingTemplateId) {
+    const shippingTemplate = await prisma.costTemplate.findFirst({
+      where: { id: normalizedDefaultShippingTemplateId, shopId },
+      select: { id: true, type: true },
+    });
+
+    if (!shippingTemplate) {
+      return Response.json({ ok: false, message: "Default shipping template not found." }, { status: 404 });
+    }
+
+    if (shippingTemplate.type !== "shipping") {
+      return Response.json(
+        { ok: false, message: "Default shipping template must reference a shipping template." },
+        { status: 400 },
+      );
+    }
+  }
 
   const materialIds = draft.materialLines.map((line) => line.materialId);
   if (new Set(materialIds).size !== materialIds.length) {
@@ -276,6 +320,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       data: {
         name: draft.name.trim(),
         description: draft.description.trim() || null,
+        defaultShippingTemplateId: template.type === "production" ? normalizedDefaultShippingTemplateId : null,
       },
     });
     
@@ -403,7 +448,7 @@ function describeEquipmentLine(line: TemplateDraftEquipmentLine) {
 }
 
 export default function TemplateDetailPage() {
-  const { template, availableMaterials, availableEquipment } = useLoaderData<typeof loader>();
+  const { template, availableMaterials, availableEquipment, availableShippingTemplates } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
   const revalidator = useRevalidator();
   const { formatMoney } = useAppLocalization();
@@ -618,7 +663,10 @@ export default function TemplateDetailPage() {
       .map((line) => line.equipmentId),
   );
 
+  const selectableMaterials = availableMaterials.filter((item: AvailableMaterial) => item.type === template.type);
+
   const filteredMaterialOptions = availableMaterials
+    .filter((item: AvailableMaterial) => item.type === template.type)
     .filter((item: AvailableMaterial) => !unavailableMaterialIds.has(item.id))
     .filter((item: AvailableMaterial) =>
       item.name.toLowerCase().includes(materialSearchValue.trim().toLowerCase()),
@@ -637,9 +685,14 @@ export default function TemplateDetailPage() {
       backAction={{ content: "Templates", onAction: () => void confirmThenNavigate("/app/templates") }}
       title={draft.name || template.name}
       titleMetadata={
-        <Badge tone={template.status === "active" ? "success" : "enabled"}>
-          {template.status === "active" ? "Active" : "Inactive"}
-        </Badge>
+        <InlineStack gap="200">
+          <Badge tone={template.type === "shipping" ? "info" : "success"}>
+            {template.type === "shipping" ? "Shipping" : "Production"}
+          </Badge>
+          <Badge tone={template.status === "active" ? "success" : "enabled"}>
+            {template.status === "active" ? "Active" : "Inactive"}
+          </Badge>
+        </InlineStack>
       }
     >
       <TitleBar title={draft.name || template.name} />
@@ -677,6 +730,27 @@ export default function TemplateDetailPage() {
               multiline={2}
               autoComplete="off"
             />
+            {template.type === "production" && (
+              <BlockStack gap="200">
+                <Select
+                  label="Default shipping template"
+                  value={draft.defaultShippingTemplateId ?? ""}
+                  onChange={(value) =>
+                    setDraft((current) => ({ ...current, defaultShippingTemplateId: value || null }))
+                  }
+                  options={[
+                    { label: "None", value: "" },
+                    ...availableShippingTemplates.map((shippingTemplate: { id: string; name: string }) => ({
+                      label: shippingTemplate.name,
+                      value: shippingTemplate.id,
+                    })),
+                  ]}
+                />
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Variants using this Production template will inherit this Shipping template unless they set an explicit Shipping override.
+                </Text>
+              </BlockStack>
+            )}
           </BlockStack>
         </Card>
 
@@ -684,7 +758,7 @@ export default function TemplateDetailPage() {
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h2" variant="headingMd">Materials</Text>
-              <Button onClick={openAddMaterialModal} disabled={availableMaterials.length === 0}>
+              <Button onClick={openAddMaterialModal} disabled={selectableMaterials.length === 0}>
                 Add material
               </Button>
             </InlineStack>
@@ -696,7 +770,9 @@ export default function TemplateDetailPage() {
                 fullWidth
               >
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  Add production and shipping materials to this template.
+                  {template.type === "shipping"
+                    ? "Add shipping materials to this template."
+                    : "Add production materials to this template."}
                 </Text>
               </EmptyState>
             ) : (

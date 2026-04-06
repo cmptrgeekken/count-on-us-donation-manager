@@ -365,6 +365,124 @@ export default function MaterialsPage() {
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
+  const productionMaterials = materials.filter((material: Material) => material.type === "production");
+  const shippingMaterials = materials.filter((material: Material) => material.type === "shipping");
+
+  function renderMaterialRows(rows: Material[]) {
+    return rows.map((material: Material) => (
+      <s-table-row key={material.id}>
+        <s-table-cell>{material.name}</s-table-cell>
+        <s-table-cell>{material.type === "production" ? "Production" : "Shipping"}</s-table-cell>
+        <s-table-cell>
+          {material.costingModel === "yield"
+            ? "Yield-based"
+            : material.costingModel === "uses"
+              ? "Uses-based"
+              : "Flat per unit"}
+        </s-table-cell>
+        <s-table-cell>{formatMoney(material.perUnitCost)}</s-table-cell>
+        <s-table-cell>{material.weightGrams ? `${material.weightGrams} g` : "—"}</s-table-cell>
+        <s-table-cell>
+          {material.purchaseLink ? (
+            <a href={material.purchaseLink} target="_blank" rel="noreferrer">
+              Open
+            </a>
+          ) : "—"}
+        </s-table-cell>
+        <s-table-cell>{material.templateCount + material.variantCount} uses</s-table-cell>
+        <s-table-cell>
+          <s-badge tone={material.status === "active" ? "success" : "enabled"}>
+            {material.status === "active" ? "Active" : "Inactive"}
+          </s-badge>
+        </s-table-cell>
+        <s-table-cell>
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+            <s-button
+              variant="secondary"
+              onClick={() => openEdit(material)}
+            >
+              Edit
+            </s-button>
+            {material.status === "active" ? (
+              <s-button
+                tone="critical"
+                variant="secondary"
+                onClick={() => confirmDeactivate(material)}
+              >
+                Deactivate
+              </s-button>
+            ) : (
+              <fetcher.Form method="post">
+                <input type="hidden" name="intent" value="reactivate" />
+                <input type="hidden" name="id" value={material.id} />
+                <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
+              </fetcher.Form>
+            )}
+            {material.templateCount + material.variantCount === 0 ? (
+              <s-button tone="critical" variant="secondary" onClick={() => confirmDelete(material)}>
+                Delete
+              </s-button>
+            ) : (
+              <s-text color="subdued">Delete unavailable while in use</s-text>
+            )}
+          </div>
+        </s-table-cell>
+      </s-table-row>
+    ));
+  }
+
+  function renderMaterialSection(
+    heading: string,
+    description: string,
+    rows: Material[],
+    emptyText: string,
+  ) {
+    return (
+      <s-section padding="none">
+        <s-table>
+          <div slot="filters" style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap", padding: "1rem" }}>
+            <div style={{ display: "grid", gap: "0.2rem" }}>
+              <strong>{heading}</strong>
+              <s-text color="subdued">{description}</s-text>
+            </div>
+            <s-button variant="primary" onClick={openCreate}>
+              New material
+            </s-button>
+          </div>
+
+          <s-table-header-row>
+            <s-table-header listSlot="primary">Name</s-table-header>
+            <s-table-header listSlot="inline">Type</s-table-header>
+            <s-table-header listSlot="labeled">Costing model</s-table-header>
+            <s-table-header listSlot="labeled" format="currency">Per-unit cost</s-table-header>
+            <s-table-header listSlot="labeled">Weight</s-table-header>
+            <s-table-header listSlot="labeled">Purchase link</s-table-header>
+            <s-table-header listSlot="secondary" format="numeric">Used by</s-table-header>
+            <s-table-header listSlot="inline">Status</s-table-header>
+            <s-table-header>Actions</s-table-header>
+          </s-table-header-row>
+
+          <s-table-body>
+            {rows.length > 0 ? (
+              renderMaterialRows(rows)
+            ) : (
+              <s-table-row>
+                <s-table-cell>{emptyText}</s-table-cell>
+                <s-table-cell></s-table-cell>
+                <s-table-cell></s-table-cell>
+                <s-table-cell></s-table-cell>
+                <s-table-cell></s-table-cell>
+                <s-table-cell></s-table-cell>
+                <s-table-cell></s-table-cell>
+                <s-table-cell></s-table-cell>
+                <s-table-cell></s-table-cell>
+              </s-table-row>
+            )}
+          </s-table-body>
+        </s-table>
+      </s-section>
+    );
+  }
 
   return (
     <>
@@ -404,94 +522,20 @@ export default function MaterialsPage() {
             </div>
           </s-section>
         ) : (
-          <s-section padding="none">
-            <s-table>
-              <div slot="filters" style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap", padding: "1rem" }}>
-                <div style={{ display: "grid", gap: "0.2rem" }}>
-                  <strong>Material Library</strong>
-                  <s-text color="subdued">Production and shipping materials used in template and variant costing.</s-text>
-                </div>
-                <s-button variant="primary" onClick={openCreate}>
-                  New material
-                </s-button>
-              </div>
-
-              <s-table-header-row>
-                <s-table-header listSlot="primary">Name</s-table-header>
-                <s-table-header listSlot="inline">Type</s-table-header>
-                <s-table-header listSlot="labeled">Costing model</s-table-header>
-                <s-table-header listSlot="labeled" format="currency">Per-unit cost</s-table-header>
-                <s-table-header listSlot="labeled">Weight</s-table-header>
-                <s-table-header listSlot="labeled">Purchase link</s-table-header>
-                <s-table-header listSlot="secondary" format="numeric">Used by</s-table-header>
-                <s-table-header listSlot="inline">Status</s-table-header>
-                <s-table-header>Actions</s-table-header>
-              </s-table-header-row>
-
-              <s-table-body>
-                {materials.map((material: Material) => (
-                  <s-table-row key={material.id}>
-                    <s-table-cell>{material.name}</s-table-cell>
-                    <s-table-cell>{material.type === "production" ? "Production" : "Shipping"}</s-table-cell>
-                    <s-table-cell>
-                      {material.costingModel === "yield"
-                        ? "Yield-based"
-                        : material.costingModel === "uses"
-                          ? "Uses-based"
-                          : "Flat per unit"}
-                    </s-table-cell>
-                    <s-table-cell>{formatMoney(material.perUnitCost)}</s-table-cell>
-                    <s-table-cell>{material.weightGrams ? `${material.weightGrams} g` : "—"}</s-table-cell>
-                    <s-table-cell>
-                      {material.purchaseLink ? (
-                        <a href={material.purchaseLink} target="_blank" rel="noreferrer">
-                          Open
-                        </a>
-                      ) : "—"}
-                    </s-table-cell>
-                    <s-table-cell>{material.templateCount + material.variantCount} uses</s-table-cell>
-                    <s-table-cell>
-                      <s-badge tone={material.status === "active" ? "success" : "enabled"}>
-                        {material.status === "active" ? "Active" : "Inactive"}
-                      </s-badge>
-                    </s-table-cell>
-                    <s-table-cell>
-                      <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                        <s-button
-                          variant="secondary"
-                          onClick={() => openEdit(material)}
-                        >
-                          Edit
-                        </s-button>
-                        {material.status === "active" ? (
-                          <s-button
-                            tone="critical"
-                            variant="secondary"
-                            onClick={() => confirmDeactivate(material)}
-                          >
-                            Deactivate
-                          </s-button>
-                        ) : (
-                          <fetcher.Form method="post">
-                            <input type="hidden" name="intent" value="reactivate" />
-                            <input type="hidden" name="id" value={material.id} />
-                            <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
-                          </fetcher.Form>
-                        )}
-                        {material.templateCount + material.variantCount === 0 ? (
-                          <s-button tone="critical" variant="secondary" onClick={() => confirmDelete(material)}>
-                            Delete
-                          </s-button>
-                        ) : (
-                          <s-text color="subdued">Delete unavailable while in use</s-text>
-                        )}
-                      </div>
-                    </s-table-cell>
-                  </s-table-row>
-                ))}
-              </s-table-body>
-            </s-table>
-          </s-section>
+          <>
+            {renderMaterialSection(
+              "Production Materials",
+              "Materials consumed as part of the product itself.",
+              productionMaterials,
+              "No production materials yet.",
+            )}
+            {renderMaterialSection(
+              "Shipping Materials",
+              "Materials used for packaging and shipment.",
+              shippingMaterials,
+              "No shipping materials yet.",
+            )}
+          </>
         )}
       </s-page>
 

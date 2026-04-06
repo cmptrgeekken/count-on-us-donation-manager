@@ -14,6 +14,7 @@ test("cost templates can be created, deactivated, and reactivated on the real ro
   await expect(templateDialog).toBeVisible();
 
   await templateDialog.getByLabel("Name").fill("Playwright Template UI Fresh");
+  await templateDialog.getByLabel("Template type").selectOption("shipping");
   await templateDialog.locator("#template-description").fill("Playwright-created template.");
   await templateDialog.getByRole("button", { name: "Create" }).click();
 
@@ -22,6 +23,7 @@ test("cost templates can be created, deactivated, and reactivated on the real ro
     .locator("s-table-row")
     .filter({ has: page.getByText("Playwright Template UI Fresh", { exact: true }) });
   await expect(templateRow).toBeVisible();
+  await expect(templateRow.getByText("Shipping")).toBeVisible();
 
   await templateRow.getByRole("button", { name: "Deactivate" }).click();
   const deactivateDialog = page.getByRole("dialog").filter({ hasText: "Deactivate template" });
