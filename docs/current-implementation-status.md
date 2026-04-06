@@ -5,8 +5,8 @@ Use this document as the practical snapshot of what is implemented in the repo t
 This file is intentionally lightweight and operational. It should summarize reality, not restate full product requirements or phase specs.
 
 **Project:** Count On Us  
-**Date:** April 5, 2026  
-**Summary:** Phase 1 and Phase 2 are complete. Phase 3 is actively in progress on the implementation branch, including the schema foundation, causes/products/expenses, snapshot and adjustment services, reconciliation, and the first Order History admin surface.
+**Date:** April 6, 2026  
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Current focus should shift from Phase 3 implementation to post-Phase-3 stabilization and planning for the next major product slice.
 
 ---
 
@@ -14,8 +14,8 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Phase 3 implementation
-- **Phase 3:** In progress
+- **Current focus:** Post-Phase-3 stabilization and next-phase planning
+- **Phase 3:** Complete
 
 ---
 
@@ -93,9 +93,25 @@ This file is intentionally lightweight and operational. It should summarize real
 - [x] Reconciliation job
 - [x] Order history pages
 - [x] Real `orders/create`, `orders/updated`, and `refunds/create` processing
-- [ ] Manual adjustment admin flow polish
-- [ ] Order History filtering/pagination polish
-- [ ] Additional Playwright coverage for new Phase 3 admin workflows
+- [x] Manual adjustment admin flow
+- [x] Order History filtering/pagination
+- [x] Playwright coverage for Phase 3 admin workflows
+
+---
+
+## Post-Phase-3 Follow-Up
+
+These are useful next items, but they are no longer blockers for closing Phase 3:
+
+- UI polish and parity follow-ups such as:
+  - create-from-search empty states
+  - Variant picker parity with Template picker flows
+  - large-list filtering UX refinement
+- engineering hardening:
+  - restore stricter ESLint severities after the config migration
+- library metadata and delete-safety enhancements that are shipping as separate PRs
+- next major product capability:
+  - separate Production vs Shipping template modeling and assignment
 
 ---
 
@@ -138,6 +154,6 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - This file is a practical implementation snapshot, not the source of product requirements.
 - The PRD, build plan, ADRs, and implementation plans remain authoritative for scope and architecture.
-- For immediate next work, use `docs/plans/phase-3-kickoff-checklist.md` alongside the Phase 3 implementation plan.
+- For immediate next work, use `docs/plans/issue-29-production-vs-shipping-templates-plan.md` and the open enhancement issues as the next planning inputs.
 - Update this file when a phase meaningfully changes state, not for every small commit.
 - Local Shopify CLI development currently uses [shopify.app.toml](../shopify.app.toml) as a safe default. The full Phase 3 webhook subscription set is tracked in [shopify.app.phase3.toml](../shopify.app.phase3.toml) until the local CLI issue around order/refund topics is resolved.
