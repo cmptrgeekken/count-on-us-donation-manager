@@ -9,7 +9,7 @@ import {
   ensureCauseMetaobjectDefinition,
   updateCauseMetaobject,
 } from "../services/causeMetaobjectService.server";
-import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 
 const causeSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
@@ -111,8 +111,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticateAdminRequest(request);
   const shopId = session.shop;
+  const isPlaywrightBypass = isPlaywrightBypassRequest(request);
 
-  if (!admin) {
+  if (!admin && !isPlaywrightBypass) {
     return Response.json({ ok: false, message: "Shopify admin context is required." }, { status: 500 });
   }
 
@@ -183,22 +184,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
 
         try {
-          await ensureCauseMetaobjectDefinition(admin);
-          const metaobject = await createCauseMetaobject(admin, causeInput);
-          await prisma.cause.update({
-            where: { id: cause.id, shopId },
-            data: { shopifyMetaobjectId: metaobject.id },
-          });
-          await prisma.auditLog.create({
-            data: {
-              shopId,
-              entity: "Cause",
-              entityId: cause.id,
-              action: "CAUSE_SHOPIFY_SYNCED",
-              actor: "merchant",
-              payload: { shopifyMetaobjectId: metaobject.id },
-            },
-          });
+          if (admin) {
+            await ensureCauseMetaobjectDefinition(admin);
+            const metaobject = await createCauseMetaobject(admin, causeInput);
+            await prisma.cause.update({
+              where: { id: cause.id, shopId },
+              data: { shopifyMetaobjectId: metaobject.id },
+            });
+            await prisma.auditLog.create({
+              data: {
+                shopId,
+                entity: "Cause",
+                entityId: cause.id,
+                action: "CAUSE_SHOPIFY_SYNCED",
+                actor: "merchant",
+                payload: { shopifyMetaobjectId: metaobject.id },
+              },
+            });
+          }
           return Response.json({ ok: true, message: "Cause created." });
         } catch (error) {
           await prisma.auditLog.create({
@@ -266,30 +269,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
 
       try {
-        await ensureCauseMetaobjectDefinition(admin);
-        let metaobjectId = existing.shopifyMetaobjectId;
-        if (metaobjectId) {
-          await updateCauseMetaobject(admin, metaobjectId, causeInput);
-        } else {
-          const metaobject = await createCauseMetaobject(admin, causeInput);
-          metaobjectId = metaobject.id;
+        if (admin) {
+          await ensureCauseMetaobjectDefinition(admin);
+          let metaobjectId = existing.shopifyMetaobjectId;
+          if (metaobjectId) {
+            await updateCauseMetaobject(admin, metaobjectId, causeInput);
+          } else {
+            const metaobject = await createCauseMetaobject(admin, causeInput);
+            metaobjectId = metaobject.id;
+          }
+
+          await prisma.cause.update({
+            where: { id, shopId },
+            data: { shopifyMetaobjectId: metaobjectId },
+          });
+
+          await prisma.auditLog.create({
+            data: {
+              shopId,
+              entity: "Cause",
+              entityId: id,
+              action: "CAUSE_SHOPIFY_SYNCED",
+              actor: "merchant",
+              payload: { shopifyMetaobjectId: metaobjectId },
+            },
+          });
         }
-
-        await prisma.cause.update({
-          where: { id, shopId },
-          data: { shopifyMetaobjectId: metaobjectId },
-        });
-
-        await prisma.auditLog.create({
-          data: {
-            shopId,
-            entity: "Cause",
-            entityId: id,
-            action: "CAUSE_SHOPIFY_SYNCED",
-            actor: "merchant",
-            payload: { shopifyMetaobjectId: metaobjectId },
-          },
-        });
 
         return Response.json({ ok: true, message: "Cause updated." });
       } catch (error) {
@@ -388,30 +393,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
 
       try {
-        await ensureCauseMetaobjectDefinition(admin);
-        let metaobjectId = cause.shopifyMetaobjectId;
-        if (metaobjectId) {
-          await updateCauseMetaobject(admin, metaobjectId, metaobjectInput);
-        } else {
-          const metaobject = await createCauseMetaobject(admin, metaobjectInput);
-          metaobjectId = metaobject.id;
+        if (admin) {
+          await ensureCauseMetaobjectDefinition(admin);
+          let metaobjectId = cause.shopifyMetaobjectId;
+          if (metaobjectId) {
+            await updateCauseMetaobject(admin, metaobjectId, metaobjectInput);
+          } else {
+            const metaobject = await createCauseMetaobject(admin, metaobjectInput);
+            metaobjectId = metaobject.id;
+          }
+
+          await prisma.cause.update({
+            where: { id, shopId },
+            data: { shopifyMetaobjectId: metaobjectId },
+          });
+
+          await prisma.auditLog.create({
+            data: {
+              shopId,
+              entity: "Cause",
+              entityId: id,
+              action: "CAUSE_SHOPIFY_SYNCED",
+              actor: "merchant",
+              payload: { shopifyMetaobjectId: metaobjectId },
+            },
+          });
         }
-
-        await prisma.cause.update({
-          where: { id, shopId },
-          data: { shopifyMetaobjectId: metaobjectId },
-        });
-
-        await prisma.auditLog.create({
-          data: {
-            shopId,
-            entity: "Cause",
-            entityId: id,
-            action: "CAUSE_SHOPIFY_SYNCED",
-            actor: "merchant",
-            payload: { shopifyMetaobjectId: metaobjectId },
-          },
-        });
 
         return Response.json({
           ok: true,
