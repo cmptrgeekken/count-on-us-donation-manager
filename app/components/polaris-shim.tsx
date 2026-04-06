@@ -228,6 +228,7 @@ export function TextField({
   label,
   value,
   onChange,
+  onBlur,
   autoComplete,
   disabled,
   type,
@@ -242,6 +243,7 @@ export function TextField({
   label: string;
   value: string;
   onChange?: (value: string) => void;
+  onBlur?: () => void;
   autoComplete?: string;
   disabled?: boolean;
   type?: string;
@@ -287,6 +289,7 @@ export function TextField({
         type={type ?? "text"}
         value={value}
         onChange={(event) => onChange?.(event.currentTarget.value)}
+        onBlur={onBlur}
         autoComplete={autoComplete}
         disabled={disabled}
         min={min}

@@ -4,6 +4,7 @@ import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 
 import { prisma } from "../db.server";
 import { authenticate } from "../shopify.server";
+import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const SHOP_CURRENCY_QUERY = `#graphql
@@ -280,9 +281,10 @@ export default function Settings() {
                 name="defaultLaborRate"
                 value={laborRateInput}
                 onChange={(event) => setLaborRateInput((event.currentTarget as HTMLInputElement).value)}
+                onBlur={(event) => setLaborRateInput(normalizeFixedDecimalInput((event.currentTarget as HTMLInputElement).value))}
                 type="number"
                 min={0}
-                step={0.1}
+                step={0.01}
               />
               <s-text>
                 Example: {formatMoney(15)}/hr. Leave blank to remove the shop default labor rate.

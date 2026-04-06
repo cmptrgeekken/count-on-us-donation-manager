@@ -21,6 +21,7 @@ import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import {
@@ -175,6 +176,15 @@ function parseNullableNumber(value: string | null | undefined, field: string) {
   const parsed = Number(value);
   if (Number.isNaN(parsed) || parsed < 0) {
     throw new Response(`${field} must be a non-negative number.`, { status: 400 });
+  }
+  return parsed;
+}
+
+function parseNullableWholeNumber(value: string | null | undefined, field: string) {
+  if (!value || !value.trim()) return null;
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+    throw new Response(`${field} must be a non-negative whole number.`, { status: 400 });
   }
   return parsed;
 }
@@ -654,9 +664,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         shopId,
         templateLineId: line.templateLineId,
         materialId: line.materialId,
-        quantity: parseNullableNumber(line.overrideQuantity, "Material quantity") ?? 0,
-        yield: parseNullableNumber(line.overrideYield, "Material yield"),
-        usesPerVariant: parseNullableNumber(line.overrideUsesPerVariant, "Material uses per variant"),
+        quantity: parseNullableWholeNumber(line.overrideQuantity, "Material quantity") ?? 0,
+        yield: parseNullableWholeNumber(line.overrideYield, "Material yield"),
+        usesPerVariant: parseNullableWholeNumber(line.overrideUsesPerVariant, "Material uses per variant"),
       }));
 
     const equipmentOverrideLines = draft.templateEquipmentLines
@@ -666,22 +676,22 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         templateLineId: line.templateLineId,
         equipmentId: line.equipmentId,
         minutes: parseNullableNumber(line.overrideMinutes, "Equipment minutes"),
-        uses: parseNullableNumber(line.overrideUses, "Equipment uses"),
+        uses: parseNullableWholeNumber(line.overrideUses, "Equipment uses"),
       }));
 
     const additionalMaterialLines = draft.materialLines.map((line) => ({
       shopId,
       materialId: line.materialId,
-      quantity: parseNullableNumber(line.quantity, "Material quantity") ?? 0,
-      yield: parseNullableNumber(line.yield, "Material yield"),
-      usesPerVariant: parseNullableNumber(line.usesPerVariant, "Material uses per variant"),
+      quantity: parseNullableWholeNumber(line.quantity, "Material quantity") ?? 0,
+      yield: parseNullableWholeNumber(line.yield, "Material yield"),
+      usesPerVariant: parseNullableWholeNumber(line.usesPerVariant, "Material uses per variant"),
     }));
 
     const additionalEquipmentLines = draft.equipmentLines.map((line) => ({
       shopId,
       equipmentId: line.equipmentId,
       minutes: parseNullableNumber(line.minutes, "Equipment minutes"),
-      uses: parseNullableNumber(line.uses, "Equipment uses"),
+      uses: parseNullableWholeNumber(line.uses, "Equipment uses"),
     }));
 
     await prisma.$transaction(async (tx) => {
@@ -1245,7 +1255,7 @@ export default function VariantDetailPage() {
   const [addMaterialOpen, setAddMaterialOpen] = useState(false);
   const [selectedMaterialId, setSelectedMaterialId] = useState(availableMaterials[0]?.id ?? "");
   const [matQty, setMatQty] = useState("1");
-  const [matYield, setMatYield] = useState("");
+  const [matYield, setMatYield] = useState("1");
   const [matUses, setMatUses] = useState("");
 
   const [materialOverrideTargetId, setMaterialOverrideTargetId] = useState<string | null>(null);
@@ -1297,7 +1307,7 @@ export default function VariantDetailPage() {
   function resetAdditionalMaterialModal() {
     setSelectedMaterialId(availableMaterials[0]?.id ?? "");
     setMatQty("1");
-    setMatYield("");
+    setMatYield("1");
     setMatUses("");
   }
 
@@ -1582,6 +1592,7 @@ export default function VariantDetailPage() {
                     step={0.01}
                     value={draft.laborRate}
                     onChange={(value) => setDraft((current) => ({ ...current, laborRate: value }))}
+                    onBlur={() => setDraft((current) => ({ ...current, laborRate: normalizeFixedDecimalInput(current.laborRate) }))}
                     autoComplete="off"
                     helpText={laborRateHelpText}
                   />
@@ -1966,8 +1977,9 @@ export default function VariantDetailPage() {
               options={availableMaterials.map((material: AvailableMaterial) => ({ label: material.name, value: material.id }))}
               value={selectedMaterialId}
               onChange={(value) => {
+                const nextMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === value);
                 setSelectedMaterialId(value);
-                setMatYield("");
+                setMatYield(nextMaterial?.costingModel === "yield" ? "1" : "");
                 setMatUses("");
               }}
             />

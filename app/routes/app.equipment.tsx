@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -373,16 +374,22 @@ export default function EquipmentPage() {
               onChange={(event) =>
                 updateForm("hourlyRate", (event.target as HTMLInputElement | null)?.value ?? "")
               }
+              onBlur={(event) =>
+                updateForm("hourlyRate", normalizeFixedDecimalInput((event.target as HTMLInputElement | null)?.value ?? ""))
+              }
               details="Cost per hour of use."
             />
             <s-text-field
               label={`Per-use cost (${getCurrencySymbol()})`}
               type="number"
               min={0}
-              step={0.0001}
+              step={0.01}
               value={form.perUseCost}
               onChange={(event) =>
                 updateForm("perUseCost", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              onBlur={(event) =>
+                updateForm("perUseCost", normalizeFixedDecimalInput((event.target as HTMLInputElement | null)?.value ?? ""))
               }
               details="Fixed cost per use, e.g. consumable wear."
             />

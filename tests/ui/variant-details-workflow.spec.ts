@@ -20,6 +20,7 @@ test("variant details save and discard work on the real route", async ({ page, r
 
   await expect(minutesField).toHaveValue("12");
   await expect(page.getByText("Variant configuration saved.")).toBeVisible();
+  await expect(saveButton).toBeHidden();
 
   await page.reload();
   await expect(minutesField).toHaveValue("12");
@@ -28,4 +29,17 @@ test("variant details save and discard work on the real route", async ({ page, r
   await discardButton.click();
 
   await expect(minutesField).toHaveValue("12");
+});
+
+test("variant details default new yield-based material lines to 1", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/variant-details-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.variantUrl);
+
+  await page.getByRole("button", { name: "Add material" }).click();
+  await page.getByLabel("Material", { exact: true }).selectOption({ label: "Playwright Yield Material" });
+
+  await expect(page.getByLabel("Yield per piece")).toHaveValue("1");
 });

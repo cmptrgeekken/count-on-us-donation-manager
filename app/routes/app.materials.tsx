@@ -3,6 +3,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -458,6 +459,9 @@ export default function MaterialsPage() {
               value={form.purchasePrice}
               onChange={(event) =>
                 updateForm("purchasePrice", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              onBlur={(event) =>
+                updateForm("purchasePrice", normalizeFixedDecimalInput((event.target as HTMLInputElement | null)?.value ?? ""))
               }
             />
             <s-text-field

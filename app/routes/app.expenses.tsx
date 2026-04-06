@@ -7,6 +7,7 @@ import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { recomputeTaxOffsetCache } from "../services/taxOffsetCache.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const expenseSchema = z.object({
@@ -560,6 +561,7 @@ export default function ExpensesPage() {
               step="0.01"
               value={form.amount}
               onChange={(event) => updateForm("amount", event.currentTarget.value)}
+              onBlur={(event) => updateForm("amount", normalizeFixedDecimalInput(event.currentTarget.value))}
               aria-invalid={fieldError("amount") ? true : undefined}
               style={{
                 width: "100%",

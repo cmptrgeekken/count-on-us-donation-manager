@@ -19,7 +19,7 @@ test("template details save and discard work on the real route", async ({ page, 
   await saveButton.click();
 
   await expect(nameField).toHaveValue("Updated Playwright Template");
-  await expect(page.getByText("Template saved.")).toBeVisible();
+  await expect(saveButton).toBeHidden();
 
   await page.reload();
   await expect(nameField).toHaveValue("Updated Playwright Template");
@@ -28,4 +28,18 @@ test("template details save and discard work on the real route", async ({ page, 
   await discardButton.click();
 
   await expect(nameField).toHaveValue("Updated Playwright Template");
+});
+
+test("template details default new yield-based material lines to 1", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/template-details-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.templateUrl);
+
+  await page.getByRole("button", { name: "Add material" }).click();
+  await page.getByPlaceholder("Search materials").click();
+  await page.getByRole("button", { name: "Fixture Backer" }).click();
+
+  await expect(page.getByLabel("Yield (units produced per purchased unit)")).toHaveValue("1");
 });
