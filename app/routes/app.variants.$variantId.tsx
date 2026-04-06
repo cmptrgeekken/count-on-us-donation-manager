@@ -24,6 +24,7 @@ import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
+import { resolveEffectiveTemplateSelection } from "../utils/effective-template-selection";
 import {
   applyTemplateSelectionToVariantDraft,
   cloneDraft,
@@ -140,6 +141,8 @@ function serializeVariantEquipmentLine(
 
 const variantDraftSchema = z.object({
   templateId: z.string().nullable(),
+  productionTemplateId: z.string().nullable().optional(),
+  shippingTemplateId: z.string().nullable().optional(),
   laborMinutes: z.string(),
   laborRate: z.string(),
   mistakeBuffer: z.string(),
@@ -371,6 +374,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       ? {
           id: config.id,
           templateId: config.templateId,
+          productionTemplateId: config.productionTemplateId ?? config.templateId,
+          shippingTemplateId: config.shippingTemplateId,
           templateName: config.template?.name ?? null,
           laborMinutes: config.laborMinutes?.toString() ?? "",
           laborRate: config.laborRate?.toString() ?? "",
@@ -385,6 +390,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     templates: templates.map((template) => ({
       id: template.id,
       name: template.name,
+      type: template.type,
+      defaultShippingTemplateId: template.defaultShippingTemplateId,
       materialLines: template.materialLines.map((line) => ({
         templateLineId: line.id,
         materialId: line.materialId,
@@ -1216,6 +1223,8 @@ function describeEquipmentLine(line: {
 
 function buildVariantDraft(config: {
   templateId: string | null;
+  productionTemplateId?: string | null;
+  shippingTemplateId?: string | null;
   laborMinutes: string;
   laborRate: string;
   mistakeBuffer: string;
@@ -1226,6 +1235,8 @@ function buildVariantDraft(config: {
 } | null): VariantDraft {
   return {
     templateId: config?.templateId ?? null,
+    productionTemplateId: config?.productionTemplateId ?? config?.templateId ?? null,
+    shippingTemplateId: config?.shippingTemplateId ?? null,
     laborMinutes: config?.laborMinutes ?? "",
     laborRate: config?.laborRate ?? "",
     mistakeBuffer: config?.mistakeBuffer ?? "",
@@ -1277,6 +1288,20 @@ export default function VariantDetailPage() {
   const handledSaveRef = useRef<string | null>(null);
 
   const isSaving = saveFetcher.state !== "idle";
+  const productionTemplates = templates.filter((template: TemplateCatalogEntry) => template.type !== "shipping");
+  const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
+  const effectiveTemplateSelection = resolveEffectiveTemplateSelection(
+    {
+      templateId: draft.templateId,
+      productionTemplateId: draft.productionTemplateId ?? draft.templateId,
+      shippingTemplateId: draft.shippingTemplateId ?? null,
+    },
+    templates,
+  );
+  const assignedProductionTemplate =
+    templates.find((template: TemplateCatalogEntry) => template.id === effectiveTemplateSelection.productionTemplateId) ?? null;
+  const effectiveShippingTemplate =
+    templates.find((template: TemplateCatalogEntry) => template.id === effectiveTemplateSelection.shippingTemplateId) ?? null;
   const preview = previewFetcher.data?.preview;
   const selectedMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === selectedMaterialId);
   const materialOverrideTarget =
@@ -1533,7 +1558,7 @@ export default function VariantDetailPage() {
         <Card>
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
-              <Text as="h2" variant="headingMd">Cost Template</Text>
+              <Text as="h2" variant="headingMd">Production Template</Text>
               <InlineStack gap="200">
                 {draft.templateId && (
                   <Button variant="plain" tone="critical" onClick={removeSelectedTemplate}>
@@ -1542,22 +1567,52 @@ export default function VariantDetailPage() {
                 )}
                 <Button
                   onClick={() => {
-                    setSelectedTemplateId(draft.templateId ?? templates[0]?.id ?? "");
+                    setSelectedTemplateId(draft.templateId ?? productionTemplates[0]?.id ?? "");
                     setAssignTemplateOpen(true);
                   }}
-                  disabled={templates.length === 0}
+                  disabled={productionTemplates.length === 0}
                 >
-                  {draft.templateId ? "Change template" : "Assign template"}
+                  {draft.templateId ? "Change production template" : "Assign production template"}
                 </Button>
               </InlineStack>
             </InlineStack>
             <Divider />
-            {draft.templateId ? (
+            {assignedProductionTemplate ? (
               <Text as="p" variant="bodyMd">
-                {templates.find((template: TemplateCatalogEntry) => template.id === draft.templateId)?.name ?? "Assigned template"}
+                {assignedProductionTemplate.name}
               </Text>
             ) : (
-              <Text as="p" variant="bodyMd" tone="subdued">No template assigned - configure lines manually below.</Text>
+              <Text as="p" variant="bodyMd" tone="subdued">No production template assigned - configure lines manually below.</Text>
+            )}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="400">
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="h2" variant="headingMd">Shipping Template</Text>
+              <Badge tone={effectiveTemplateSelection.shippingSource === "explicit" ? "attention" : "info"}>
+                {effectiveTemplateSelection.shippingSource === "explicit"
+                  ? "Explicit override"
+                  : effectiveTemplateSelection.shippingSource === "production-default"
+                    ? "Inherited from production template"
+                    : "Unassigned"}
+              </Badge>
+            </InlineStack>
+            <Divider />
+            {effectiveShippingTemplate ? (
+              <BlockStack gap="100">
+                <Text as="p" variant="bodyMd">{effectiveShippingTemplate.name}</Text>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  {shippingTemplates.length > 0
+                    ? "Dedicated Shipping template assignment is planned for the next implementation tranche."
+                    : "No active shipping templates are available yet."}
+                </Text>
+              </BlockStack>
+            ) : (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                No shipping template is currently effective for this variant.
+              </Text>
             )}
           </BlockStack>
         </Card>
@@ -1877,7 +1932,7 @@ export default function VariantDetailPage() {
       <Modal
         open={assignTemplateOpen}
         onClose={() => setAssignTemplateOpen(false)}
-        title="Assign template"
+        title="Assign production template"
         primaryAction={{
           content: draft.templateId ? "Apply" : "Assign",
           loading: isSaving,
@@ -1887,8 +1942,8 @@ export default function VariantDetailPage() {
       >
         <Modal.Section>
           <Select
-            label="Template"
-            options={templates.map((template: { id: string; name: string }) => ({ label: template.name, value: template.id }))}
+            label="Production template"
+            options={productionTemplates.map((template: { id: string; name: string }) => ({ label: template.name, value: template.id }))}
             value={selectedTemplateId}
             onChange={setSelectedTemplateId}
           />

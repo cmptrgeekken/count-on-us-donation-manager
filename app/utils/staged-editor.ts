@@ -49,6 +49,8 @@ export type TemplateCatalogEquipmentLine = {
 export type TemplateCatalogEntry = {
   id: string;
   name: string;
+  type?: string | null;
+  defaultShippingTemplateId?: string | null;
   materialLines: TemplateCatalogMaterialLine[];
   equipmentLines: TemplateCatalogEquipmentLine[];
 };
@@ -90,6 +92,8 @@ export type VariantAdditionalEquipmentDraftLine = {
 
 export type VariantDraft = {
   templateId: string | null;
+  productionTemplateId?: string | null;
+  shippingTemplateId?: string | null;
   laborMinutes: string;
   laborRate: string;
   mistakeBuffer: string;
@@ -157,6 +161,7 @@ export function applyTemplateSelectionToVariantDraft(
   return {
     ...draft,
     templateId: template?.id ?? null,
+    productionTemplateId: template?.id ?? null,
     templateMaterialLines: buildVariantTemplateMaterialDraftLines(template),
     templateEquipmentLines: buildVariantTemplateEquipmentDraftLines(template),
   };
@@ -165,6 +170,8 @@ export function applyTemplateSelectionToVariantDraft(
 export function normalizeVariantDraft(draft: VariantDraft) {
   return {
     templateId: draft.templateId ?? "",
+    productionTemplateId: draft.productionTemplateId ?? "",
+    shippingTemplateId: draft.shippingTemplateId ?? "",
     laborMinutes: draft.laborMinutes,
     laborRate: draft.laborRate,
     mistakeBuffer: draft.mistakeBuffer,
