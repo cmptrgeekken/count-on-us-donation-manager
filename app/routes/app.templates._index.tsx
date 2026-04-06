@@ -5,6 +5,11 @@ import { z } from "zod";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 
+const templateCreateSchema = z.object({
+  name: z.string().trim().min(1, "Name is required."),
+  type: z.enum(["production", "shipping"]),
+});
+
 const templateIdSchema = z.object({
   id: z.string().trim().cuid("Template id is invalid."),
 });
@@ -27,6 +32,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     templates: templates.map((t) => ({
       id: t.id,
       name: t.name,
+      type: t.type,
       description: t.description ?? "",
       status: t.status,
       materialLineCount: t._count.materialLines,
@@ -44,15 +50,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent")?.toString();
 
   if (intent === "create") {
-    const name = formData.get("name")?.toString().trim() ?? "";
-    const description = formData.get("description")?.toString().trim() || null;
-
-    if (!name) {
-      return Response.json({ ok: false, message: "Name is required." }, { status: 400 });
+    const parsed = templateCreateSchema.safeParse({
+      name: formData.get("name")?.toString() ?? "",
+      type: formData.get("type")?.toString() ?? "production",
+    });
+    if (!parsed.success) {
+      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
     }
 
+    const name = parsed.data.name;
+    const type = parsed.data.type;
+    const description = formData.get("description")?.toString().trim() || null;
+
     const template = await prisma.costTemplate.create({
-      data: { shopId, name, description },
+      data: { shopId, name, type, description },
     });
 
     await prisma.auditLog.create({
@@ -142,6 +153,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 type Template = {
   id: string;
   name: string;
+  type: string;
   description: string;
   status: string;
   materialLineCount: number;
@@ -160,6 +172,7 @@ export default function TemplatesPage() {
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newType, setNewType] = useState<"production" | "shipping">("production");
   const [newDesc, setNewDesc] = useState("");
   const [deactivateTarget, setDeactivateTarget] = useState<Template | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Template | null>(null);
@@ -208,6 +221,7 @@ export default function TemplatesPage() {
 
   function openCreateDialog() {
     setNewName("");
+    setNewType("production");
     setNewDesc("");
     setCreateDialogOpen(true);
   }
@@ -215,6 +229,7 @@ export default function TemplatesPage() {
   function closeCreateDialog() {
     setCreateDialogOpen(false);
     setNewName("");
+    setNewType("production");
     setNewDesc("");
   }
 
@@ -305,6 +320,7 @@ export default function TemplatesPage() {
 
               <s-table-header-row>
                 <s-table-header listSlot="primary">Name</s-table-header>
+                <s-table-header listSlot="secondary">Type</s-table-header>
                 <s-table-header listSlot="secondary">Description</s-table-header>
                 <s-table-header listSlot="labeled" format="numeric">Lines</s-table-header>
                 <s-table-header listSlot="labeled" format="numeric">Used by</s-table-header>
@@ -316,6 +332,11 @@ export default function TemplatesPage() {
                 {templates.map((template: Template) => (
                   <s-table-row key={template.id}>
                     <s-table-cell>{template.name}</s-table-cell>
+                    <s-table-cell>
+                      <s-badge tone={template.type === "shipping" ? "info" : "success"}>
+                        {template.type === "shipping" ? "Shipping" : "Production"}
+                      </s-badge>
+                    </s-table-cell>
                     <s-table-cell>{template.description || "—"}</s-table-cell>
                     <s-table-cell>{template.materialLineCount + template.equipmentLineCount} lines</s-table-cell>
                     <s-table-cell>
@@ -399,6 +420,25 @@ export default function TemplatesPage() {
           />
 
           <div style={{ display: "grid", gap: "0.35rem" }}>
+            <label htmlFor="template-type">Template type</label>
+            <select
+              id="template-type"
+              value={newType}
+              onChange={(event) => setNewType(event.currentTarget.value as "production" | "shipping")}
+              style={{
+                width: "100%",
+                padding: "0.75rem",
+                borderRadius: "0.75rem",
+                border: "1px solid var(--p-color-border)",
+                font: "inherit",
+              }}
+            >
+              <option value="production">Production template</option>
+              <option value="shipping">Shipping template</option>
+            </select>
+          </div>
+
+          <div style={{ display: "grid", gap: "0.35rem" }}>
             <label htmlFor="template-description">Description</label>
             <textarea
               id="template-description"
@@ -424,6 +464,7 @@ export default function TemplatesPage() {
                 const fd = new FormData();
                 fd.append("intent", "create");
                 fd.append("name", newName);
+                fd.append("type", newType);
                 fd.append("description", newDesc);
                 fetcher.submit(fd, { method: "post" });
                 closeCreateDialog();

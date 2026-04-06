@@ -87,6 +87,7 @@ function parseRequiredWholeNumber(value: string, field: string) {
 function serializeTemplate(template: {
   id: string;
   name: string;
+  type: string;
   description: string | null;
   status: string;
   materialLines: Array<{
@@ -108,6 +109,7 @@ function serializeTemplate(template: {
   return {
     id: template.id,
     name: template.name,
+    type: template.type,
     description: template.description ?? "",
     status: template.status,
     materialLines: template.materialLines.map((line) => ({
@@ -618,7 +620,10 @@ export default function TemplateDetailPage() {
       .map((line) => line.equipmentId),
   );
 
+  const selectableMaterials = availableMaterials.filter((item: AvailableMaterial) => item.type === template.type);
+
   const filteredMaterialOptions = availableMaterials
+    .filter((item: AvailableMaterial) => item.type === template.type)
     .filter((item: AvailableMaterial) => !unavailableMaterialIds.has(item.id))
     .filter((item: AvailableMaterial) =>
       item.name.toLowerCase().includes(materialSearchValue.trim().toLowerCase()),
@@ -637,9 +642,14 @@ export default function TemplateDetailPage() {
       backAction={{ content: "Templates", onAction: () => void confirmThenNavigate("/app/templates") }}
       title={draft.name || template.name}
       titleMetadata={
-        <Badge tone={template.status === "active" ? "success" : "enabled"}>
-          {template.status === "active" ? "Active" : "Inactive"}
-        </Badge>
+        <InlineStack gap="200">
+          <Badge tone={template.type === "shipping" ? "info" : "success"}>
+            {template.type === "shipping" ? "Shipping" : "Production"}
+          </Badge>
+          <Badge tone={template.status === "active" ? "success" : "enabled"}>
+            {template.status === "active" ? "Active" : "Inactive"}
+          </Badge>
+        </InlineStack>
       }
     >
       <TitleBar title={draft.name || template.name} />
@@ -684,7 +694,7 @@ export default function TemplateDetailPage() {
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h2" variant="headingMd">Materials</Text>
-              <Button onClick={openAddMaterialModal} disabled={availableMaterials.length === 0}>
+              <Button onClick={openAddMaterialModal} disabled={selectableMaterials.length === 0}>
                 Add material
               </Button>
             </InlineStack>
@@ -696,7 +706,9 @@ export default function TemplateDetailPage() {
                 fullWidth
               >
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  Add production and shipping materials to this template.
+                  {template.type === "shipping"
+                    ? "Add shipping materials to this template."
+                    : "Add production materials to this template."}
                 </Text>
               </EmptyState>
             ) : (
