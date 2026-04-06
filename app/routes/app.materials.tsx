@@ -14,7 +14,7 @@ const materialFormSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   type: z.enum(["production", "shipping"]),
   costingModel: z.enum(["yield", "uses"]),
-  purchaseLink: z.union([z.literal(""), z.string().url("Purchase link must be a valid URL.")]),
+  purchaseLink: z.union([z.literal(""), z.url({ message: "Purchase link must be a valid URL." })]),
 });
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {

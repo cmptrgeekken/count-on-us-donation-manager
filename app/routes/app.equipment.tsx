@@ -11,6 +11,11 @@ const equipmentIdSchema = z.object({
   id: z.string().trim().cuid("Equipment id is invalid."),
 });
 
+const equipmentFormSchema = z.object({
+  name: z.string().trim().min(1, "Name is required."),
+  purchaseLink: z.union([z.literal(""), z.url({ message: "Equipment purchase link must be a valid URL." })]),
+});
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -29,6 +34,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       name: e.name,
       hourlyRate: e.hourlyRate?.toString() ?? null,
       perUseCost: e.perUseCost?.toString() ?? null,
+      purchaseLink: e.purchaseLink ?? "",
+      equipmentCost: e.equipmentCost?.toString() ?? "",
       status: e.status,
       notes: e.notes ?? "",
       templateCount: e._count.templateLines,
@@ -45,17 +52,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent")?.toString();
 
   if (intent === "create" || intent === "update") {
-    const name = formData.get("name")?.toString().trim() ?? "";
+    const parsed = equipmentFormSchema.safeParse({
+      name: formData.get("name")?.toString() ?? "",
+      purchaseLink: formData.get("purchaseLink")?.toString().trim() ?? "",
+    });
+    if (!parsed.success) {
+      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
+    }
+
+    const name = parsed.data.name;
     const hourlyRateStr = formData.get("hourlyRate")?.toString().trim();
     const perUseCostStr = formData.get("perUseCost")?.toString().trim();
+    const equipmentCostStr = formData.get("equipmentCost")?.toString().trim();
     const notes = formData.get("notes")?.toString().trim() || null;
-
-    if (!name) {
-      return Response.json({ ok: false, message: "Name is required." }, { status: 400 });
-    }
+    const purchaseLink = parsed.data.purchaseLink.trim() || null;
 
     const hourlyRate = hourlyRateStr ? parseFloat(hourlyRateStr) : null;
     const perUseCost = perUseCostStr ? parseFloat(perUseCostStr) : null;
+    const equipmentCost = equipmentCostStr ? parseFloat(equipmentCostStr) : null;
 
     if ((hourlyRate === null || isNaN(hourlyRate)) && (perUseCost === null || isNaN(perUseCost))) {
       return Response.json(
@@ -69,12 +83,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     if (perUseCost !== null && perUseCost < 0) {
       return Response.json({ ok: false, message: "Per-use cost must be 0 or greater." }, { status: 400 });
     }
+    if (equipmentCost !== null && (isNaN(equipmentCost) || equipmentCost < 0)) {
+      return Response.json({ ok: false, message: "Equipment cost must be 0 or greater." }, { status: 400 });
+    }
 
     const data = {
       shopId,
       name,
       hourlyRate: hourlyRate !== null && !isNaN(hourlyRate) ? hourlyRate : null,
       perUseCost: perUseCost !== null && !isNaN(perUseCost) ? perUseCost : null,
+      purchaseLink,
+      equipmentCost: equipmentCost !== null && !isNaN(equipmentCost) ? equipmentCost : null,
       notes,
     };
 
@@ -178,6 +197,8 @@ type EquipmentItem = {
   name: string;
   hourlyRate: string | null;
   perUseCost: string | null;
+  purchaseLink: string;
+  equipmentCost: string;
   status: string;
   notes: string;
   templateCount: number;
@@ -189,6 +210,8 @@ const EMPTY_FORM = {
   name: "",
   hourlyRate: "",
   perUseCost: "",
+  purchaseLink: "",
+  equipmentCost: "",
   notes: "",
 };
 
@@ -264,6 +287,8 @@ export default function EquipmentPage() {
       name: item.name,
       hourlyRate: item.hourlyRate ?? "",
       perUseCost: item.perUseCost ?? "",
+      purchaseLink: item.purchaseLink,
+      equipmentCost: normalizeFixedDecimalInput(item.equipmentCost),
       notes: item.notes,
     });
     setEquipmentDialogOpen(true);
@@ -361,6 +386,8 @@ export default function EquipmentPage() {
                 <s-table-header listSlot="primary">Name</s-table-header>
                 <s-table-header listSlot="labeled" format="currency">Hourly rate</s-table-header>
                 <s-table-header listSlot="labeled" format="currency">Per-use cost</s-table-header>
+                <s-table-header listSlot="labeled" format="currency">Equipment cost</s-table-header>
+                <s-table-header listSlot="secondary">Purchase link</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Used by</s-table-header>
                 <s-table-header listSlot="inline">Status</s-table-header>
                 <s-table-header>Actions</s-table-header>
@@ -372,6 +399,16 @@ export default function EquipmentPage() {
                     <s-table-cell>{item.name}</s-table-cell>
                     <s-table-cell>{item.hourlyRate ? `${formatMoney(item.hourlyRate)}/hr` : "—"}</s-table-cell>
                     <s-table-cell>{item.perUseCost ? `${formatMoney(item.perUseCost)}/use` : "—"}</s-table-cell>
+                    <s-table-cell>{item.equipmentCost ? formatMoney(item.equipmentCost) : "—"}</s-table-cell>
+                    <s-table-cell>
+                      {item.purchaseLink ? (
+                        <a href={item.purchaseLink} target="_blank" rel="noreferrer">
+                          Open
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </s-table-cell>
                     <s-table-cell>{item.templateCount + item.variantCount} uses</s-table-cell>
                     <s-table-cell>
                       <s-badge tone={item.status === "active" ? "success" : "enabled"}>
@@ -487,6 +524,41 @@ export default function EquipmentPage() {
             />
           </div>
 
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: "1rem",
+            }}
+          >
+            <s-text-field
+              label={`Equipment cost (${getCurrencySymbol()})`}
+              type="number"
+              min={0}
+              step={0.01}
+              value={form.equipmentCost}
+              onChange={(event) =>
+                updateForm("equipmentCost", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              onBlur={(event) =>
+                updateForm(
+                  "equipmentCost",
+                  normalizeFixedDecimalInput((event.target as HTMLInputElement | null)?.value ?? ""),
+                )
+              }
+              details="Reference purchase cost for the equipment itself."
+            />
+            <s-text-field
+              label="Equipment purchase link"
+              type="url"
+              value={form.purchaseLink}
+              onChange={(event) =>
+                updateForm("purchaseLink", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              details="Optional vendor or catalog URL for reordering or reference."
+            />
+          </div>
+
           <div style={{ display: "grid", gap: "0.35rem" }}>
             <label htmlFor="equipment-notes">Notes</label>
             <textarea
@@ -520,6 +592,8 @@ export default function EquipmentPage() {
                 fd.append("name", form.name);
                 if (form.hourlyRate) fd.append("hourlyRate", form.hourlyRate);
                 if (form.perUseCost) fd.append("perUseCost", form.perUseCost);
+                fd.append("purchaseLink", form.purchaseLink);
+                if (form.equipmentCost) fd.append("equipmentCost", form.equipmentCost);
                 fd.append("notes", form.notes);
                 fetcher.submit(fd, { method: "post" });
                 closeEquipmentDialog();
