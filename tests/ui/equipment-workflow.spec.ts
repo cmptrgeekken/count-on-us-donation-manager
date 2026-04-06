@@ -34,3 +34,31 @@ test("equipment can be created, deactivated, and reactivated on the real route",
   await expect(page.getByText("Equipment reactivated.")).toBeVisible();
   await expect(equipmentRow.getByText("Active")).toBeVisible();
 });
+
+test("unused equipment can be deleted and used equipment show a blocked delete explanation", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.equipmentUrl);
+
+  await page.locator("ui-title-bar button").filter({ hasText: "New equipment" }).click();
+  const equipmentDialog = page.getByRole("dialog").filter({ hasText: "New equipment" });
+  await equipmentDialog.getByLabel("Name").fill("Playwright Equipment UI Delete");
+  await equipmentDialog.getByLabel(/Hourly rate/).fill("45.00");
+  await equipmentDialog.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByText("Equipment created.")).toBeVisible();
+
+  const deletableRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Equipment UI Delete") });
+  await expect(deletableRow).toBeVisible();
+  await deletableRow.getByRole("button", { name: "Delete" }).click();
+  const deleteDialog = page.getByRole("dialog").filter({ hasText: "Delete equipment" });
+  await deleteDialog.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByText("Equipment deleted.")).toBeVisible();
+  await expect(deletableRow).toHaveCount(0);
+
+  const usedRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Equipment UI Used") });
+  await usedRow.getByRole("button", { name: "Delete" }).click();
+  await expect(deleteDialog.getByText("This equipment is still used in 1 template(s) and 0 variant config(s), so deletion is blocked.")).toBeVisible();
+  await expect(deleteDialog.getByRole("button", { name: "Delete" })).toBeDisabled();
+});

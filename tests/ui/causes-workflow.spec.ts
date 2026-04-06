@@ -62,3 +62,30 @@ test("causes show inline URL validation errors in the modal", async ({ page, req
   await expect(causeDialog.locator("#cause-name")).toHaveValue("Playwright Invalid Cause");
   await expect(page.locator("s-table-row").filter({ has: page.getByText("Playwright Invalid Cause") })).toHaveCount(0);
 });
+
+test("unused causes can be deleted and assigned causes show a blocked delete explanation", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/causes-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.causesUrl);
+
+  await page.getByText("New cause", { exact: true }).nth(1).click();
+  const causeDialog = page.getByRole("dialog").filter({ hasText: "New cause" });
+  await causeDialog.locator("#cause-name").fill("Playwright Cause UI Delete");
+  await causeDialog.locator("#cause-donationLink").fill("https://example.org/delete");
+  await causeDialog.getByRole("button", { name: "Create" }).click();
+
+  const deletableRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Cause UI Delete") });
+  await expect(deletableRow).toBeVisible();
+  await deletableRow.getByRole("button", { name: "Delete" }).click();
+  const deleteDialog = page.getByRole("dialog").filter({ hasText: "Delete cause" });
+  await deleteDialog.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByText("Cause deleted.")).toBeVisible();
+  await expect(deletableRow).toHaveCount(0);
+
+  const usedRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Cause UI Assigned") });
+  await usedRow.getByRole("button", { name: "Delete" }).click();
+  await expect(deleteDialog.getByText("This Cause is still assigned to 1 product(s), so deletion is blocked.")).toBeVisible();
+  await expect(deleteDialog.getByRole("button", { name: "Delete" })).toBeDisabled();
+});

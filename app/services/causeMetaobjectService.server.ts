@@ -72,6 +72,19 @@ const METAOBJECT_UPDATE_MUTATION = `#graphql
   }
 `;
 
+const METAOBJECT_DELETE_MUTATION = `#graphql
+  mutation DeleteCauseMetaobject($id: ID!) {
+    metaobjectDelete(id: $id) {
+      deletedId
+      userErrors {
+        field
+        message
+        code
+      }
+    }
+  }
+`;
+
 type GraphqlUserError = {
   field?: string[] | null;
   message: string;
@@ -224,6 +237,32 @@ export async function updateCauseMetaobject(
 
   const payload = json.data?.metaobjectUpdate;
   if (!payload?.metaobject) {
+    throw new Error(getUserErrorMessage(payload?.userErrors ?? []));
+  }
+  if ((payload.userErrors ?? []).length > 0) {
+    throw new Error(getUserErrorMessage(payload.userErrors));
+  }
+}
+
+export async function deleteCauseMetaobject(
+  admin: AdminContext,
+  metaobjectId: string,
+): Promise<void> {
+  const response = await admin.graphql(METAOBJECT_DELETE_MUTATION, {
+    variables: { id: metaobjectId },
+  });
+
+  const json = await parseGraphqlResponse<{
+    data?: {
+      metaobjectDelete?: {
+        deletedId?: string | null;
+        userErrors: GraphqlUserError[];
+      };
+    };
+  }>(response);
+
+  const payload = json.data?.metaobjectDelete;
+  if (!payload?.deletedId) {
     throw new Error(getUserErrorMessage(payload?.userErrors ?? []));
   }
   if ((payload.userErrors ?? []).length > 0) {

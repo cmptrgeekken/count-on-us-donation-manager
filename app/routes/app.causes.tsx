@@ -6,6 +6,7 @@ import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import {
   createCauseMetaobject,
+  deleteCauseMetaobject,
   ensureCauseMetaobjectDefinition,
   updateCauseMetaobject,
 } from "../services/causeMetaobjectService.server";
@@ -56,6 +57,7 @@ type CauseRecord = {
   status: string;
   metaobjectId: string | null;
   assignmentCount: number;
+  lineAllocationCount: number;
 };
 
 type CauseActionData = {
@@ -85,7 +87,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     orderBy: { name: "asc" },
     include: {
       _count: {
-        select: { productAssignments: true },
+        select: { productAssignments: true, lineAllocations: true },
       },
     },
   });
@@ -104,6 +106,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       status: cause.status,
       metaobjectId: cause.shopifyMetaobjectId,
       assignmentCount: cause._count.productAssignments,
+      lineAllocationCount: cause._count.lineAllocations,
     })),
   });
 };
@@ -458,6 +461,96 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "delete") {
+    const idParsed = causeIdSchema.safeParse({
+      id: formData.get("id")?.toString() ?? "",
+    });
+
+    if (!idParsed.success) {
+      return Response.json(
+        { ok: false, message: idParsed.error.issues[0]?.message ?? "Invalid Cause." },
+        { status: 400 },
+      );
+    }
+
+    const cause = await prisma.cause.findFirst({
+      where: { id: idParsed.data.id, shopId },
+      include: {
+        _count: {
+          select: { productAssignments: true, lineAllocations: true },
+        },
+      },
+    });
+
+    if (!cause) {
+      return Response.json({ ok: false, message: "Cause not found." }, { status: 404 });
+    }
+
+    if (cause._count.productAssignments > 0 || cause._count.lineAllocations > 0) {
+      return Response.json(
+        {
+          ok: false,
+          message:
+            cause._count.lineAllocations > 0
+              ? `This Cause appears in ${cause._count.lineAllocations} historical line allocation(s) and cannot be deleted.`
+              : `This Cause is still assigned to ${cause._count.productAssignments} product(s). Remove those assignments before deleting it.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    await prisma.cause.delete({
+      where: { id: cause.id, shopId },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "Cause",
+        entityId: cause.id,
+        action: "CAUSE_DELETED",
+        actor: "merchant",
+        payload: { shopifyMetaobjectId: cause.shopifyMetaobjectId },
+      },
+    });
+
+    if (admin && cause.shopifyMetaobjectId) {
+      try {
+        await deleteCauseMetaobject(admin, cause.shopifyMetaobjectId);
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "Cause",
+            entityId: cause.id,
+            action: "CAUSE_SHOPIFY_DELETED",
+            actor: "merchant",
+            payload: { shopifyMetaobjectId: cause.shopifyMetaobjectId },
+          },
+        });
+      } catch (error) {
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "Cause",
+            entityId: cause.id,
+            action: "CAUSE_SHOPIFY_DELETE_FAILED",
+            actor: "merchant",
+            payload: {
+              shopifyMetaobjectId: cause.shopifyMetaobjectId,
+              message: error instanceof Error ? error.message : "Unknown Shopify delete failure",
+            },
+          },
+        });
+        return Response.json(
+          { ok: false, message: "Cause deleted locally, but Shopify cleanup failed." },
+          { status: 502 },
+        );
+      }
+    }
+
+    return Response.json({ ok: true, message: "Cause deleted." });
+  }
+
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
@@ -466,11 +559,14 @@ export default function CausesPage() {
   const fetcher = useFetcher<CauseActionData>();
   const causeDialogRef = useRef<HTMLDialogElement>(null);
   const deactivateDialogRef = useRef<HTMLDialogElement>(null);
+  const deleteDialogRef = useRef<HTMLDialogElement>(null);
 
   const [form, setForm] = useState<CauseFormState>(EMPTY_FORM);
   const [causeDialogOpen, setCauseDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deactivateTarget, setDeactivateTarget] = useState<CauseRecord | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CauseRecord | null>(null);
   const [lastSubmittedIntent, setLastSubmittedIntent] = useState<string | null>(null);
 
   useEffect(() => {
@@ -494,6 +590,17 @@ export default function CausesPage() {
       dialog.close();
     }
   }, [deactivateDialogOpen]);
+
+  useEffect(() => {
+    const dialog = deleteDialogRef.current;
+    if (!dialog) return;
+
+    if (deleteDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!deleteDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [deleteDialogOpen]);
 
   function updateForm<K extends keyof CauseFormState>(key: K, value: CauseFormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -532,10 +639,23 @@ export default function CausesPage() {
     setDeactivateDialogOpen(true);
   }
 
+  function confirmDelete(cause: CauseRecord) {
+    setDeleteTarget(cause);
+    setDeleteDialogOpen(true);
+  }
+
   const closeDeactivateDialog = useCallback(() => {
     setDeactivateDialogOpen(false);
     setDeactivateTarget(null);
     if (lastSubmittedIntent === "deactivate") {
+      setLastSubmittedIntent(null);
+    }
+  }, [lastSubmittedIntent]);
+
+  const closeDeleteDialog = useCallback(() => {
+    setDeleteDialogOpen(false);
+    setDeleteTarget(null);
+    if (lastSubmittedIntent === "delete") {
       setLastSubmittedIntent(null);
     }
   }, [lastSubmittedIntent]);
@@ -550,7 +670,10 @@ export default function CausesPage() {
     if (lastSubmittedIntent === "deactivate" || lastSubmittedIntent === "reactivate") {
       closeDeactivateDialog();
     }
-  }, [fetcher.state, fetcher.data, lastSubmittedIntent, closeCauseDialog, closeDeactivateDialog]);
+    if (lastSubmittedIntent === "delete") {
+      closeDeleteDialog();
+    }
+  }, [fetcher.state, fetcher.data, lastSubmittedIntent, closeCauseDialog, closeDeactivateDialog, closeDeleteDialog]);
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
@@ -559,7 +682,7 @@ export default function CausesPage() {
     [fetcher.data?.fieldErrors, lastSubmittedIntent],
   );
   const showPageError =
-    fetcher.data && !fetcher.data.ok && !(lastSubmittedIntent === "create" || lastSubmittedIntent === "update" || lastSubmittedIntent === "deactivate");
+    fetcher.data && !fetcher.data.ok && !(lastSubmittedIntent === "create" || lastSubmittedIntent === "update" || lastSubmittedIntent === "deactivate" || lastSubmittedIntent === "delete");
   const showPageSuccess = fetcher.data?.ok && lastSubmittedIntent === "reactivate";
 
   function fieldError(name: keyof Omit<CauseFormState, "id">) {
@@ -678,6 +801,9 @@ export default function CausesPage() {
                             </s-button>
                           </fetcher.Form>
                         )}
+                        <s-button variant="secondary" tone="critical" onClick={() => confirmDelete(cause)}>
+                          Delete
+                        </s-button>
                       </div>
                     </s-table-cell>
                   </s-table-row>
@@ -942,6 +1068,82 @@ export default function CausesPage() {
               }}
             >
               Deactivate
+            </s-button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={deleteDialogRef}
+        onClose={closeDeleteDialog}
+        style={{
+          border: "none",
+          borderRadius: "1rem",
+          padding: 0,
+          maxWidth: "34rem",
+          width: "calc(100% - 2rem)",
+        }}
+      >
+        <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <strong>Delete cause</strong>
+              <s-text color="subdued">Delete this Cause permanently only if it is not assigned to products and has no historical allocations.</s-text>
+            </div>
+            <button
+              type="button"
+              aria-label="Close dialog"
+              onClick={closeDeleteDialog}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "1.5rem",
+                lineHeight: 1,
+                cursor: "pointer",
+              }}
+            >
+              Ã—
+            </button>
+          </div>
+
+          {fetcher.data && !fetcher.data.ok && lastSubmittedIntent === "delete" ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
+
+          <s-text>
+            {deleteTarget
+              ? `Delete ${deleteTarget.name} permanently? This cannot be undone.`
+              : "Delete this Cause permanently?"}
+          </s-text>
+
+          {deleteTarget && (deleteTarget.assignmentCount > 0 || deleteTarget.lineAllocationCount > 0) ? (
+            <s-banner tone="warning">
+              <s-text>
+                {deleteTarget.lineAllocationCount > 0
+                  ? `This Cause appears in ${deleteTarget.lineAllocationCount} historical allocation(s), so deletion is blocked.`
+                  : `This Cause is still assigned to ${deleteTarget.assignmentCount} product(s), so deletion is blocked.`}
+              </s-text>
+            </s-banner>
+          ) : null}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+            <s-button variant="secondary" onClick={closeDeleteDialog}>Cancel</s-button>
+            <s-button
+              variant="primary"
+              tone="critical"
+              disabled={isSubmitting || ((deleteTarget?.assignmentCount ?? 0) > 0 || (deleteTarget?.lineAllocationCount ?? 0) > 0)}
+              onClick={() => {
+                if (!deleteTarget) return;
+                const fd = new FormData();
+                fd.append("intent", "delete");
+                fd.append("id", deleteTarget.id);
+                setLastSubmittedIntent("delete");
+                fetcher.submit(fd, { method: "post" });
+              }}
+            >
+              Delete
             </s-button>
           </div>
         </div>
