@@ -15,6 +15,10 @@ function getPlaywrightBypassShop(request: Request) {
   return shop;
 }
 
+export function isPlaywrightBypassRequest(request: Request) {
+  return getPlaywrightBypassShop(request) !== null;
+}
+
 export async function authenticateAdminRequest(request: Request): Promise<AdminAuthResult> {
   const bypassShop = getPlaywrightBypassShop(request);
 

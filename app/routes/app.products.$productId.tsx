@@ -5,7 +5,7 @@ import { z } from "zod";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
-import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 
 const assignmentsSchema = z.object({
   assignments: z.array(
@@ -100,8 +100,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { session, admin } = await authenticateAdminRequest(request);
   const shopId = session.shop;
   const productId = params.productId ?? "";
+  const isPlaywrightBypass = isPlaywrightBypassRequest(request);
 
-  if (!admin) {
+  if (!admin && !isPlaywrightBypass) {
     return Response.json({ ok: false, message: "Shopify admin context is required." }, { status: 500 });
   }
 
@@ -200,28 +201,30 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     });
 
     try {
-      await syncProductCauseAssignmentsMetafield(
-        admin,
-        product.shopifyId,
-        assignments.map((assignment) => ({
-          causeId: assignment.causeId,
-          metaobjectId: causeMap.get(assignment.causeId)?.shopifyMetaobjectId ?? null,
-          percentage: Number(assignment.percentage).toFixed(2),
-        })),
-      );
+      if (admin) {
+        await syncProductCauseAssignmentsMetafield(
+          admin,
+          product.shopifyId,
+          assignments.map((assignment) => ({
+            causeId: assignment.causeId,
+            metaobjectId: causeMap.get(assignment.causeId)?.shopifyMetaobjectId ?? null,
+            percentage: Number(assignment.percentage).toFixed(2),
+          })),
+        );
 
-      await prisma.auditLog.create({
-        data: {
-          shopId,
-          entity: "Product",
-          entityId: product.id,
-          action: "PRODUCT_CAUSE_ASSIGNMENTS_SHOPIFY_SYNCED",
-          actor: "merchant",
-          payload: {
-            shopifyProductId: product.shopifyId,
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "Product",
+            entityId: product.id,
+            action: "PRODUCT_CAUSE_ASSIGNMENTS_SHOPIFY_SYNCED",
+            actor: "merchant",
+            payload: {
+              shopifyProductId: product.shopifyId,
+            },
           },
-        },
-      });
+        });
+      }
 
       return Response.json({ ok: true, message: "Product Cause assignments saved." });
     } catch (error) {
