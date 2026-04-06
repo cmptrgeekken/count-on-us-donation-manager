@@ -5,7 +5,6 @@ type TemplateLike = {
 };
 
 type VariantTemplateConfigLike = {
-  templateId?: string | null;
   productionTemplateId?: string | null;
   shippingTemplateId?: string | null;
 };
@@ -22,7 +21,7 @@ export function resolveEffectiveTemplateSelection(
 ): EffectiveTemplateSelection {
   const templatesById = new Map(templates.map((template) => [template.id, template]));
 
-  const productionTemplateId = config?.productionTemplateId ?? config?.templateId ?? null;
+  const productionTemplateId = config?.productionTemplateId ?? null;
   const explicitShippingTemplateId = config?.shippingTemplateId ?? null;
 
   if (explicitShippingTemplateId) {

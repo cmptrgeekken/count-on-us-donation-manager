@@ -141,7 +141,6 @@ function serializeVariantEquipmentLine(
 }
 
 const variantDraftSchema = z.object({
-  templateId: z.string().nullable(),
   productionTemplateId: z.string().nullable().optional(),
   shippingTemplateId: z.string().nullable().optional(),
   laborMinutes: z.string(),
@@ -218,7 +217,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       product: { select: { title: true } },
       costConfig: {
         include: {
-          template: {
+          productionTemplate: {
             include: {
               materialLines: { include: { material: true } },
               equipmentLines: { include: { equipment: true } },
@@ -264,7 +263,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   let additionalEquipmentLines: SerializedEquipmentLine[] = [];
 
   if (config) {
-    const templateMaterialSource = config.template?.materialLines ?? [];
+    const templateMaterialSource = config.productionTemplate?.materialLines ?? [];
     const explicitMaterialOverrides = new Map(
       config.materialLines
         .filter((line) => line.templateLineId)
@@ -313,7 +312,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       .filter((line) => !line.templateLineId && !consumedMaterialLineIds.has(line.id))
       .map(serializeVariantMaterialLine);
 
-    const templateEquipmentSource = config.template?.equipmentLines ?? [];
+    const templateEquipmentSource = config.productionTemplate?.equipmentLines ?? [];
     const explicitEquipmentOverrides = new Map(
       config.equipmentLines
         .filter((line) => line.templateLineId)
@@ -374,10 +373,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     config: config
       ? {
           id: config.id,
-          templateId: config.templateId,
-          productionTemplateId: config.productionTemplateId ?? config.templateId,
+          productionTemplateId: config.productionTemplateId,
           shippingTemplateId: config.shippingTemplateId,
-          templateName: config.template?.name ?? null,
+          templateName: config.productionTemplate?.name ?? null,
           laborMinutes: config.laborMinutes?.toString() ?? "",
           laborRate: config.laborRate?.toString() ?? "",
           mistakeBuffer: config.mistakeBuffer ? (Number(config.mistakeBuffer) * 100).toFixed(2) : "",
@@ -488,7 +486,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       where: {
         id: templateLineId,
         template: {
-          variantConfigs: {
+          productionVariantConfigs: {
             some: { id: configId, shopId },
           },
         },
@@ -520,7 +518,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       where: {
         id: templateLineId,
         template: {
-          variantConfigs: {
+          productionVariantConfigs: {
             some: { id: configId, shopId },
           },
         },
@@ -587,8 +585,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     const draft = parsedDraft.data;
-    const normalizedProductionTemplateId =
-      draft.productionTemplateId?.trim() || draft.templateId?.trim() || null;
+    const normalizedProductionTemplateId = draft.productionTemplateId?.trim() || null;
     const normalizedShippingTemplateId = draft.shippingTemplateId?.trim() || null;
     const selectedTemplate = normalizedProductionTemplateId
       ? await prisma.costTemplate.findFirst({
@@ -731,7 +728,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         await tx.variantCostConfig.updateMany({
           where: { id: configId, shopId },
           data: {
-            templateId: normalizedProductionTemplateId,
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
             laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
@@ -745,7 +741,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           data: {
             shopId,
             variantId,
-            templateId: normalizedProductionTemplateId,
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
             laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
@@ -803,7 +798,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const currentConfig = await prisma.variantCostConfig.findFirst({
       where: { id: config.id, shopId },
       include: {
-        template: {
+        productionTemplate: {
           select: {
             materialLines: { select: { materialId: true } },
             equipmentLines: { select: { equipmentId: true } },
@@ -811,12 +806,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         },
       },
     });
-    const legacyOverrideIds = getLegacyOverrideIds(currentConfig?.template);
+    const legacyOverrideIds = getLegacyOverrideIds(currentConfig?.productionTemplate);
 
     await prisma.$transaction([
       prisma.variantCostConfig.updateMany({
         where: { id: config.id, shopId },
-        data: { templateId, productionTemplateId: templateId },
+        data: { productionTemplateId: templateId },
       }),
       prisma.variantMaterialLine.deleteMany({
         where: {
@@ -857,7 +852,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const config = await prisma.variantCostConfig.findFirst({
       where: { variantId, shopId },
       include: {
-        template: {
+        productionTemplate: {
           select: {
             materialLines: { select: { materialId: true } },
             equipmentLines: { select: { equipmentId: true } },
@@ -866,11 +861,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       },
     });
     if (config) {
-      const legacyOverrideIds = getLegacyOverrideIds(config.template);
+      const legacyOverrideIds = getLegacyOverrideIds(config.productionTemplate);
       await prisma.$transaction([
         prisma.variantCostConfig.updateMany({
           where: { id: config.id, shopId },
-          data: { templateId: null, productionTemplateId: null },
+          data: { productionTemplateId: null },
         }),
         prisma.variantMaterialLine.deleteMany({
           where: {
@@ -1255,7 +1250,6 @@ function describeEquipmentLine(line: {
 }
 
 function buildVariantDraft(config: {
-  templateId: string | null;
   productionTemplateId?: string | null;
   shippingTemplateId?: string | null;
   laborMinutes: string;
@@ -1267,8 +1261,7 @@ function buildVariantDraft(config: {
   equipmentLines: SerializedEquipmentLine[];
 } | null): VariantDraft {
   return {
-    templateId: config?.templateId ?? null,
-    productionTemplateId: config?.productionTemplateId ?? config?.templateId ?? null,
+    productionTemplateId: config?.productionTemplateId ?? null,
     shippingTemplateId: config?.shippingTemplateId ?? null,
     laborMinutes: config?.laborMinutes ?? "",
     laborRate: config?.laborRate ?? "",
@@ -1296,7 +1289,6 @@ export default function VariantDetailPage() {
   const [assignTemplateOpen, setAssignTemplateOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState(
     config?.productionTemplateId ??
-      config?.templateId ??
       templates.find((template: TemplateCatalogEntry) => template.type !== "shipping")?.id ??
       "",
   );
@@ -1336,8 +1328,7 @@ export default function VariantDetailPage() {
   const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
   const effectiveTemplateSelection = resolveEffectiveTemplateSelection(
     {
-      templateId: draft.templateId,
-      productionTemplateId: draft.productionTemplateId ?? draft.templateId,
+      productionTemplateId: draft.productionTemplateId ?? null,
       shippingTemplateId: draft.shippingTemplateId ?? null,
     },
     templates,
@@ -1623,7 +1614,7 @@ export default function VariantDetailPage() {
                 )}
                 <Button
                   onClick={() => {
-                    setSelectedTemplateId(draft.productionTemplateId ?? draft.templateId ?? productionTemplates[0]?.id ?? "");
+                    setSelectedTemplateId(draft.productionTemplateId ?? productionTemplates[0]?.id ?? "");
                     setAssignTemplateOpen(true);
                   }}
                   disabled={productionTemplates.length === 0}

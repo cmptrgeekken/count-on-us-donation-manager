@@ -24,7 +24,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {
         product: { select: { id: true, title: true } },
-        costConfig: { select: { id: true, templateId: true, template: { select: { name: true } } } },
+        costConfig: { select: { id: true, productionTemplateId: true, productionTemplate: { select: { name: true } } } },
       },
     }),
     prisma.product.findMany({
@@ -33,7 +33,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       select: { id: true, title: true },
     }),
     prisma.costTemplate.findMany({
-      where: { shopId, status: "active" },
+      where: { shopId, status: "active", type: "production" },
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     }),
@@ -49,7 +49,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       sku: v.sku ?? "",
       price: v.price.toString(),
       hasConfig: v.costConfig !== null,
-      templateName: v.costConfig?.template?.name ?? null,
+      templateName: v.costConfig?.productionTemplate?.name ?? null,
     })),
     products: products.map((p) => ({ id: p.id, title: p.title })),
     templates: templates.map((t) => ({ id: t.id, name: t.name })),
@@ -88,9 +88,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     for (const variantId of variantIds) {
       const existing = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId } });
       if (existing) {
-        await prisma.variantCostConfig.updateMany({ where: { id: existing.id, shopId }, data: { templateId } });
+        await prisma.variantCostConfig.updateMany({ where: { id: existing.id, shopId }, data: { productionTemplateId: templateId } });
       } else {
-        await prisma.variantCostConfig.create({ data: { shopId, variantId, templateId } });
+        await prisma.variantCostConfig.create({ data: { shopId, variantId, productionTemplateId: templateId } });
       }
     }
 

@@ -92,7 +92,6 @@ export type VariantAdditionalEquipmentDraftLine = {
 };
 
 export type VariantDraft = {
-  templateId: string | null;
   productionTemplateId?: string | null;
   shippingTemplateId?: string | null;
   laborMinutes: string;
@@ -162,7 +161,6 @@ export function applyTemplateSelectionToVariantDraft(
 ): VariantDraft {
   return {
     ...draft,
-    templateId: template?.id ?? null,
     productionTemplateId: template?.id ?? null,
     templateMaterialLines: buildVariantTemplateMaterialDraftLines(template),
     templateEquipmentLines: buildVariantTemplateEquipmentDraftLines(template),
@@ -181,7 +179,6 @@ export function applyShippingTemplateSelectionToVariantDraft(
 
 export function normalizeVariantDraft(draft: VariantDraft) {
   return {
-    templateId: draft.templateId ?? "",
     productionTemplateId: draft.productionTemplateId ?? "",
     shippingTemplateId: draft.shippingTemplateId ?? "",
     laborMinutes: draft.laborMinutes,
@@ -220,7 +217,6 @@ export function hasMeaningfulVariantDraft(draft: VariantDraft) {
   return Boolean(
     draft.productionTemplateId ||
       draft.shippingTemplateId ||
-      draft.templateId ||
       draft.laborMinutes ||
       draft.laborRate ||
       draft.mistakeBuffer ||

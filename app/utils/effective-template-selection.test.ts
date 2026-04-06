@@ -3,19 +3,6 @@ import { describe, expect, it } from "vitest";
 import { resolveEffectiveTemplateSelection } from "./effective-template-selection";
 
 describe("resolveEffectiveTemplateSelection", () => {
-  it("falls back to the legacy templateId as the production template", () => {
-    const result = resolveEffectiveTemplateSelection(
-      { templateId: "template-production" },
-      [{ id: "template-production", type: "production" }],
-    );
-
-    expect(result).toEqual({
-      productionTemplateId: "template-production",
-      shippingTemplateId: null,
-      shippingSource: "none",
-    });
-  });
-
   it("inherits the default shipping template from the production template", () => {
     const result = resolveEffectiveTemplateSelection(
       { productionTemplateId: "template-production" },

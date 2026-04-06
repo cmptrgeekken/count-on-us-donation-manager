@@ -125,18 +125,6 @@ export async function resolveCosts(
   const config = await db.variantCostConfig.findUnique({
     where: { variantId, shopId },
     include: {
-      template: {
-        include: {
-          defaultShippingTemplate: {
-            include: {
-              materialLines: { include: { material: true } },
-              equipmentLines: { include: { equipment: true } },
-            },
-          },
-          materialLines: { include: { material: true } },
-          equipmentLines: { include: { equipment: true } },
-        },
-      },
       productionTemplate: {
         include: {
           defaultShippingTemplate: {
@@ -182,7 +170,7 @@ export async function resolveCosts(
     select: { mistakeBuffer: true, defaultLaborRate: true },
   });
 
-  const productionTemplate = config.productionTemplate ?? config.template;
+  const productionTemplate = config.productionTemplate;
   const effectiveShippingTemplate =
     config.shippingTemplate ?? productionTemplate?.defaultShippingTemplate ?? null;
 

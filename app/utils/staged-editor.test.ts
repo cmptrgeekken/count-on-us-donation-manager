@@ -79,7 +79,7 @@ describe("staged editor helpers", () => {
 
   it("rebuilds template-backed variant sections when the template changes", () => {
     const draft: VariantDraft = {
-      templateId: "old-template",
+      productionTemplateId: "old-template",
       laborMinutes: "",
       laborRate: "",
       mistakeBuffer: "",
@@ -106,7 +106,6 @@ describe("staged editor helpers", () => {
 
     expect(applyTemplateSelectionToVariantDraft(draft, catalogEntry)).toEqual({
       ...draft,
-      templateId: "template-1",
       productionTemplateId: "template-1",
       templateMaterialLines: [
         {
@@ -141,7 +140,7 @@ describe("staged editor helpers", () => {
 
   it("detects meaningful variant state and derives additional line counts", () => {
     const emptyDraft: VariantDraft = {
-      templateId: null,
+      productionTemplateId: null,
       laborMinutes: "",
       laborRate: "",
       mistakeBuffer: "",
