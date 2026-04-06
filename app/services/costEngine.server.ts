@@ -24,6 +24,7 @@ export type ResolvedMaterialLine = {
   lineCost: Prisma.Decimal;
   // snapshot mode only:
   purchasePrice?: Prisma.Decimal;
+  purchaseQty?: Prisma.Decimal;
   perUnitCost?: Prisma.Decimal;
 };
 
@@ -118,6 +119,7 @@ export async function resolveCosts(
   salePrice: Prisma.Decimal,
   mode: CostEngineMode,
   db: PrismaClient,
+  packagingCostOverride?: Prisma.Decimal,
 ): Promise<CostResult> {
   // Step 1: Load VariantCostConfig with all lines and library items
   const config = await db.variantCostConfig.findUnique({
@@ -246,6 +248,7 @@ export async function resolveCosts(
 
     if (mode === "snapshot") {
       line.purchasePrice = l.material.purchasePrice;
+      line.purchaseQty = l.material.purchaseQty;
       line.perUnitCost = l.material.perUnitCost;
     }
 
@@ -343,10 +346,15 @@ export async function resolveCosts(
     .filter((l) => l.type === "shipping")
     .map((l) => l.lineCost);
 
-  const packagingCost =
+  const computedPackagingCost =
     shippingLineCosts.length > 0
       ? shippingLineCosts.reduce((max, c) => (c.gt(max) ? c : max), ZERO)
       : ZERO;
+
+  const packagingCost =
+    mode === "snapshot" && packagingCostOverride !== undefined
+      ? packagingCostOverride
+      : computedPackagingCost;
 
   // Production material cost = sum of production lines only
   const productionLineCosts = resolvedMaterialLines

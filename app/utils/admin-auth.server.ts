@@ -6,12 +6,17 @@ function getPlaywrightBypassShop(request: Request) {
   const url = new URL(request.url);
   const shop = url.searchParams.get("__playwrightShop");
   const isLocalHost = url.hostname === "127.0.0.1" || url.hostname === "localhost";
+  const isEnabled = process.env.PLAYWRIGHT_BYPASS_ENABLED === "true";
 
-  if (process.env.NODE_ENV === "production" || !isLocalHost || !shop) {
+  if (!isEnabled || process.env.NODE_ENV === "production" || !isLocalHost || !shop) {
     return null;
   }
 
   return shop;
+}
+
+export function isPlaywrightBypassRequest(request: Request) {
+  return getPlaywrightBypassShop(request) !== null;
 }
 
 export async function authenticateAdminRequest(request: Request): Promise<AdminAuthResult> {

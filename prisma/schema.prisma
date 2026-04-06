@@ -34,22 +34,22 @@ model Session {
 // Phase 1 tables
 
 model Shop {
-  id               String       @id @default(cuid())
-  shopId           String       @unique
-  shopifyDomain    String       @unique
+  id               String   @id @default(cuid())
+  shopId           String   @unique
+  shopifyDomain    String   @unique
   planTier         String?
-  paymentRate      Decimal?     @db.Decimal(5, 4)
-  planOverride     Boolean      @default(false)
-  currency         String       @default("USD")
-  mistakeBuffer    Decimal?     @db.Decimal(5, 4)
+  paymentRate      Decimal? @db.Decimal(5, 4)
+  planOverride     Boolean  @default(false)
+  currency         String   @default("USD")
+  mistakeBuffer    Decimal? @db.Decimal(5, 4)
   defaultLaborRate Decimal? @db.Decimal(10, 4)
-  wizardStep       Int          @default(0)
-  catalogSynced    Boolean      @default(false)
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  wizardStep       Int      @default(0)
+  catalogSynced    Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  wizardState      WizardState?
-  auditLogs        AuditLog[]
+  wizardState WizardState?
+  auditLogs   AuditLog[]
 }
 
 model WizardState {
@@ -92,14 +92,14 @@ model MaterialLibraryItem {
   id               String   @id @default(cuid())
   shopId           String
   name             String
-  type             String   // "production" | "shipping"
-  costingModel     String?  // "yield" | "uses" — null for shipping materials
+  type             String // "production" | "shipping"
+  costingModel     String? // "yield" | "uses" — null for shipping materials
   purchasePrice    Decimal  @db.Decimal(10, 4)
   purchaseQty      Decimal  @db.Decimal(10, 4)
-  perUnitCost      Decimal  @db.Decimal(10, 6)  // derived: purchasePrice ÷ purchaseQty
-  totalUsesPerUnit Decimal? @db.Decimal(10, 4)  // uses-based only
+  perUnitCost      Decimal  @db.Decimal(10, 6) // derived: purchasePrice ÷ purchaseQty
+  totalUsesPerUnit Decimal? @db.Decimal(10, 4) // uses-based only
   unitDescription  String?
-  status           String   @default("active")  // "active" | "inactive"
+  status           String   @default("active") // "active" | "inactive"
   notes            String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -144,40 +144,41 @@ model CostTemplate {
 }
 
 model CostTemplateMaterialLine {
-  id             String              @id @default(cuid())
-  templateId     String
-  template       CostTemplate        @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  materialId     String
-  material       MaterialLibraryItem @relation(fields: [materialId], references: [id])
-  yield          Decimal?            @db.Decimal(10, 4)
-  quantity       Decimal             @db.Decimal(10, 4)
-  usesPerVariant Decimal?            @db.Decimal(10, 4)
+  id               String                @id @default(cuid())
+  templateId       String
+  template         CostTemplate          @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  materialId       String
+  material         MaterialLibraryItem   @relation(fields: [materialId], references: [id])
+  yield            Decimal?              @db.Decimal(10, 4)
+  quantity         Decimal               @db.Decimal(10, 4)
+  usesPerVariant   Decimal?              @db.Decimal(10, 4)
   variantOverrides VariantMaterialLine[]
 }
 
 model CostTemplateEquipmentLine {
-  id          String               @id @default(cuid())
-  templateId  String
-  template    CostTemplate         @relation(fields: [templateId], references: [id], onDelete: Cascade)
-  equipmentId String
-  equipment   EquipmentLibraryItem @relation(fields: [equipmentId], references: [id])
-  minutes     Decimal?             @db.Decimal(10, 4)
-  uses        Decimal?             @db.Decimal(10, 4)
+  id               String                 @id @default(cuid())
+  templateId       String
+  template         CostTemplate           @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  equipmentId      String
+  equipment        EquipmentLibraryItem   @relation(fields: [equipmentId], references: [id])
+  minutes          Decimal?               @db.Decimal(10, 4)
+  uses             Decimal?               @db.Decimal(10, 4)
   variantOverrides VariantEquipmentLine[]
 }
 
 model Product {
   id        String   @id @default(cuid())
   shopId    String
-  shopifyId String   // full GID: "gid://shopify/Product/123"
+  shopifyId String // full GID: "gid://shopify/Product/123"
   title     String
   handle    String
-  status    String   // "active" | "archived" | "draft"
+  status    String // "active" | "archived" | "draft"
   syncedAt  DateTime
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  variants Variant[]
+  variants         Variant[]
+  causeAssignments ProductCauseAssignment[]
 
   @@unique([shopId, shopifyId])
   @@index([shopId])
@@ -186,7 +187,7 @@ model Product {
 model Variant {
   id        String   @id @default(cuid())
   shopId    String
-  shopifyId String   // full GID: "gid://shopify/ProductVariant/456"
+  shopifyId String // full GID: "gid://shopify/ProductVariant/456"
   productId String
   product   Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   title     String
@@ -211,8 +212,8 @@ model VariantCostConfig {
   template      CostTemplate? @relation(fields: [templateId], references: [id])
   laborMinutes  Decimal?      @db.Decimal(10, 4)
   laborRate     Decimal?      @db.Decimal(10, 4) // overrides Shop.defaultLaborRate when set
-  mistakeBuffer Decimal?      @db.Decimal(5, 4)  // overrides Shop.mistakeBuffer when set
-  lineItemCount Int           @default(0)         // maintained on insert/delete of material+equipment lines (ADR-004)
+  mistakeBuffer Decimal?      @db.Decimal(5, 4) // overrides Shop.mistakeBuffer when set
+  lineItemCount Int           @default(0) // maintained on insert/delete of material+equipment lines (ADR-004)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -223,34 +224,220 @@ model VariantCostConfig {
 }
 
 model VariantMaterialLine {
-  id             String              @id @default(cuid())
+  id             String                    @id @default(cuid())
   shopId         String
   configId       String
-  config         VariantCostConfig   @relation(fields: [configId], references: [id], onDelete: Cascade)
+  config         VariantCostConfig         @relation(fields: [configId], references: [id], onDelete: Cascade)
   materialId     String
-  material       MaterialLibraryItem @relation(fields: [materialId], references: [id])
+  material       MaterialLibraryItem       @relation(fields: [materialId], references: [id])
   templateLineId String?
   templateLine   CostTemplateMaterialLine? @relation(fields: [templateLineId], references: [id], onDelete: Cascade)
-  yield          Decimal?            @db.Decimal(10, 4)
-  quantity       Decimal             @db.Decimal(10, 4)
-  usesPerVariant Decimal?            @db.Decimal(10, 4)
+  yield          Decimal?                  @db.Decimal(10, 4)
+  quantity       Decimal                   @db.Decimal(10, 4)
+  usesPerVariant Decimal?                  @db.Decimal(10, 4)
 
-  @@index([shopId])
   @@unique([configId, templateLineId])
+  @@index([shopId])
 }
 
 model VariantEquipmentLine {
-  id          String               @id @default(cuid())
-  shopId      String
-  configId    String
-  config      VariantCostConfig    @relation(fields: [configId], references: [id], onDelete: Cascade)
-  equipmentId String
-  equipment   EquipmentLibraryItem @relation(fields: [equipmentId], references: [id])
+  id             String                     @id @default(cuid())
+  shopId         String
+  configId       String
+  config         VariantCostConfig          @relation(fields: [configId], references: [id], onDelete: Cascade)
+  equipmentId    String
+  equipment      EquipmentLibraryItem       @relation(fields: [equipmentId], references: [id])
   templateLineId String?
   templateLine   CostTemplateEquipmentLine? @relation(fields: [templateLineId], references: [id], onDelete: Cascade)
-  minutes     Decimal?             @db.Decimal(10, 4)
-  uses        Decimal?             @db.Decimal(10, 4)
+  minutes        Decimal?                   @db.Decimal(10, 4)
+  uses           Decimal?                   @db.Decimal(10, 4)
+
+  @@unique([configId, templateLineId])
+  @@index([shopId])
+}
+
+// Phase 3 tables
+
+model Cause {
+  id                  String   @id @default(cuid())
+  shopId              String
+  shopifyMetaobjectId String?
+  name                String
+  legalName           String?
+  is501c3             Boolean  @default(false)
+  description         String?
+  iconUrl             String?
+  donationLink        String?
+  websiteUrl          String?
+  instagramUrl        String?
+  status              String   @default("active")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  productAssignments ProductCauseAssignment[]
+  lineAllocations    LineCauseAllocation[]
+
+  @@index([shopId, status])
+}
+
+model ProductCauseAssignment {
+  id               String   @id @default(cuid())
+  shopId           String
+  shopifyProductId String
+  causeId          String
+  cause            Cause    @relation(fields: [causeId], references: [id], onDelete: Cascade)
+  productId        String?
+  product          Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  percentage       Decimal  @db.Decimal(5, 2)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([shopId, shopifyProductId, causeId])
+  @@index([shopId])
+}
+
+model OrderSnapshot {
+  id             String   @id @default(cuid())
+  shopId         String
+  shopifyOrderId String
+  orderNumber    String?
+  origin         String   @default("webhook")
+  createdAt      DateTime @default(now())
+
+  lines OrderSnapshotLine[]
+
+  @@unique([shopId, shopifyOrderId])
+  @@index([shopId])
+}
+
+model OrderSnapshotLine {
+  id                  String        @id @default(cuid())
+  shopId              String
+  snapshotId          String
+  snapshot            OrderSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  shopifyLineItemId   String
+  shopifyVariantId    String
+  variantTitle        String
+  productTitle        String
+  quantity            Int
+  salePrice           Decimal       @db.Decimal(10, 2)
+  subtotal            Decimal       @db.Decimal(10, 2)
+  laborCost           Decimal       @db.Decimal(10, 4)
+  materialCost        Decimal       @db.Decimal(10, 4)
+  packagingCost       Decimal       @db.Decimal(10, 4)
+  equipmentCost       Decimal       @db.Decimal(10, 4)
+  podCost             Decimal       @default(0) @db.Decimal(10, 4)
+  mistakeBufferAmount Decimal       @db.Decimal(10, 4)
+  totalCost           Decimal       @db.Decimal(10, 4)
+  netContribution     Decimal       @db.Decimal(10, 4)
+  laborMinutes        Decimal?      @db.Decimal(10, 2)
+  laborRate           Decimal?      @db.Decimal(10, 2)
+  podCostEstimated    Boolean       @default(false)
+  podCostMissing      Boolean       @default(false)
+
+  materialLines    OrderSnapshotMaterialLine[]
+  equipmentLines   OrderSnapshotEquipmentLine[]
+  podLines         OrderSnapshotPODLine[]
+  causeAllocations LineCauseAllocation[]
+  adjustments      Adjustment[]
 
   @@index([shopId])
-  @@unique([configId, templateLineId])
+  @@index([snapshotId])
+}
+
+model OrderSnapshotMaterialLine {
+  id             String            @id @default(cuid())
+  snapshotLineId String
+  snapshotLine   OrderSnapshotLine @relation(fields: [snapshotLineId], references: [id], onDelete: Cascade)
+  materialId     String?
+  materialName   String
+  materialType   String
+  costingModel   String?
+  purchasePrice  Decimal           @db.Decimal(10, 2)
+  purchaseQty    Decimal           @db.Decimal(10, 4)
+  perUnitCost    Decimal           @db.Decimal(10, 4)
+  yield_         Decimal?          @map("yield") @db.Decimal(10, 4)
+  usesPerVariant Decimal?          @db.Decimal(10, 4)
+  quantity       Decimal           @db.Decimal(10, 4)
+  lineCost       Decimal           @db.Decimal(10, 4)
+}
+
+model OrderSnapshotEquipmentLine {
+  id             String            @id @default(cuid())
+  snapshotLineId String
+  snapshotLine   OrderSnapshotLine @relation(fields: [snapshotLineId], references: [id], onDelete: Cascade)
+  equipmentId    String?
+  equipmentName  String
+  hourlyRate     Decimal?          @db.Decimal(10, 2)
+  perUseCost     Decimal?          @db.Decimal(10, 2)
+  minutes        Decimal?          @db.Decimal(10, 2)
+  uses           Decimal?          @db.Decimal(10, 2)
+  lineCost       Decimal           @db.Decimal(10, 4)
+}
+
+model OrderSnapshotPODLine {
+  id             String            @id @default(cuid())
+  snapshotLineId String
+  snapshotLine   OrderSnapshotLine @relation(fields: [snapshotLineId], references: [id], onDelete: Cascade)
+  provider       String
+  costLineType   String
+  description    String
+  amount         Decimal           @db.Decimal(10, 2)
+}
+
+model LineCauseAllocation {
+  id             String            @id @default(cuid())
+  shopId         String
+  snapshotLineId String
+  snapshotLine   OrderSnapshotLine @relation(fields: [snapshotLineId], references: [id], onDelete: Cascade)
+  causeId        String
+  cause          Cause             @relation(fields: [causeId], references: [id], onDelete: Restrict)
+  causeName      String
+  is501c3        Boolean
+  percentage     Decimal           @db.Decimal(5, 2)
+  amount         Decimal           @db.Decimal(10, 4)
+
+  @@index([shopId])
+}
+
+model Adjustment {
+  id             String            @id @default(cuid())
+  shopId         String
+  snapshotLineId String
+  snapshotLine   OrderSnapshotLine @relation(fields: [snapshotLineId], references: [id], onDelete: Cascade)
+  type           String
+  reason         String?
+  laborAdj       Decimal           @default(0) @db.Decimal(10, 4)
+  materialAdj    Decimal           @default(0) @db.Decimal(10, 4)
+  packagingAdj   Decimal           @default(0) @db.Decimal(10, 4)
+  equipmentAdj   Decimal           @default(0) @db.Decimal(10, 4)
+  netContribAdj  Decimal           @default(0) @db.Decimal(10, 4)
+  createdAt      DateTime          @default(now())
+  actor          String            @default("system")
+
+  @@index([shopId])
+}
+
+model BusinessExpense {
+  id          String   @id @default(cuid())
+  shopId      String
+  category    String
+  subType     String?
+  name        String
+  amount      Decimal  @db.Decimal(10, 2)
+  expenseDate DateTime
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  @@index([shopId])
+}
+
+model TaxOffsetCache {
+  id                   String   @id @default(cuid())
+  shopId               String   @unique
+  taxableExposure      Decimal  @db.Decimal(10, 2)
+  deductionPool        Decimal  @db.Decimal(10, 2)
+  cumulativeNetContrib Decimal  @db.Decimal(10, 2)
+  widgetTaxSuppressed  Boolean  @default(false)
+  updatedAt            DateTime @updatedAt
 }

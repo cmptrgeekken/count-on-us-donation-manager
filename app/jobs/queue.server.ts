@@ -42,6 +42,7 @@ export async function startJobQueue(): Promise<void> {
 
   // Recurring jobs
   await jobQueue.schedule("plan.detect.daily", "0 6 * * *", {});
+  await jobQueue.schedule("reconciliation.daily", "0 3 * * *", {});
 
   // Graceful shutdown
   process.on("SIGTERM", async () => {

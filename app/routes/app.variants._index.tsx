@@ -313,9 +313,12 @@ export default function VariantsPage() {
                       defaultValue={filterProductId}
                       style={{
                         width: "100%",
+                        boxSizing: "border-box",
                         padding: "0.75rem",
                         borderRadius: "0.75rem",
-                        border: "1px solid var(--p-color-border)",
+                        border: "1px solid var(--p-color-border, #d2d5d8)",
+                        background: "var(--p-color-bg-surface, #fff)",
+                        color: "var(--p-color-text, #303030)",
                         font: "inherit",
                       }}
                     >
@@ -334,9 +337,12 @@ export default function VariantsPage() {
                       defaultValue={filterConfigured}
                       style={{
                         width: "100%",
+                        boxSizing: "border-box",
                         padding: "0.75rem",
                         borderRadius: "0.75rem",
-                        border: "1px solid var(--p-color-border)",
+                        border: "1px solid var(--p-color-border, #d2d5d8)",
+                        background: "var(--p-color-bg-surface, #fff)",
+                        color: "var(--p-color-text, #303030)",
                         font: "inherit",
                       }}
                     >
@@ -509,9 +515,12 @@ export default function VariantsPage() {
                 onChange={(event) => setSelectedTemplateId(event.currentTarget.value)}
                 style={{
                   width: "100%",
+                  boxSizing: "border-box",
                   padding: "0.75rem",
                   borderRadius: "0.75rem",
-                  border: "1px solid var(--p-color-border)",
+                  border: "1px solid var(--p-color-border, #d2d5d8)",
+                  background: "var(--p-color-bg-surface, #fff)",
+                  color: "var(--p-color-text, #303030)",
                   font: "inherit",
                 }}
               >
