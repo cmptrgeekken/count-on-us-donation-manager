@@ -399,7 +399,7 @@ export default function TemplateDetailPage() {
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [materialSearchValue, setMaterialSearchValue] = useState("");
   const [matQty, setMatQty] = useState("1");
-  const [matYield, setMatYield] = useState("");
+  const [matYield, setMatYield] = useState("1");
   const [matUses, setMatUses] = useState("");
 
   const [equipmentModalOpen, setEquipmentModalOpen] = useState(false);
@@ -430,7 +430,7 @@ export default function TemplateDetailPage() {
     setSelectedMaterialId("");
     setMaterialSearchValue("");
     setMatQty("1");
-    setMatYield("");
+    setMatYield("1");
     setMatUses("");
   }
 
@@ -773,7 +773,7 @@ export default function TemplateDetailPage() {
                   const nextMaterial = availableMaterials.find((item: AvailableMaterial) => item.id === nextId);
                   setSelectedMaterialId(nextId);
                   setMaterialSearchValue(nextMaterial?.name ?? "");
-                  setMatYield("");
+                  setMatYield(nextMaterial?.costingModel === "yield" ? "1" : "");
                   setMatUses("");
                 }}
                 textField={

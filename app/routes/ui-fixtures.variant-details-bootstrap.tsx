@@ -80,6 +80,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.materialLibraryItem.create({
+    data: {
+      shopId,
+      name: "Playwright Yield Material",
+      type: "production",
+      costingModel: "yield",
+      purchasePrice: "8.00",
+      purchaseQty: "1.00",
+      perUnitCost: "8.000000",
+      totalUsesPerUnit: null,
+      status: "active",
+    },
+  });
+
   return Response.json({
     shopId,
     variantId: variant.id,

@@ -1245,7 +1245,7 @@ export default function VariantDetailPage() {
   const [addMaterialOpen, setAddMaterialOpen] = useState(false);
   const [selectedMaterialId, setSelectedMaterialId] = useState(availableMaterials[0]?.id ?? "");
   const [matQty, setMatQty] = useState("1");
-  const [matYield, setMatYield] = useState("");
+  const [matYield, setMatYield] = useState("1");
   const [matUses, setMatUses] = useState("");
 
   const [materialOverrideTargetId, setMaterialOverrideTargetId] = useState<string | null>(null);
@@ -1297,7 +1297,7 @@ export default function VariantDetailPage() {
   function resetAdditionalMaterialModal() {
     setSelectedMaterialId(availableMaterials[0]?.id ?? "");
     setMatQty("1");
-    setMatYield("");
+    setMatYield("1");
     setMatUses("");
   }
 
@@ -1966,8 +1966,9 @@ export default function VariantDetailPage() {
               options={availableMaterials.map((material: AvailableMaterial) => ({ label: material.name, value: material.id }))}
               value={selectedMaterialId}
               onChange={(value) => {
+                const nextMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === value);
                 setSelectedMaterialId(value);
-                setMatYield("");
+                setMatYield(nextMaterial?.costingModel === "yield" ? "1" : "");
                 setMatUses("");
               }}
             />
