@@ -69,7 +69,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await prisma.variantCostConfig.deleteMany({
     where: { shopId, variantId: variant.id },
   });
-
   await prisma.costTemplate.deleteMany({
     where: {
       shopId,

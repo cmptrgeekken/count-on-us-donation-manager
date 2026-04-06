@@ -10,7 +10,6 @@ import { useAppLocalization } from "../utils/use-app-localization";
 const materialIdSchema = z.object({
   id: z.string().trim().cuid("Material id is invalid."),
 });
-
 const materialFormSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   type: z.enum(["production", "shipping"]),

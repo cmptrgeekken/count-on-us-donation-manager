@@ -46,7 +46,6 @@ test("unused materials can be deleted and used materials hide the delete action"
   await expect(usedRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
   await expect(usedRow.getByText("Delete unavailable while in use")).toBeVisible();
 });
-
 test("materials can save purchase link and weight metadata", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
