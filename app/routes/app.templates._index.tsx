@@ -342,9 +342,13 @@ export default function TemplatesPage() {
                             <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
                           </fetcher.Form>
                         )}
-                        <s-button tone="critical" variant="secondary" onClick={() => openDeleteDialog(template)}>
-                          Delete
-                        </s-button>
+                        {(template.variantCount ?? 0) === 0 ? (
+                          <s-button tone="critical" variant="secondary" onClick={() => openDeleteDialog(template)}>
+                            Delete
+                          </s-button>
+                        ) : (
+                          <s-text color="subdued">Delete unavailable while assigned</s-text>
+                        )}
                       </div>
                     </s-table-cell>
                   </s-table-row>
@@ -528,7 +532,7 @@ export default function TemplatesPage() {
                 cursor: "pointer",
               }}
             >
-              Ã—
+              ×
             </button>
           </div>
 

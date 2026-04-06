@@ -26,7 +26,7 @@ test("materials can be deactivated and reactivated on the real route", async ({ 
   await expect(materialRow.getByText("Active")).toBeVisible();
 });
 
-test("unused materials can be deleted and used materials show a blocked delete explanation", async ({ page, request }) => {
+test("unused materials can be deleted and used materials hide the delete action", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
 
@@ -43,10 +43,8 @@ test("unused materials can be deleted and used materials show a blocked delete e
   await expect(deletableRow).toHaveCount(0);
 
   const usedRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Material UI Used") });
-  await usedRow.getByRole("button", { name: "Delete" }).click();
-  await expect(deleteDialog).toBeVisible();
-  await expect(deleteDialog.getByText("This material is still used in 1 template(s) and 0 variant config(s), so deletion is blocked.")).toBeVisible();
-  await expect(deleteDialog.getByRole("button", { name: "Delete" })).toBeDisabled();
+  await expect(usedRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(usedRow.getByText("Delete unavailable while in use")).toBeVisible();
 });
 
 test("materials can save purchase link and weight metadata", async ({ page, request }) => {

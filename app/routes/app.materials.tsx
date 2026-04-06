@@ -479,9 +479,13 @@ export default function MaterialsPage() {
                             <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
                           </fetcher.Form>
                         )}
-                        <s-button tone="critical" variant="secondary" onClick={() => confirmDelete(material)}>
-                          Delete
-                        </s-button>
+                        {material.templateCount + material.variantCount === 0 ? (
+                          <s-button tone="critical" variant="secondary" onClick={() => confirmDelete(material)}>
+                            Delete
+                          </s-button>
+                        ) : (
+                          <s-text color="subdued">Delete unavailable while in use</s-text>
+                        )}
                       </div>
                     </s-table-cell>
                   </s-table-row>
@@ -806,7 +810,7 @@ export default function MaterialsPage() {
                 cursor: "pointer",
               }}
             >
-              Ã—
+              ×
             </button>
           </div>
 

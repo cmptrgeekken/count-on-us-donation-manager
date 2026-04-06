@@ -63,7 +63,7 @@ test("causes show inline URL validation errors in the modal", async ({ page, req
   await expect(page.locator("s-table-row").filter({ has: page.getByText("Playwright Invalid Cause") })).toHaveCount(0);
 });
 
-test("unused causes can be deleted and assigned causes show a blocked delete explanation", async ({ page, request }) => {
+test("unused causes can be deleted and assigned causes hide the delete action", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/causes-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
 
@@ -85,7 +85,6 @@ test("unused causes can be deleted and assigned causes show a blocked delete exp
   await expect(deletableRow).toHaveCount(0);
 
   const usedRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Cause UI Assigned") });
-  await usedRow.getByRole("button", { name: "Delete" }).click();
-  await expect(deleteDialog.getByText("This Cause is still assigned to 1 product(s), so deletion is blocked.")).toBeVisible();
-  await expect(deleteDialog.getByRole("button", { name: "Delete" })).toBeDisabled();
+  await expect(usedRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(usedRow.getByText("Delete unavailable while in use")).toBeVisible();
 });
