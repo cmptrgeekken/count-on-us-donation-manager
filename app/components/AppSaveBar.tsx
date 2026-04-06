@@ -22,6 +22,17 @@ export function AppSaveBar({
   const id = useId().replace(/:/g, "");
   const saveButtonRef = useRef<HTMLButtonElement | null>(null);
   const discardButtonRef = useRef<HTMLButtonElement | null>(null);
+  const onSaveRef = useRef(onSave);
+  const onDiscardRef = useRef(onDiscard);
+  const saveDisabledRef = useRef(saveDisabled);
+  const loadingRef = useRef(loading);
+
+  useEffect(() => {
+    onSaveRef.current = onSave;
+    onDiscardRef.current = onDiscard;
+    saveDisabledRef.current = saveDisabled;
+    loadingRef.current = loading;
+  }, [loading, onDiscard, onSave, saveDisabled]);
 
   useEffect(() => {
     const api = (globalThis as any).shopify?.saveBar;
@@ -41,13 +52,13 @@ export function AppSaveBar({
     if (!saveButton || !discardButton) return;
 
     const handleSave = () => {
-      if (!saveDisabled && !loading) {
-        onSave();
+      if (!saveDisabledRef.current && !loadingRef.current) {
+        onSaveRef.current();
       }
     };
     const handleDiscard = () => {
-      if (!loading) {
-        onDiscard();
+      if (!loadingRef.current) {
+        onDiscardRef.current();
       }
     };
 
@@ -58,7 +69,7 @@ export function AppSaveBar({
       saveButton.removeEventListener("click", handleSave);
       discardButton.removeEventListener("click", handleDiscard);
     };
-  }, [loading, onDiscard, onSave, saveDisabled]);
+  }, []);
 
   useEffect(() => {
     const saveButton = saveButtonRef.current;

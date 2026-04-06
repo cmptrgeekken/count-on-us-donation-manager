@@ -52,13 +52,22 @@ test("template details can set a default shipping template", async ({ page, requ
   await page.goto(bootstrap.templateUrl);
 
   const saveButton = page.locator("ui-save-bar button", { hasText: "Save" });
+  const defaultShippingSelect = page.getByLabel("Default shipping template");
 
-  await page.getByLabel("Default shipping template").selectOption({ label: "Playwright Shipping Template B" });
+  await defaultShippingSelect.selectOption(bootstrap.shippingTemplateBId);
+  await expect(defaultShippingSelect).toHaveValue(bootstrap.shippingTemplateBId);
+  const saveResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes(`/app/templates/${bootstrap.templateId}`) &&
+      response.request().method() === "POST" &&
+      response.ok(),
+  );
   await saveButton.click();
+  await saveResponse;
 
-  await expect(page.getByText("Template saved.")).toBeVisible();
+  await expect(defaultShippingSelect).toHaveValue(bootstrap.shippingTemplateBId);
   await page.reload();
-  await expect(page.getByLabel("Default shipping template")).toHaveValue(bootstrap.shippingTemplateBId);
+  await expect(defaultShippingSelect).toHaveValue(bootstrap.shippingTemplateBId);
 });
 
 test("template details only offer materials matching the template type", async ({ page, request }) => {
