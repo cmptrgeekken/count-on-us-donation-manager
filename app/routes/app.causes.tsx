@@ -801,9 +801,13 @@ export default function CausesPage() {
                             </s-button>
                           </fetcher.Form>
                         )}
-                        <s-button variant="secondary" tone="critical" onClick={() => confirmDelete(cause)}>
-                          Delete
-                        </s-button>
+                        {cause.assignmentCount + cause.lineAllocationCount === 0 ? (
+                          <s-button variant="secondary" tone="critical" onClick={() => confirmDelete(cause)}>
+                            Delete
+                          </s-button>
+                        ) : (
+                          <s-text color="subdued">Delete unavailable while in use</s-text>
+                        )}
                       </div>
                     </s-table-cell>
                   </s-table-row>
@@ -1102,7 +1106,7 @@ export default function CausesPage() {
                 cursor: "pointer",
               }}
             >
-              Ã—
+              ×
             </button>
           </div>
 

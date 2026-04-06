@@ -12,15 +12,15 @@ test("causes can be created, deactivated, and reactivated on the real route", as
   await page.getByText("New cause", { exact: true }).nth(1).click();
   const causeDialog = page.getByRole("dialog").filter({ hasText: "New cause" });
   await expect(causeDialog).toBeVisible();
-  await causeDialog.locator("#cause-name").fill("Playwright Cause UI");
-  await causeDialog.locator("#cause-legal-name").fill("Playwright Cause UI Foundation");
+  await causeDialog.locator("#cause-name").fill("Playwright Cause UI Fresh");
+  await causeDialog.locator("#cause-legal-name").fill("Playwright Cause UI Fresh Foundation");
   await causeDialog.locator("#cause-description").fill("Created by Playwright.");
   await causeDialog.locator("#cause-donationLink").fill("https://example.org/donate");
   await causeDialog.getByRole("button", { name: "Create" }).click();
 
   const causeRow = page
     .locator("s-table-row")
-    .filter({ has: page.getByText("Playwright Cause UI") });
+    .filter({ has: page.getByText("Playwright Cause UI Fresh", { exact: true }) });
 
   await expect(page.getByText("Cause created.")).toBeVisible();
   await expect(causeRow).toBeVisible();
@@ -63,7 +63,7 @@ test("causes show inline URL validation errors in the modal", async ({ page, req
   await expect(page.locator("s-table-row").filter({ has: page.getByText("Playwright Invalid Cause") })).toHaveCount(0);
 });
 
-test("unused causes can be deleted and assigned causes show a blocked delete explanation", async ({ page, request }) => {
+test("unused causes can be deleted and assigned causes hide the delete action", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/causes-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
 
@@ -85,7 +85,6 @@ test("unused causes can be deleted and assigned causes show a blocked delete exp
   await expect(deletableRow).toHaveCount(0);
 
   const usedRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Cause UI Assigned") });
-  await usedRow.getByRole("button", { name: "Delete" }).click();
-  await expect(deleteDialog.getByText("This Cause is still assigned to 1 product(s), so deletion is blocked.")).toBeVisible();
-  await expect(deleteDialog.getByRole("button", { name: "Delete" })).toBeDisabled();
+  await expect(usedRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(usedRow.getByText("Delete unavailable while in use")).toBeVisible();
 });

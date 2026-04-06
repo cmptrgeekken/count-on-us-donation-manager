@@ -13,12 +13,14 @@ test("equipment can be created, deactivated, and reactivated on the real route",
   const equipmentDialog = page.getByRole("dialog").filter({ hasText: "New equipment" });
   await expect(equipmentDialog).toBeVisible();
 
-  await equipmentDialog.getByLabel("Name").fill("Playwright Equipment UI");
+  await equipmentDialog.getByLabel("Name").fill("Playwright Equipment UI Fresh");
   await equipmentDialog.getByLabel(/Hourly rate/).fill("45");
   await equipmentDialog.getByRole("button", { name: "Create" }).click();
 
   await expect(page.getByText("Equipment created.")).toBeVisible();
-  const equipmentRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Equipment UI") });
+  const equipmentRow = page
+    .locator("s-table-row")
+    .filter({ has: page.getByText("Playwright Equipment UI Fresh", { exact: true }) });
   await expect(equipmentRow).toBeVisible();
 
   await equipmentRow.getByRole("button", { name: "Deactivate" }).click();
@@ -35,7 +37,7 @@ test("equipment can be created, deactivated, and reactivated on the real route",
   await expect(equipmentRow.getByText("Active")).toBeVisible();
 });
 
-test("unused equipment can be deleted and used equipment show a blocked delete explanation", async ({ page, request }) => {
+test("unused equipment can be deleted and used equipment hide the delete action", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
 
@@ -58,7 +60,6 @@ test("unused equipment can be deleted and used equipment show a blocked delete e
   await expect(deletableRow).toHaveCount(0);
 
   const usedRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Equipment UI Used") });
-  await usedRow.getByRole("button", { name: "Delete" }).click();
-  await expect(deleteDialog.getByText("This equipment is still used in 1 template(s) and 0 variant config(s), so deletion is blocked.")).toBeVisible();
-  await expect(deleteDialog.getByRole("button", { name: "Delete" })).toBeDisabled();
+  await expect(usedRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(usedRow.getByText("Delete unavailable while in use")).toBeVisible();
 });

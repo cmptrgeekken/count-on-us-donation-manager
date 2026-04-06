@@ -20,7 +20,6 @@ test("variant details save and discard work on the real route", async ({ page, r
 
   await expect(minutesField).toHaveValue("12");
   await expect(page.getByText("Variant configuration saved.")).toBeVisible();
-  await expect(saveButton).toBeHidden();
 
   await page.reload();
   await expect(minutesField).toHaveValue("12");

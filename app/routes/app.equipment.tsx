@@ -392,9 +392,13 @@ export default function EquipmentPage() {
                             <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
                           </fetcher.Form>
                         )}
-                        <s-button tone="critical" variant="secondary" onClick={() => confirmDelete(item)}>
-                          Delete
-                        </s-button>
+                        {item.templateCount + item.variantCount === 0 ? (
+                          <s-button tone="critical" variant="secondary" onClick={() => confirmDelete(item)}>
+                            Delete
+                          </s-button>
+                        ) : (
+                          <s-text color="subdued">Delete unavailable while in use</s-text>
+                        )}
                       </div>
                     </s-table-cell>
                   </s-table-row>
@@ -624,7 +628,7 @@ export default function EquipmentPage() {
                 cursor: "pointer",
               }}
             >
-              Ã—
+              ×
             </button>
           </div>
 

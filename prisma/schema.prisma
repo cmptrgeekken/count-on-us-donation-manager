@@ -98,6 +98,8 @@ model MaterialLibraryItem {
   purchaseQty      Decimal  @db.Decimal(10, 4)
   perUnitCost      Decimal  @db.Decimal(10, 6) // derived: purchasePrice ÷ purchaseQty
   totalUsesPerUnit Decimal? @db.Decimal(10, 4) // uses-based only
+  purchaseLink     String?
+  weightGrams      Decimal? @db.Decimal(10, 3)
   unitDescription  String?
   status           String   @default("active") // "active" | "inactive"
   notes            String?

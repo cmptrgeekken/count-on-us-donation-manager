@@ -13,12 +13,14 @@ test("cost templates can be created, deactivated, and reactivated on the real ro
   const templateDialog = page.getByRole("dialog").filter({ hasText: "New template" });
   await expect(templateDialog).toBeVisible();
 
-  await templateDialog.getByLabel("Name").fill("Playwright Template UI");
+  await templateDialog.getByLabel("Name").fill("Playwright Template UI Fresh");
   await templateDialog.locator("#template-description").fill("Playwright-created template.");
   await templateDialog.getByRole("button", { name: "Create" }).click();
 
   await expect(page.getByText("Template created.")).toBeVisible();
-  const templateRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Template UI") });
+  const templateRow = page
+    .locator("s-table-row")
+    .filter({ has: page.getByText("Playwright Template UI Fresh", { exact: true }) });
   await expect(templateRow).toBeVisible();
 
   await templateRow.getByRole("button", { name: "Deactivate" }).click();
@@ -35,7 +37,7 @@ test("cost templates can be created, deactivated, and reactivated on the real ro
   await expect(templateRow.getByText("Active")).toBeVisible();
 });
 
-test("unused templates can be deleted and assigned templates show a blocked delete explanation", async ({ page, request }) => {
+test("unused templates can be deleted and assigned templates hide the delete action", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
 
@@ -58,7 +60,6 @@ test("unused templates can be deleted and assigned templates show a blocked dele
   await expect(deletableRow).toHaveCount(0);
 
   const usedRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Template UI Used") });
-  await usedRow.getByRole("button", { name: "Delete" }).click();
-  await expect(deleteDialog.getByText("This template is still assigned to 1 variant(s), so deletion is blocked.")).toBeVisible();
-  await expect(deleteDialog.getByRole("button", { name: "Delete" })).toBeDisabled();
+  await expect(usedRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
+  await expect(usedRow.getByText("Delete unavailable while assigned")).toBeVisible();
 });

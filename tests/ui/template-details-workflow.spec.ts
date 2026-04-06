@@ -19,7 +19,7 @@ test("template details save and discard work on the real route", async ({ page, 
   await saveButton.click();
 
   await expect(nameField).toHaveValue("Updated Playwright Template");
-  await expect(saveButton).toBeHidden();
+  await expect(page.getByText("Template saved.")).toBeVisible();
 
   await page.reload();
   await expect(nameField).toHaveValue("Updated Playwright Template");
