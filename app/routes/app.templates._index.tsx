@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { z } from "zod";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+
+const templateIdSchema = z.object({
+  id: z.string().trim().cuid("Template id is invalid."),
+});
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -64,7 +69,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "deactivate" || intent === "reactivate") {
-    const id = formData.get("id")?.toString() ?? "";
+    const parsed = templateIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
+    if (!parsed.success) {
+      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
+    }
+    const id = parsed.data.id;
     const status = intent === "deactivate" ? "inactive" : "active";
 
     await prisma.costTemplate.update({ where: { id, shopId }, data: { status } });
@@ -82,6 +91,49 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ok: true,
       message: intent === "deactivate" ? "Template deactivated." : "Template reactivated.",
     });
+  }
+
+  if (intent === "delete") {
+    const parsed = templateIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
+    if (!parsed.success) {
+      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
+    }
+
+    const template = await prisma.costTemplate.findFirst({
+      where: { id: parsed.data.id, shopId },
+      include: {
+        _count: {
+          select: { variantConfigs: true, materialLines: true, equipmentLines: true },
+        },
+      },
+    });
+
+    if (!template) {
+      return Response.json({ ok: false, message: "Template not found." }, { status: 404 });
+    }
+
+    if (template._count.variantConfigs > 0) {
+      return Response.json(
+        {
+          ok: false,
+          message: `This template is still assigned to ${template._count.variantConfigs} variant(s). Remove those assignments before deleting it.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    await prisma.costTemplate.delete({ where: { id: template.id, shopId } });
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "CostTemplate",
+        entityId: template.id,
+        action: "TEMPLATE_DELETED",
+        actor: "merchant",
+      },
+    });
+
+    return Response.json({ ok: true, message: "Template deleted." });
   }
 
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
@@ -102,12 +154,16 @@ export default function TemplatesPage() {
   const fetcher = useFetcher<{ ok: boolean; message: string; id?: string }>();
   const createDialogRef = useRef<HTMLDialogElement>(null);
   const deactivateDialogRef = useRef<HTMLDialogElement>(null);
+  const deleteDialogRef = useRef<HTMLDialogElement>(null);
 
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [deactivateTarget, setDeactivateTarget] = useState<Template | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Template | null>(null);
+  const [deleteSubmitPending, setDeleteSubmitPending] = useState(false);
 
   useEffect(() => {
     const dialog = createDialogRef.current;
@@ -131,6 +187,25 @@ export default function TemplatesPage() {
     }
   }, [deactivateDialogOpen]);
 
+  useEffect(() => {
+    const dialog = deleteDialogRef.current;
+    if (!dialog) return;
+
+    if (deleteDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!deleteDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [deleteDialogOpen]);
+
+  useEffect(() => {
+    if (deleteDialogOpen && deleteSubmitPending && fetcher.state === "idle" && fetcher.data?.ok) {
+      setDeleteSubmitPending(false);
+      setDeleteDialogOpen(false);
+      setDeleteTarget(null);
+    }
+  }, [deleteDialogOpen, deleteSubmitPending, fetcher.state, fetcher.data]);
+
   function openCreateDialog() {
     setNewName("");
     setNewDesc("");
@@ -151,6 +226,18 @@ export default function TemplatesPage() {
   function closeDeactivateDialog() {
     setDeactivateDialogOpen(false);
     setDeactivateTarget(null);
+  }
+
+  function openDeleteDialog(template: Template) {
+    setDeleteSubmitPending(false);
+    setDeleteTarget(template);
+    setDeleteDialogOpen(true);
+  }
+
+  function closeDeleteDialog() {
+    setDeleteSubmitPending(false);
+    setDeleteDialogOpen(false);
+    setDeleteTarget(null);
   }
 
   const isSubmitting = fetcher.state !== "idle";
@@ -178,7 +265,7 @@ export default function TemplatesPage() {
       </div>
 
       <s-page>
-        {fetcher.data && !fetcher.data.ok && (
+        {fetcher.data && !fetcher.data.ok && !deleteDialogOpen && (
           <s-banner tone="critical">
             <s-text>{fetcher.data.message}</s-text>
           </s-banner>
@@ -255,6 +342,9 @@ export default function TemplatesPage() {
                             <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
                           </fetcher.Form>
                         )}
+                        <s-button tone="critical" variant="secondary" onClick={() => openDeleteDialog(template)}>
+                          Delete
+                        </s-button>
                       </div>
                     </s-table-cell>
                   </s-table-row>
@@ -404,6 +494,80 @@ export default function TemplatesPage() {
               }}
             >
               Deactivate
+            </s-button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={deleteDialogRef}
+        onClose={closeDeleteDialog}
+        style={{
+          border: "none",
+          borderRadius: "1rem",
+          padding: 0,
+          maxWidth: "32rem",
+          width: "calc(100% - 2rem)",
+        }}
+      >
+        <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <strong>Delete template</strong>
+              <s-text color="subdued">Delete this template permanently when it is no longer assigned to variants.</s-text>
+            </div>
+            <button
+              type="button"
+              aria-label="Close dialog"
+              onClick={closeDeleteDialog}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "1.5rem",
+                lineHeight: 1,
+                cursor: "pointer",
+              }}
+            >
+              Ã—
+            </button>
+          </div>
+
+          {fetcher.data && !fetcher.data.ok && deleteDialogOpen ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
+
+          <s-text>
+            {deleteTarget
+              ? `Delete ${deleteTarget.name} permanently? Its ${deleteTarget.materialLineCount + deleteTarget.equipmentLineCount} line(s) will be removed with it.`
+              : "Delete this template permanently?"}
+          </s-text>
+
+          {deleteTarget && deleteTarget.variantCount > 0 ? (
+            <s-banner tone="warning">
+              <s-text>
+                This template is still assigned to {deleteTarget.variantCount} variant(s), so deletion is blocked.
+              </s-text>
+            </s-banner>
+          ) : null}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+            <s-button variant="secondary" onClick={closeDeleteDialog}>Cancel</s-button>
+            <s-button
+              variant="primary"
+              tone="critical"
+              disabled={isSubmitting || (deleteTarget?.variantCount ?? 0) > 0}
+              onClick={() => {
+                if (!deleteTarget) return;
+                const fd = new FormData();
+                fd.append("intent", "delete");
+                fd.append("id", deleteTarget.id);
+                setDeleteSubmitPending(true);
+                fetcher.submit(fd, { method: "post" });
+              }}
+            >
+              Delete
             </s-button>
           </div>
         </div>

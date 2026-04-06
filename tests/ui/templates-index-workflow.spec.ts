@@ -34,3 +34,31 @@ test("cost templates can be created, deactivated, and reactivated on the real ro
   await expect(page.getByText("Template reactivated.")).toBeVisible();
   await expect(templateRow.getByText("Active")).toBeVisible();
 });
+
+test("unused templates can be deleted and assigned templates show a blocked delete explanation", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.templatesUrl);
+
+  await page.locator("ui-title-bar button").filter({ hasText: "New template" }).click();
+  const templateDialog = page.getByRole("dialog").filter({ hasText: "New template" });
+  await templateDialog.getByLabel("Name").fill("Playwright Template UI Delete");
+  await templateDialog.locator("#template-description").fill("Delete me");
+  await templateDialog.getByRole("button", { name: "Create" }).click();
+  await expect(page.getByText("Template created.")).toBeVisible();
+
+  const deletableRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Template UI Delete") });
+  await expect(deletableRow).toBeVisible();
+  await deletableRow.getByRole("button", { name: "Delete" }).click();
+  const deleteDialog = page.getByRole("dialog").filter({ hasText: "Delete template" });
+  await deleteDialog.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByText("Template deleted.")).toBeVisible();
+  await expect(deletableRow).toHaveCount(0);
+
+  const usedRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Template UI Used") });
+  await usedRow.getByRole("button", { name: "Delete" }).click();
+  await expect(deleteDialog.getByText("This template is still assigned to 1 variant(s), so deletion is blocked.")).toBeVisible();
+  await expect(deleteDialog.getByRole("button", { name: "Delete" })).toBeDisabled();
+});

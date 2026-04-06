@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { z } from "zod";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
+
+const materialIdSchema = z.object({
+  id: z.string().trim().cuid("Material id is invalid."),
+});
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -120,7 +125,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "deactivate" || intent === "reactivate") {
-    const id = formData.get("id")?.toString() ?? "";
+    const parsed = materialIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
+    if (!parsed.success) {
+      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid material." }, { status: 400 });
+    }
+    const id = parsed.data.id;
     const status = intent === "deactivate" ? "inactive" : "active";
     await prisma.materialLibraryItem.update({ where: { id, shopId }, data: { status } });
     await prisma.auditLog.create({
@@ -136,6 +145,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ok: true,
       message: intent === "deactivate" ? "Material deactivated." : "Material reactivated.",
     });
+  }
+
+  if (intent === "delete") {
+    const parsed = materialIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
+    if (!parsed.success) {
+      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid material." }, { status: 400 });
+    }
+
+    const material = await prisma.materialLibraryItem.findFirst({
+      where: { id: parsed.data.id, shopId },
+      include: {
+        _count: { select: { templateLines: true, variantLines: true } },
+      },
+    });
+
+    if (!material) {
+      return Response.json({ ok: false, message: "Material not found." }, { status: 404 });
+    }
+
+    if (material._count.templateLines > 0 || material._count.variantLines > 0) {
+      return Response.json(
+        {
+          ok: false,
+          message: `This material is still used in ${material._count.templateLines} template(s) and ${material._count.variantLines} variant config(s). Remove those references before deleting it.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    await prisma.materialLibraryItem.delete({ where: { id: material.id, shopId } });
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "MaterialLibraryItem",
+        entityId: material.id,
+        action: "MATERIAL_DELETED",
+        actor: "merchant",
+      },
+    });
+
+    return Response.json({ ok: true, message: "Material deleted." });
   }
 
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
@@ -175,11 +225,15 @@ export default function MaterialsPage() {
   const { formatMoney, getCurrencySymbol } = useAppLocalization();
   const materialDialogRef = useRef<HTMLDialogElement>(null);
   const deactivateDialogRef = useRef<HTMLDialogElement>(null);
+  const deleteDialogRef = useRef<HTMLDialogElement>(null);
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [deactivateTarget, setDeactivateTarget] = useState<Material | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Material | null>(null);
+  const [deleteSubmitPending, setDeleteSubmitPending] = useState(false);
   const [materialDialogOpen, setMaterialDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   useEffect(() => {
     const dialog = materialDialogRef.current;
@@ -202,6 +256,25 @@ export default function MaterialsPage() {
       dialog.close();
     }
   }, [deactivateDialogOpen]);
+
+  useEffect(() => {
+    const dialog = deleteDialogRef.current;
+    if (!dialog) return;
+
+    if (deleteDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!deleteDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [deleteDialogOpen]);
+
+  useEffect(() => {
+    if (deleteDialogOpen && deleteSubmitPending && fetcher.state === "idle" && fetcher.data?.ok) {
+      setDeleteSubmitPending(false);
+      setDeleteDialogOpen(false);
+      setDeleteTarget(null);
+    }
+  }, [deleteDialogOpen, deleteSubmitPending, fetcher.state, fetcher.data]);
 
   function openCreate() {
     setForm(EMPTY_FORM);
@@ -228,6 +301,12 @@ export default function MaterialsPage() {
     setDeactivateDialogOpen(true);
   }
 
+  function confirmDelete(material: Material) {
+    setDeleteSubmitPending(false);
+    setDeleteTarget(material);
+    setDeleteDialogOpen(true);
+  }
+
   function closeMaterialDialog() {
     setMaterialDialogOpen(false);
     setForm(EMPTY_FORM);
@@ -236,6 +315,12 @@ export default function MaterialsPage() {
   function closeDeactivateDialog() {
     setDeactivateDialogOpen(false);
     setDeactivateTarget(null);
+  }
+
+  function closeDeleteDialog() {
+    setDeleteSubmitPending(false);
+    setDeleteDialogOpen(false);
+    setDeleteTarget(null);
   }
 
   function updateForm<K extends keyof typeof EMPTY_FORM>(key: K, value: (typeof EMPTY_FORM)[K]) {
@@ -277,7 +362,7 @@ export default function MaterialsPage() {
       </div>
 
       <s-page>
-        {fetcher.data && !fetcher.data.ok && (
+        {fetcher.data && !fetcher.data.ok && !deleteDialogOpen && (
           <s-banner tone="critical">
             <s-text>{fetcher.data.message}</s-text>
           </s-banner>
@@ -357,6 +442,9 @@ export default function MaterialsPage() {
                             <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
                           </fetcher.Form>
                         )}
+                        <s-button tone="critical" variant="secondary" onClick={() => confirmDelete(material)}>
+                          Delete
+                        </s-button>
                       </div>
                     </s-table-cell>
                   </s-table-row>
@@ -616,6 +704,80 @@ export default function MaterialsPage() {
               }}
             >
               Deactivate
+            </s-button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={deleteDialogRef}
+        onClose={closeDeleteDialog}
+        style={{
+          border: "none",
+          borderRadius: "1rem",
+          padding: 0,
+          maxWidth: "32rem",
+          width: "calc(100% - 2rem)",
+        }}
+      >
+        <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <strong>Delete material</strong>
+              <s-text color="subdued">Delete this material permanently when it is no longer referenced by templates or variants.</s-text>
+            </div>
+            <button
+              type="button"
+              aria-label="Close dialog"
+              onClick={closeDeleteDialog}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "1.5rem",
+                lineHeight: 1,
+                cursor: "pointer",
+              }}
+            >
+              Ã—
+            </button>
+          </div>
+
+          {fetcher.data && !fetcher.data.ok && deleteDialogOpen ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
+
+          <s-text>
+            {deleteTarget
+              ? `Delete ${deleteTarget.name} permanently? This cannot be undone.`
+              : "Delete this material permanently? This cannot be undone."}
+          </s-text>
+
+          {deleteTarget && deleteTarget.templateCount + deleteTarget.variantCount > 0 ? (
+            <s-banner tone="warning">
+              <s-text>
+                This material is still used in {deleteTarget.templateCount} template(s) and {deleteTarget.variantCount} variant config(s), so deletion is blocked.
+              </s-text>
+            </s-banner>
+          ) : null}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+            <s-button variant="secondary" onClick={closeDeleteDialog}>Cancel</s-button>
+            <s-button
+              variant="primary"
+              tone="critical"
+              disabled={isSubmitting || (deleteTarget ? deleteTarget.templateCount + deleteTarget.variantCount > 0 : true)}
+              onClick={() => {
+                if (!deleteTarget) return;
+                const fd = new FormData();
+                fd.append("intent", "delete");
+                fd.append("id", deleteTarget.id);
+                setDeleteSubmitPending(true);
+                fetcher.submit(fd, { method: "post" });
+              }}
+            >
+              Delete
             </s-button>
           </div>
         </div>

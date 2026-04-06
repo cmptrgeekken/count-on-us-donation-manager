@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { z } from "zod";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
+
+const equipmentIdSchema = z.object({
+  id: z.string().trim().cuid("Equipment id is invalid."),
+});
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -102,7 +107,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "deactivate" || intent === "reactivate") {
-    const id = formData.get("id")?.toString() ?? "";
+    const parsed = equipmentIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
+    if (!parsed.success) {
+      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
+    }
+    const id = parsed.data.id;
     const status = intent === "deactivate" ? "inactive" : "active";
     await prisma.equipmentLibraryItem.update({ where: { id, shopId }, data: { status } });
     await prisma.auditLog.create({
@@ -118,6 +127,47 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ok: true,
       message: intent === "deactivate" ? "Equipment deactivated." : "Equipment reactivated.",
     });
+  }
+
+  if (intent === "delete") {
+    const parsed = equipmentIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
+    if (!parsed.success) {
+      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
+    }
+
+    const item = await prisma.equipmentLibraryItem.findFirst({
+      where: { id: parsed.data.id, shopId },
+      include: {
+        _count: { select: { templateLines: true, variantLines: true } },
+      },
+    });
+
+    if (!item) {
+      return Response.json({ ok: false, message: "Equipment not found." }, { status: 404 });
+    }
+
+    if (item._count.templateLines > 0 || item._count.variantLines > 0) {
+      return Response.json(
+        {
+          ok: false,
+          message: `This equipment is still used in ${item._count.templateLines} template(s) and ${item._count.variantLines} variant config(s). Remove those references before deleting it.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    await prisma.equipmentLibraryItem.delete({ where: { id: item.id, shopId } });
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "EquipmentLibraryItem",
+        entityId: item.id,
+        action: "EQUIPMENT_DELETED",
+        actor: "merchant",
+      },
+    });
+
+    return Response.json({ ok: true, message: "Equipment deleted." });
   }
 
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
@@ -148,11 +198,15 @@ export default function EquipmentPage() {
   const { formatMoney, getCurrencySymbol } = useAppLocalization();
   const equipmentDialogRef = useRef<HTMLDialogElement>(null);
   const deactivateDialogRef = useRef<HTMLDialogElement>(null);
+  const deleteDialogRef = useRef<HTMLDialogElement>(null);
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [deactivateTarget, setDeactivateTarget] = useState<EquipmentItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<EquipmentItem | null>(null);
+  const [deleteSubmitPending, setDeleteSubmitPending] = useState(false);
   const [equipmentDialogOpen, setEquipmentDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
 
   useEffect(() => {
     const dialog = equipmentDialogRef.current;
@@ -175,6 +229,25 @@ export default function EquipmentPage() {
       dialog.close();
     }
   }, [deactivateDialogOpen]);
+
+  useEffect(() => {
+    const dialog = deleteDialogRef.current;
+    if (!dialog) return;
+
+    if (deleteDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!deleteDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [deleteDialogOpen]);
+
+  useEffect(() => {
+    if (deleteDialogOpen && deleteSubmitPending && fetcher.state === "idle" && fetcher.data?.ok) {
+      setDeleteSubmitPending(false);
+      setDeleteDialogOpen(false);
+      setDeleteTarget(null);
+    }
+  }, [deleteDialogOpen, deleteSubmitPending, fetcher.state, fetcher.data]);
 
   function updateForm<K extends keyof typeof EMPTY_FORM>(key: K, value: (typeof EMPTY_FORM)[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -201,6 +274,12 @@ export default function EquipmentPage() {
     setDeactivateDialogOpen(true);
   }
 
+  function confirmDelete(item: EquipmentItem) {
+    setDeleteSubmitPending(false);
+    setDeleteTarget(item);
+    setDeleteDialogOpen(true);
+  }
+
   function closeEquipmentDialog() {
     setEquipmentDialogOpen(false);
     setForm(EMPTY_FORM);
@@ -209,6 +288,12 @@ export default function EquipmentPage() {
   function closeDeactivateDialog() {
     setDeactivateDialogOpen(false);
     setDeactivateTarget(null);
+  }
+
+  function closeDeleteDialog() {
+    setDeleteSubmitPending(false);
+    setDeleteDialogOpen(false);
+    setDeleteTarget(null);
   }
 
   const isSubmitting = fetcher.state !== "idle";
@@ -236,7 +321,7 @@ export default function EquipmentPage() {
       </div>
 
       <s-page>
-        {fetcher.data && !fetcher.data.ok && (
+        {fetcher.data && !fetcher.data.ok && !deleteDialogOpen && (
           <s-banner tone="critical">
             <s-text>{fetcher.data.message}</s-text>
           </s-banner>
@@ -307,6 +392,9 @@ export default function EquipmentPage() {
                             <s-button type="submit" variant="secondary" disabled={isSubmitting}>Reactivate</s-button>
                           </fetcher.Form>
                         )}
+                        <s-button tone="critical" variant="secondary" onClick={() => confirmDelete(item)}>
+                          Delete
+                        </s-button>
                       </div>
                     </s-table-cell>
                   </s-table-row>
@@ -502,6 +590,80 @@ export default function EquipmentPage() {
               }}
             >
               Deactivate
+            </s-button>
+          </div>
+        </div>
+      </dialog>
+
+      <dialog
+        ref={deleteDialogRef}
+        onClose={closeDeleteDialog}
+        style={{
+          border: "none",
+          borderRadius: "1rem",
+          padding: 0,
+          maxWidth: "32rem",
+          width: "calc(100% - 2rem)",
+        }}
+      >
+        <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+            <div style={{ display: "grid", gap: "0.25rem" }}>
+              <strong>Delete equipment</strong>
+              <s-text color="subdued">Delete this equipment permanently when it is no longer referenced by templates or variants.</s-text>
+            </div>
+            <button
+              type="button"
+              aria-label="Close dialog"
+              onClick={closeDeleteDialog}
+              style={{
+                border: "none",
+                background: "transparent",
+                fontSize: "1.5rem",
+                lineHeight: 1,
+                cursor: "pointer",
+              }}
+            >
+              Ã—
+            </button>
+          </div>
+
+          {fetcher.data && !fetcher.data.ok && deleteDialogOpen ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
+
+          <s-text>
+            {deleteTarget
+              ? `Delete ${deleteTarget.name} permanently? This cannot be undone.`
+              : "Delete this equipment permanently? This cannot be undone."}
+          </s-text>
+
+          {deleteTarget && deleteTarget.templateCount + deleteTarget.variantCount > 0 ? (
+            <s-banner tone="warning">
+              <s-text>
+                This equipment is still used in {deleteTarget.templateCount} template(s) and {deleteTarget.variantCount} variant config(s), so deletion is blocked.
+              </s-text>
+            </s-banner>
+          ) : null}
+
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+            <s-button variant="secondary" onClick={closeDeleteDialog}>Cancel</s-button>
+            <s-button
+              variant="primary"
+              tone="critical"
+              disabled={isSubmitting || (deleteTarget ? deleteTarget.templateCount + deleteTarget.variantCount > 0 : true)}
+              onClick={() => {
+                if (!deleteTarget) return;
+                const fd = new FormData();
+                fd.append("intent", "delete");
+                fd.append("id", deleteTarget.id);
+                setDeleteSubmitPending(true);
+                fetcher.submit(fd, { method: "post" });
+              }}
+            >
+              Delete
             </s-button>
           </div>
         </div>
