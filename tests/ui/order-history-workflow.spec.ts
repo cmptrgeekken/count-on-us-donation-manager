@@ -33,3 +33,26 @@ test("order history can filter and create a manual adjustment on the real routes
   const materialsTile = page.getByText("Materials", { exact: true }).locator("xpath=..");
   await expect(materialsTile.getByText("$5.00")).toBeVisible();
 });
+
+test("order history date filters narrow and clear the list", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/order-history-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(bootstrap.historyUrl);
+
+  await expect(page.getByText(bootstrap.webhookOrderNumber)).toBeVisible();
+  await expect(page.getByText(bootstrap.reconciliationOrderNumber)).toBeVisible();
+
+  await page.locator('input[name="startDate"]').fill("2026-04-05");
+  await page.getByRole("button", { name: "Apply dates" }).click();
+
+  await expect(page.getByText(bootstrap.webhookOrderNumber)).toBeVisible();
+  await expect(page.getByText(bootstrap.reconciliationOrderNumber)).toHaveCount(0);
+
+  await page.goto(bootstrap.historyUrl);
+
+  await expect(page.getByText(bootstrap.webhookOrderNumber)).toBeVisible();
+  await expect(page.getByText(bootstrap.reconciliationOrderNumber)).toBeVisible();
+});

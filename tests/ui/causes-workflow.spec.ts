@@ -38,3 +38,27 @@ test("causes can be created, deactivated, and reactivated on the real route", as
   await expect(page.locator("s-banner").getByText("Cause reactivated.")).toBeVisible();
   await expect(causeRow.getByText("Active")).toBeVisible();
 });
+
+test("causes show inline URL validation errors in the modal", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/causes-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(bootstrap.causesUrl);
+
+  await page.getByText("New cause", { exact: true }).nth(1).click();
+  const causeDialog = page.getByRole("dialog").filter({ hasText: "New cause" });
+  await expect(causeDialog).toBeVisible();
+
+  await causeDialog.locator("#cause-name").fill("Playwright Invalid Cause");
+  await causeDialog.locator("#cause-donationLink").fill("not-a-url");
+  await causeDialog.getByRole("button", { name: "Create" }).click();
+
+  await expect(causeDialog).toBeVisible();
+  await expect(causeDialog.locator("#cause-donationLink").locator("xpath=following-sibling::*[1]")).toHaveText(
+    "Donation link must be a valid URL.",
+  );
+  await expect(causeDialog.locator("#cause-name")).toHaveValue("Playwright Invalid Cause");
+  await expect(page.locator("s-table-row").filter({ has: page.getByText("Playwright Invalid Cause") })).toHaveCount(0);
+});

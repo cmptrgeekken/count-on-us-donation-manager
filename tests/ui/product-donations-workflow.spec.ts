@@ -30,3 +30,24 @@ test("product donations can add a second cause assignment and persist it", async
   await expect(page.locator("#percentage-1")).toHaveValue("40");
   await expect(page.getByText("Total allocation: 100.00%")).toBeVisible();
 });
+
+test("product donations reject assignment totals above 100 percent", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/product-donations-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto(bootstrap.productUrl);
+
+  await page.getByRole("button", { name: "Add cause" }).click();
+  await page.locator("#cause-1").selectOption({ label: bootstrap.secondCauseName });
+  await page.locator("#percentage-1").fill("50");
+  await page.getByRole("button", { name: "Save assignments" }).click();
+
+  await expect(page.locator("s-banner").getByText("Cause percentages must total 100% or less.")).toBeVisible();
+  await expect(page.getByText("Total allocation: 110.00%")).toBeVisible();
+
+  await page.reload();
+  await expect(page.locator("#cause-1")).toHaveCount(0);
+  await expect(page.getByText("Total allocation: 60.00%")).toBeVisible();
+});
