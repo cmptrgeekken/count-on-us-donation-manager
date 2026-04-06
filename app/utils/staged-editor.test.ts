@@ -43,6 +43,7 @@ describe("staged editor helpers", () => {
     const draft: TemplateDraft = {
       name: " Example ",
       description: " Test ",
+      defaultShippingTemplateId: "ship-1",
       materialLines: [
         {
           id: "line-1",
@@ -62,6 +63,7 @@ describe("staged editor helpers", () => {
     expect(normalizeTemplateDraft(draft)).toEqual({
       name: "Example",
       description: "Test",
+      defaultShippingTemplateId: "ship-1",
       materialLines: [
         {
           id: "line-1",
@@ -105,6 +107,7 @@ describe("staged editor helpers", () => {
     expect(applyTemplateSelectionToVariantDraft(draft, catalogEntry)).toEqual({
       ...draft,
       templateId: "template-1",
+      productionTemplateId: "template-1",
       templateMaterialLines: [
         {
           templateLineId: "mat-line-1",

@@ -43,3 +43,20 @@ test("template details default new yield-based material lines to 1", async ({ pa
 
   await expect(page.getByLabel("Yield (units produced per purchased unit)")).toHaveValue("1");
 });
+
+test("template details can set a default shipping template", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/template-details-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.templateUrl);
+
+  const saveButton = page.locator("ui-save-bar button", { hasText: "Save" });
+
+  await page.getByLabel("Default shipping template").selectOption({ label: "Playwright Shipping Template B" });
+  await saveButton.click();
+
+  await expect(page.getByText("Template saved.")).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("Default shipping template")).toHaveValue(bootstrap.shippingTemplateBId);
+});

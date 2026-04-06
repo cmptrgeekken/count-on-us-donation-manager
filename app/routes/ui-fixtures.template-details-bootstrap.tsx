@@ -72,10 +72,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.costTemplate.create({
+    data: {
+      shopId,
+      name: "Playwright Shipping Template A",
+      type: "shipping",
+      status: "active",
+    },
+  });
+
+  const shippingTemplateB = await prisma.costTemplate.create({
+    data: {
+      shopId,
+      name: "Playwright Shipping Template B",
+      type: "shipping",
+      status: "active",
+    },
+  });
+
   const template = await prisma.costTemplate.create({
     data: {
       shopId,
       name: "Playwright Template",
+      type: "production",
       description: "Original description",
       status: "active",
       materialLines: {
@@ -97,6 +116,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return Response.json({
     shopId,
     templateId: template.id,
+    shippingTemplateBId: shippingTemplateB.id,
     templateUrl: `${baseUrl}/app/templates/${template.id}?__playwrightShop=${encodeURIComponent(shopId)}`,
   });
 };

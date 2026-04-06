@@ -23,6 +23,7 @@ export type TemplateDraftEquipmentLine = {
 export type TemplateDraft = {
   name: string;
   description: string;
+  defaultShippingTemplateId?: string | null;
   materialLines: TemplateDraftMaterialLine[];
   equipmentLines: TemplateDraftEquipmentLine[];
 };
@@ -115,6 +116,7 @@ export function normalizeTemplateDraft(draft: TemplateDraft) {
   return {
     name: draft.name.trim(),
     description: draft.description.trim(),
+    defaultShippingTemplateId: draft.defaultShippingTemplateId ?? "",
     materialLines: draft.materialLines.map((line) => ({
       id: line.id,
       materialId: line.materialId,
