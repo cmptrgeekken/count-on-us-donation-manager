@@ -12,15 +12,15 @@ test("causes can be created, deactivated, and reactivated on the real route", as
   await page.getByText("New cause", { exact: true }).nth(1).click();
   const causeDialog = page.getByRole("dialog").filter({ hasText: "New cause" });
   await expect(causeDialog).toBeVisible();
-  await causeDialog.locator("#cause-name").fill("Playwright Cause UI");
-  await causeDialog.locator("#cause-legal-name").fill("Playwright Cause UI Foundation");
+  await causeDialog.locator("#cause-name").fill("Playwright Cause UI Fresh");
+  await causeDialog.locator("#cause-legal-name").fill("Playwright Cause UI Fresh Foundation");
   await causeDialog.locator("#cause-description").fill("Created by Playwright.");
   await causeDialog.locator("#cause-donationLink").fill("https://example.org/donate");
   await causeDialog.getByRole("button", { name: "Create" }).click();
 
   const causeRow = page
     .locator("s-table-row")
-    .filter({ has: page.getByText("Playwright Cause UI") });
+    .filter({ has: page.getByText("Playwright Cause UI Fresh", { exact: true }) });
 
   await expect(page.getByText("Cause created.")).toBeVisible();
   await expect(causeRow).toBeVisible();

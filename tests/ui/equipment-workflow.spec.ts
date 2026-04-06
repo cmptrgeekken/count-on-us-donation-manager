@@ -13,12 +13,14 @@ test("equipment can be created, deactivated, and reactivated on the real route",
   const equipmentDialog = page.getByRole("dialog").filter({ hasText: "New equipment" });
   await expect(equipmentDialog).toBeVisible();
 
-  await equipmentDialog.getByLabel("Name").fill("Playwright Equipment UI");
+  await equipmentDialog.getByLabel("Name").fill("Playwright Equipment UI Fresh");
   await equipmentDialog.getByLabel(/Hourly rate/).fill("45");
   await equipmentDialog.getByRole("button", { name: "Create" }).click();
 
   await expect(page.getByText("Equipment created.")).toBeVisible();
-  const equipmentRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Equipment UI") });
+  const equipmentRow = page
+    .locator("s-table-row")
+    .filter({ has: page.getByText("Playwright Equipment UI Fresh", { exact: true }) });
   await expect(equipmentRow).toBeVisible();
 
   await equipmentRow.getByRole("button", { name: "Deactivate" }).click();
