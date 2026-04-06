@@ -42,3 +42,36 @@ test("variant details default new yield-based material lines to 1", async ({ pag
 
   await expect(page.getByLabel("Yield per piece")).toHaveValue("1");
 });
+
+test("variant details persist production and shipping template assignments", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/variant-details-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.variantUrl);
+
+  await page.getByRole("button", { name: "Assign production template" }).click();
+  await page.getByLabel("Production template").selectOption({ label: "Playwright Production Template" });
+  await page.getByRole("button", { name: "Assign", exact: true }).click();
+
+  await expect(page.getByText("Inherited from production template")).toBeVisible();
+  await expect(page.locator("p").filter({ hasText: "Playwright Shipping Template" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Set override" }).click();
+  const shippingDialog = page.getByRole("dialog").filter({ hasText: "Assign shipping template override" });
+  await shippingDialog.getByLabel("Shipping template").selectOption({ label: "Playwright Shipping Override Template" });
+  await shippingDialog.getByRole("button", { name: "Set override", exact: true }).click();
+
+  const saveButton = page.locator("ui-save-bar button", { hasText: "Save" });
+  await saveButton.click();
+
+  await expect(page.getByText("Variant configuration saved.")).toBeVisible();
+  await expect(page.getByText("Explicit override")).toBeVisible();
+  await expect(page.locator("p").filter({ hasText: "Playwright Shipping Override Template" })).toBeVisible();
+
+  await page.reload();
+
+  await expect(page.locator("p").filter({ hasText: "Playwright Production Template" })).toBeVisible();
+  await expect(page.getByText("Explicit override")).toBeVisible();
+  await expect(page.locator("p").filter({ hasText: "Playwright Shipping Override Template" })).toBeVisible();
+});

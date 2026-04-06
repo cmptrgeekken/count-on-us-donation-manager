@@ -167,6 +167,16 @@ export function applyTemplateSelectionToVariantDraft(
   };
 }
 
+export function applyShippingTemplateSelectionToVariantDraft(
+  draft: VariantDraft,
+  template: TemplateCatalogEntry | null,
+): VariantDraft {
+  return {
+    ...draft,
+    shippingTemplateId: template?.id ?? null,
+  };
+}
+
 export function normalizeVariantDraft(draft: VariantDraft) {
   return {
     templateId: draft.templateId ?? "",
@@ -206,7 +216,9 @@ export function normalizeVariantDraft(draft: VariantDraft) {
 
 export function hasMeaningfulVariantDraft(draft: VariantDraft) {
   return Boolean(
-    draft.templateId ||
+    draft.productionTemplateId ||
+      draft.shippingTemplateId ||
+      draft.templateId ||
       draft.laborMinutes ||
       draft.laborRate ||
       draft.mistakeBuffer ||

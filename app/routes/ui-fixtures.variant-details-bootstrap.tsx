@@ -80,6 +80,49 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.costTemplateMaterialLine.deleteMany({
+    where: {
+      template: {
+        shopId,
+        name: {
+          in: [
+            "Playwright Production Template",
+            "Playwright Shipping Template",
+            "Playwright Shipping Override Template",
+          ],
+        },
+      },
+    },
+  });
+
+  await prisma.costTemplateEquipmentLine.deleteMany({
+    where: {
+      template: {
+        shopId,
+        name: {
+          in: [
+            "Playwright Production Template",
+            "Playwright Shipping Template",
+            "Playwright Shipping Override Template",
+          ],
+        },
+      },
+    },
+  });
+
+  await prisma.costTemplate.deleteMany({
+    where: {
+      shopId,
+      name: {
+        in: [
+          "Playwright Production Template",
+          "Playwright Shipping Template",
+          "Playwright Shipping Override Template",
+        ],
+      },
+    },
+  });
+
   await prisma.materialLibraryItem.create({
     data: {
       shopId,
@@ -90,6 +133,34 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       purchaseQty: "1.00",
       perUnitCost: "8.000000",
       totalUsesPerUnit: null,
+      status: "active",
+    },
+  });
+
+  const inheritedShippingTemplate = await prisma.costTemplate.create({
+    data: {
+      shopId,
+      name: "Playwright Shipping Template",
+      type: "shipping",
+      status: "active",
+    },
+  });
+
+  await prisma.costTemplate.create({
+    data: {
+      shopId,
+      name: "Playwright Shipping Override Template",
+      type: "shipping",
+      status: "active",
+    },
+  });
+
+  await prisma.costTemplate.create({
+    data: {
+      shopId,
+      name: "Playwright Production Template",
+      type: "production",
+      defaultShippingTemplateId: inheritedShippingTemplate.id,
       status: "active",
     },
   });

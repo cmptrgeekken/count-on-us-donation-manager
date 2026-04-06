@@ -26,6 +26,7 @@ import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import { resolveEffectiveTemplateSelection } from "../utils/effective-template-selection";
 import {
+  applyShippingTemplateSelectionToVariantDraft,
   applyTemplateSelectionToVariantDraft,
   cloneDraft,
   createClientId,
@@ -586,10 +587,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     const draft = parsedDraft.data;
-    const normalizedTemplateId = draft.templateId?.trim() ? draft.templateId : null;
-    const selectedTemplate = draft.templateId
+    const normalizedProductionTemplateId =
+      draft.productionTemplateId?.trim() || draft.templateId?.trim() || null;
+    const normalizedShippingTemplateId = draft.shippingTemplateId?.trim() || null;
+    const selectedTemplate = normalizedProductionTemplateId
       ? await prisma.costTemplate.findFirst({
-          where: { id: draft.templateId, shopId },
+          where: { id: normalizedProductionTemplateId, shopId },
           include: {
             materialLines: { select: { id: true, materialId: true } },
             equipmentLines: { select: { id: true, equipmentId: true } },
@@ -597,8 +600,27 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         })
       : null;
 
-    if (draft.templateId && !selectedTemplate) {
-      return Response.json({ ok: false, message: "Template not found." }, { status: 404 });
+    const selectedShippingTemplate = normalizedShippingTemplateId
+      ? await prisma.costTemplate.findFirst({
+          where: { id: normalizedShippingTemplateId, shopId },
+          select: { id: true, type: true },
+        })
+      : null;
+
+    if (normalizedProductionTemplateId && !selectedTemplate) {
+      return Response.json({ ok: false, message: "Production template not found." }, { status: 404 });
+    }
+
+    if (selectedTemplate && selectedTemplate.type === "shipping") {
+      return Response.json({ ok: false, message: "Production template must be a production template." }, { status: 400 });
+    }
+
+    if (normalizedShippingTemplateId && !selectedShippingTemplate) {
+      return Response.json({ ok: false, message: "Shipping template not found." }, { status: 404 });
+    }
+
+    if (selectedShippingTemplate && selectedShippingTemplate.type !== "shipping") {
+      return Response.json({ ok: false, message: "Shipping override must reference a shipping template." }, { status: 400 });
     }
 
     const materialMap = new Map((selectedTemplate?.materialLines ?? []).map((line) => [line.id, line.materialId]));
@@ -634,7 +656,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     const hasMeaningfulDraft = Boolean(
-      draft.templateId ||
+      normalizedProductionTemplateId ||
+        normalizedShippingTemplateId ||
         draft.laborMinutes ||
         draft.laborRate ||
         draft.mistakeBuffer ||
@@ -708,7 +731,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         await tx.variantCostConfig.updateMany({
           where: { id: configId, shopId },
           data: {
-            templateId: normalizedTemplateId,
+            templateId: normalizedProductionTemplateId,
+            productionTemplateId: normalizedProductionTemplateId,
+            shippingTemplateId: normalizedShippingTemplateId,
             laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
             laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
             mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
@@ -720,7 +745,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           data: {
             shopId,
             variantId,
-            templateId: normalizedTemplateId,
+            templateId: normalizedProductionTemplateId,
+            productionTemplateId: normalizedProductionTemplateId,
+            shippingTemplateId: normalizedShippingTemplateId,
             laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
             laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
             mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
@@ -787,7 +814,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const legacyOverrideIds = getLegacyOverrideIds(currentConfig?.template);
 
     await prisma.$transaction([
-      prisma.variantCostConfig.updateMany({ where: { id: config.id, shopId }, data: { templateId } }),
+      prisma.variantCostConfig.updateMany({
+        where: { id: config.id, shopId },
+        data: { templateId, productionTemplateId: templateId },
+      }),
       prisma.variantMaterialLine.deleteMany({
         where: {
           configId: config.id,
@@ -838,7 +868,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     if (config) {
       const legacyOverrideIds = getLegacyOverrideIds(config.template);
       await prisma.$transaction([
-        prisma.variantCostConfig.updateMany({ where: { id: config.id, shopId }, data: { templateId: null } }),
+        prisma.variantCostConfig.updateMany({
+          where: { id: config.id, shopId },
+          data: { templateId: null, productionTemplateId: null },
+        }),
         prisma.variantMaterialLine.deleteMany({
           where: {
             configId: config.id,
@@ -1261,7 +1294,18 @@ export default function VariantDetailPage() {
   const { formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
   const [assignTemplateOpen, setAssignTemplateOpen] = useState(false);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(config?.templateId ?? templates[0]?.id ?? "");
+  const [selectedTemplateId, setSelectedTemplateId] = useState(
+    config?.productionTemplateId ??
+      config?.templateId ??
+      templates.find((template: TemplateCatalogEntry) => template.type !== "shipping")?.id ??
+      "",
+  );
+  const [assignShippingTemplateOpen, setAssignShippingTemplateOpen] = useState(false);
+  const [selectedShippingTemplateId, setSelectedShippingTemplateId] = useState(
+    config?.shippingTemplateId ??
+      templates.find((template: TemplateCatalogEntry) => template.type === "shipping")?.id ??
+      "",
+  );
 
   const [addMaterialOpen, setAddMaterialOpen] = useState(false);
   const [selectedMaterialId, setSelectedMaterialId] = useState(availableMaterials[0]?.id ?? "");
@@ -1371,6 +1415,7 @@ export default function VariantDetailPage() {
   function discardChanges() {
     setDraft(cloneDraft(baseDraft));
     setAssignTemplateOpen(false);
+    setAssignShippingTemplateOpen(false);
     setMaterialOverrideTargetId(null);
     setEquipmentOverrideTargetId(null);
     setAddMaterialOpen(false);
@@ -1394,8 +1439,19 @@ export default function VariantDetailPage() {
     setAssignTemplateOpen(false);
   }
 
+  function applySelectedShippingTemplate() {
+    const nextTemplate =
+      shippingTemplates.find((template: TemplateCatalogEntry) => template.id === selectedShippingTemplateId) ?? null;
+    setDraft((current) => applyShippingTemplateSelectionToVariantDraft(current, nextTemplate));
+    setAssignShippingTemplateOpen(false);
+  }
+
   function removeSelectedTemplate() {
     setDraft((current) => applyTemplateSelectionToVariantDraft(current, null));
+  }
+
+  function removeSelectedShippingTemplate() {
+    setDraft((current) => applyShippingTemplateSelectionToVariantDraft(current, null));
   }
 
   function addAdditionalMaterialLine() {
@@ -1560,19 +1616,19 @@ export default function VariantDetailPage() {
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h2" variant="headingMd">Production Template</Text>
               <InlineStack gap="200">
-                {draft.templateId && (
+                {assignedProductionTemplate && (
                   <Button variant="plain" tone="critical" onClick={removeSelectedTemplate}>
                     Remove
                   </Button>
                 )}
                 <Button
                   onClick={() => {
-                    setSelectedTemplateId(draft.templateId ?? productionTemplates[0]?.id ?? "");
+                    setSelectedTemplateId(draft.productionTemplateId ?? draft.templateId ?? productionTemplates[0]?.id ?? "");
                     setAssignTemplateOpen(true);
                   }}
                   disabled={productionTemplates.length === 0}
                 >
-                  {draft.templateId ? "Change production template" : "Assign production template"}
+                  {assignedProductionTemplate ? "Change production template" : "Assign production template"}
                 </Button>
               </InlineStack>
             </InlineStack>
@@ -1591,22 +1647,40 @@ export default function VariantDetailPage() {
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h2" variant="headingMd">Shipping Template</Text>
-              <Badge tone={effectiveTemplateSelection.shippingSource === "explicit" ? "attention" : "info"}>
-                {effectiveTemplateSelection.shippingSource === "explicit"
-                  ? "Explicit override"
-                  : effectiveTemplateSelection.shippingSource === "production-default"
-                    ? "Inherited from production template"
-                    : "Unassigned"}
-              </Badge>
+              <InlineStack gap="200" blockAlign="center">
+                <Badge tone={effectiveTemplateSelection.shippingSource === "explicit" ? "attention" : "info"}>
+                  {effectiveTemplateSelection.shippingSource === "explicit"
+                    ? "Explicit override"
+                    : effectiveTemplateSelection.shippingSource === "production-default"
+                      ? "Inherited from production template"
+                      : "Unassigned"}
+                </Badge>
+                {draft.shippingTemplateId && (
+                  <Button variant="plain" tone="critical" onClick={removeSelectedShippingTemplate}>
+                    Remove override
+                  </Button>
+                )}
+                <Button
+                  onClick={() => {
+                    setSelectedShippingTemplateId(draft.shippingTemplateId ?? effectiveShippingTemplate?.id ?? shippingTemplates[0]?.id ?? "");
+                    setAssignShippingTemplateOpen(true);
+                  }}
+                  disabled={shippingTemplates.length === 0}
+                >
+                  {draft.shippingTemplateId ? "Change override" : "Set override"}
+                </Button>
+              </InlineStack>
             </InlineStack>
             <Divider />
             {effectiveShippingTemplate ? (
               <BlockStack gap="100">
                 <Text as="p" variant="bodyMd">{effectiveShippingTemplate.name}</Text>
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  {shippingTemplates.length > 0
-                    ? "Dedicated Shipping template assignment is planned for the next implementation tranche."
-                    : "No active shipping templates are available yet."}
+                  {effectiveTemplateSelection.shippingSource === "explicit"
+                    ? "This variant uses an explicit shipping override."
+                    : effectiveTemplateSelection.shippingSource === "production-default"
+                      ? "This shipping template is inherited from the assigned production template."
+                      : "No active shipping templates are available yet."}
                 </Text>
               </BlockStack>
             ) : (
@@ -1691,7 +1765,7 @@ export default function VariantDetailPage() {
           </BlockStack>
         </Card>
 
-        {draft.templateId && (
+        {assignedProductionTemplate && (
           <Card>
             <BlockStack gap="400">
               <BlockStack gap="100">
@@ -1787,7 +1861,7 @@ export default function VariantDetailPage() {
           </BlockStack>
         </Card>
 
-        {draft.templateId && (
+        {assignedProductionTemplate && (
           <Card>
             <BlockStack gap="400">
               <BlockStack gap="100">
@@ -1934,7 +2008,7 @@ export default function VariantDetailPage() {
         onClose={() => setAssignTemplateOpen(false)}
         title="Assign production template"
         primaryAction={{
-          content: draft.templateId ? "Apply" : "Assign",
+          content: assignedProductionTemplate ? "Apply" : "Assign",
           loading: isSaving,
           onAction: applySelectedTemplate,
         }}
@@ -1947,6 +2021,32 @@ export default function VariantDetailPage() {
             value={selectedTemplateId}
             onChange={setSelectedTemplateId}
           />
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={assignShippingTemplateOpen}
+        onClose={() => setAssignShippingTemplateOpen(false)}
+        title="Assign shipping template override"
+        primaryAction={{
+          content: draft.shippingTemplateId ? "Apply override" : "Set override",
+          loading: isSaving,
+          onAction: applySelectedShippingTemplate,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setAssignShippingTemplateOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="300">
+            <Text as="p" variant="bodyMd" tone="subdued">
+              Leave the Shipping template unassigned to inherit the default from the Production template when one exists.
+            </Text>
+            <Select
+              label="Shipping template"
+              options={shippingTemplates.map((template: { id: string; name: string }) => ({ label: template.name, value: template.id }))}
+              value={selectedShippingTemplateId}
+              onChange={setSelectedShippingTemplateId}
+            />
+          </BlockStack>
         </Modal.Section>
       </Modal>
 
