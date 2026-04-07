@@ -17,7 +17,7 @@ test("reporting dashboard shows track summaries and charges", async ({ page, req
 
   const allocationRow = page.locator("s-table-row").filter({ hasText: "Playwright Cause" });
   await expect(allocationRow).toBeVisible();
-  await expect(allocationRow.getByText("$54.00")).toBeVisible();
+  await expect(allocationRow).toContainText("$54.00");
 
   await expect(page.getByText("Donation pool (after charges)")).toBeVisible();
   const donationPoolSection = page.locator("s-section").filter({ hasText: "Track 1 — Donation pool" });
