@@ -12,6 +12,8 @@ const TENANT_SCOPED_MODELS = [
   "Cause", "ProductCauseAssignment",
   "OrderSnapshot", "OrderSnapshotLine",
   "LineCauseAllocation", "Adjustment",
+  "ReportingPeriod", "CauseAllocation", "Disbursement",
+  "TaxTrueUp", "ShopifyChargeTransaction",
   "BusinessExpense", "TaxOffsetCache",
 ];
 

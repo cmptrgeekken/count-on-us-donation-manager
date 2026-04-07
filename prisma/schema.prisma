@@ -288,6 +288,8 @@ model Cause {
 
   productAssignments ProductCauseAssignment[]
   lineAllocations    LineCauseAllocation[]
+  periodAllocations  CauseAllocation[]
+  disbursements      Disbursement[]
 
   @@index([shopId, status])
 }
@@ -314,12 +316,15 @@ model OrderSnapshot {
   shopifyOrderId String
   orderNumber    String?
   origin         String   @default("webhook")
+  periodId       String?
+  period         ReportingPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
   createdAt      DateTime @default(now())
 
   lines OrderSnapshotLine[]
 
   @@unique([shopId, shopifyOrderId])
   @@index([shopId])
+  @@index([shopId, periodId])
 }
 
 model OrderSnapshotLine {
@@ -410,6 +415,100 @@ model LineCauseAllocation {
   amount         Decimal           @db.Decimal(10, 4)
 
   @@index([shopId])
+}
+
+model ReportingPeriod {
+  id              String   @id @default(cuid())
+  shopId          String
+  status          String   @default("OPEN")
+  source          String   @default("manual")
+  startDate       DateTime
+  endDate         DateTime
+  shopifyPayoutId String?
+  closedAt        DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  snapshots        OrderSnapshot[]
+  causeAllocations CauseAllocation[]
+  disbursements    Disbursement[]
+  taxTrueUps        TaxTrueUp[]
+  shopifyCharges   ShopifyChargeTransaction[]
+
+  @@unique([shopId, shopifyPayoutId])
+  @@index([shopId, status])
+  @@index([shopId, startDate, endDate])
+}
+
+model CauseAllocation {
+  id            String          @id @default(cuid())
+  shopId        String
+  periodId      String
+  period        ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  causeId       String
+  cause         Cause           @relation(fields: [causeId], references: [id], onDelete: Restrict)
+  causeName     String
+  is501c3       Boolean
+  allocated     Decimal         @db.Decimal(10, 4)
+  disbursed     Decimal         @default(0) @db.Decimal(10, 2)
+  createdAt     DateTime        @default(now())
+
+  @@unique([periodId, causeId])
+  @@index([shopId])
+}
+
+model Disbursement {
+  id             String          @id @default(cuid())
+  shopId         String
+  periodId       String
+  period         ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  causeId        String
+  cause          Cause           @relation(fields: [causeId], references: [id], onDelete: Restrict)
+  amount         Decimal         @db.Decimal(10, 2)
+  paidAt         DateTime
+  paymentMethod  String
+  referenceId    String?
+  receiptFileKey String?
+  createdAt      DateTime        @default(now())
+
+  @@index([shopId])
+  @@index([periodId, causeId])
+}
+
+model TaxTrueUp {
+  id                  String          @id @default(cuid())
+  shopId              String
+  periodId            String
+  period              ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  estimatedTax        Decimal         @db.Decimal(10, 2)
+  actualTax           Decimal         @db.Decimal(10, 2)
+  delta               Decimal         @db.Decimal(10, 2)
+  redistributionNotes String?
+  filedAt             DateTime
+  createdAt           DateTime        @default(now())
+
+  @@index([shopId])
+  @@index([periodId])
+}
+
+model ShopifyChargeTransaction {
+  id                   String           @id @default(cuid())
+  shopId               String
+  shopifyTransactionId String
+  periodId             String?
+  period               ReportingPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  shopifyPayoutId      String?
+  transactionType      String?
+  description          String?
+  amount               Decimal          @db.Decimal(10, 2)
+  currency             String           @default("USD")
+  processedAt          DateTime?
+  createdAt            DateTime         @default(now())
+
+  @@unique([shopId, shopifyTransactionId])
+  @@index([shopId])
+  @@index([shopId, shopifyPayoutId])
+  @@index([periodId])
 }
 
 model Adjustment {

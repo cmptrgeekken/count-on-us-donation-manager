@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
     auditLog: { create: vi.fn() },
   },
   runReconciliation: vi.fn(),
+  createReportingPeriodFromPayout: vi.fn(),
   adminFactory: vi.fn(),
 }));
 
@@ -26,6 +27,10 @@ vi.mock("../services/adjustmentService.server", () => ({
 
 vi.mock("../services/reconciliationService.server", () => ({
   runReconciliation: mocks.runReconciliation,
+}));
+
+vi.mock("../services/reportingPeriodService.server", () => ({
+  createReportingPeriodFromPayout: mocks.createReportingPeriodFromPayout,
 }));
 
 vi.mock("../services/snapshotService.server", () => ({
@@ -114,6 +119,24 @@ describe("registerAllProcessors", () => {
           action: "RECONCILIATION_RUN_FAILED",
         }),
       }),
+    );
+  });
+
+  it("opens reporting periods from payout webhooks", async () => {
+    const boss = createBoss();
+    const payoutPayload = { id: 123, date: "2026-04-07" };
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("reporting.period.open");
+    expect(worker).toBeTruthy();
+
+    await worker!([{ data: { shopId: "shop-1", payload: payoutPayload } }]);
+
+    expect(mocks.createReportingPeriodFromPayout).toHaveBeenCalledWith(
+      "shop-1",
+      payoutPayload,
+      mocks.prisma,
     );
   });
 });
