@@ -462,15 +462,19 @@ export function Autocomplete({
   onSelect,
   textField,
   emptyState,
+  visibleOptionLimit = 6,
 }: {
   options: AutocompleteOption[];
   selected: string[];
   onSelect: (selected: string[]) => void;
   textField: ReactNode;
   emptyState?: ReactNode;
+  visibleOptionLimit?: number;
 }) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const visibleOptions = options.slice(0, visibleOptionLimit);
+  const hiddenOptionCount = Math.max(options.length - visibleOptions.length, 0);
 
   useEffect(() => {
     function handlePointerDown(event: MouseEvent) {
@@ -498,12 +502,10 @@ export function Autocomplete({
             top: "calc(100% + 0.35rem)",
             left: 0,
             right: 0,
-            zIndex: 20,
+            zIndex: 30,
             border: "1px solid var(--p-color-border, #d2d5d8)",
             borderRadius: "0.75rem",
             overflow: "hidden",
-            maxHeight: "14rem",
-            overflowY: "auto",
             background: "#fff",
             boxShadow: "0 12px 24px rgba(0, 0, 0, 0.12)",
           }}
@@ -511,26 +513,40 @@ export function Autocomplete({
           {options.length === 0 ? (
             <div style={{ padding: "0.75rem 1rem" }}>{emptyState ?? null}</div>
           ) : (
-            options.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => {
-                  onSelect([option.value]);
-                  setOpen(false);
-                }}
-                style={{
-                  width: "100%",
-                  textAlign: "left",
-                  border: 0,
-                  background: "#fff",
-                  padding: "0.75rem 1rem",
-                  cursor: "pointer",
-                }}
-              >
-                {option.label}
-              </button>
-            ))
+            <>
+              {visibleOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => {
+                    onSelect([option.value]);
+                    setOpen(false);
+                  }}
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    border: 0,
+                    background: "#fff",
+                    padding: "0.75rem 1rem",
+                    cursor: "pointer",
+                  }}
+                >
+                  {option.label}
+                </button>
+              ))}
+              {hiddenOptionCount > 0 && (
+                <div
+                  style={{
+                    padding: "0.65rem 1rem",
+                    borderTop: "1px solid var(--p-color-border, #d2d5d8)",
+                    color: "var(--p-color-text-subdued, #6d7175)",
+                    fontSize: "0.875rem",
+                  }}
+                >
+                  Keep typing to narrow {hiddenOptionCount} more result{hiddenOptionCount === 1 ? "" : "s"}.
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
