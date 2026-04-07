@@ -43,9 +43,11 @@ See [docs/adrs/](docs/adrs/) for ADRs covering immutable order snapshots (ADR-00
 Every `loader` and `action` must begin with:
 
 ```typescript
-const { session } = await authenticate.admin(request);
+const { session } = await authenticateAdminRequest(request);
 const shopId = session.shop;
 ```
+
+`authenticateAdminRequest` lives in `app/utils/admin-auth.server.ts` and supports the Playwright bypass for UI fixtures. Use it for all `/app/*` routes unless a route explicitly must bypass that behavior.
 
 Every database query must include `shopId` in its `where` clause. Never query by a user-supplied ID alone — this is the primary guard against cross-tenant data leakage in a multi-tenant app.
 
@@ -89,6 +91,8 @@ const total = materialCost.add(laborCost).add(equipmentCost);
 // Wrong — floating-point errors corrupt financial calculations
 const total = parseFloat(materialCost.toString()) + parseFloat(laborCost.toString());
 ```
+
+When reading monetary values from `FormData`, parse to `Prisma.Decimal` (or validate with Zod and then convert) before writing to the database.
 
 ### 4. Audit Logging
 
@@ -153,6 +157,7 @@ export function ErrorBoundary() {
 - All status feedback should use `s-banner` paired with a visually-hidden `aria-live="polite"` region so screen readers announce the result.
 - Page titles should use `ui-title-bar`.
 - Destructive or irreversible actions must be gated behind a confirmation dialog or clearly isolated destructive flow.
+- For modal-driven admin flows, prefer native `<dialog>` until `s-modal` interop is proven reliable in this repo.
 
 ### 9. Security
 

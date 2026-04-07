@@ -11,13 +11,15 @@ automatically_update_urls_on_dev = false
 [webhooks]
 api_version = "2026-04"
 
-[[webhooks.subscriptions]]
-topics = ["app/uninstalled", "products/update"]
-uri = "https://shopify.mnbecks.com/webhooks"
-
-[[webhooks.subscriptions]]
-topics = ["orders/create", "orders/updated", "refunds/create"]
-uri = "https://shopify.mnbecks.com/webhooks"
+  [[webhooks.subscriptions]]
+  topics = [
+  "products/update",
+  "orders/create",
+  "app/uninstalled",
+  "orders/updated",
+  "refunds/create"
+]
+  uri = "https://shopify.mnbecks.com/webhooks"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
@@ -26,5 +28,5 @@ scopes = "read_locales,read_metaobject_definitions,read_metaobjects,read_orders,
 [auth]
 redirect_urls = [
   "https://shopify.mnbecks.com/auth/callback",
-  "https://shopify.mnbecks.com/auth/shopify/callback",
+  "https://shopify.mnbecks.com/auth/shopify/callback"
 ]

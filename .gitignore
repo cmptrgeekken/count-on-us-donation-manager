@@ -12,6 +12,7 @@ node_modules
 database.sqlite
 
 .env
+.codex
 .env.*
 !.env.example
 !.env.*.example
