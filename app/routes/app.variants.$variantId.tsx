@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
 import {
+  Autocomplete,
   Badge,
   Banner,
   BlockStack,
@@ -617,6 +618,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const additionalMaterialIds = [...new Set(draft.materialLines.map((line) => line.materialId))];
     const additionalEquipmentIds = [...new Set(draft.equipmentLines.map((line) => line.equipmentId))];
 
+    if (additionalMaterialIds.length !== draft.materialLines.length) {
+      return Response.json({ ok: false, message: "Each additional material can only appear once on a variant." }, { status: 400 });
+    }
+
+    if (additionalEquipmentIds.length !== draft.equipmentLines.length) {
+      return Response.json({ ok: false, message: "Each additional equipment item can only appear once on a variant." }, { status: 400 });
+    }
+
     const [materialsFound, equipmentFound, existingConfig] = await Promise.all([
       prisma.materialLibraryItem.findMany({ where: { id: { in: additionalMaterialIds }, shopId }, select: { id: true } }),
       prisma.equipmentLibraryItem.findMany({ where: { id: { in: additionalEquipmentIds }, shopId }, select: { id: true } }),
@@ -1206,6 +1215,13 @@ type AvailableMaterial = {
   totalUsesPerUnit: string | null;
 };
 
+type AvailableEquipment = {
+  id: string;
+  name: string;
+  hourlyRate: string | null;
+  perUseCost: string | null;
+};
+
 function describeMaterialLine(line: {
   costingModel: string | null;
   quantity: string | null;
@@ -1279,7 +1295,8 @@ export default function VariantDetailPage() {
   );
 
   const [addMaterialOpen, setAddMaterialOpen] = useState(false);
-  const [selectedMaterialId, setSelectedMaterialId] = useState(availableMaterials[0]?.id ?? "");
+  const [selectedMaterialId, setSelectedMaterialId] = useState("");
+  const [materialSearchValue, setMaterialSearchValue] = useState("");
   const [matQty, setMatQty] = useState("1");
   const [matYield, setMatYield] = useState("1");
   const [matUses, setMatUses] = useState("");
@@ -1290,7 +1307,8 @@ export default function VariantDetailPage() {
   const [overrideMatUses, setOverrideMatUses] = useState("");
 
   const [addEquipmentOpen, setAddEquipmentOpen] = useState(false);
-  const [selectedEquipmentId, setSelectedEquipmentId] = useState(availableEquipment[0]?.id ?? "");
+  const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
+  const [equipmentSearchValue, setEquipmentSearchValue] = useState("");
   const [eqMinutes, setEqMinutes] = useState("");
   const [eqUses, setEqUses] = useState("");
 
@@ -1319,6 +1337,21 @@ export default function VariantDetailPage() {
   const shippingTemplateMaterialLines = effectiveShippingTemplate?.materialLines ?? [];
   const preview = previewFetcher.data?.preview;
   const selectedMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === selectedMaterialId);
+  const selectedEquipment = availableEquipment.find((equipment: AvailableEquipment) => equipment.id === selectedEquipmentId);
+  const unavailableMaterialIds = new Set(draft.materialLines.map((line: SerializedMaterialLine) => line.materialId));
+  const unavailableEquipmentIds = new Set(draft.equipmentLines.map((line: SerializedEquipmentLine) => line.equipmentId));
+  const filteredMaterialOptions = availableMaterials
+    .filter((material: AvailableMaterial) => !unavailableMaterialIds.has(material.id))
+    .filter((material: AvailableMaterial) =>
+      material.name.toLowerCase().includes(materialSearchValue.trim().toLowerCase()),
+    )
+    .map((material: AvailableMaterial) => ({ label: material.name, value: material.id }));
+  const filteredEquipmentOptions = availableEquipment
+    .filter((equipment: AvailableEquipment) => !unavailableEquipmentIds.has(equipment.id))
+    .filter((equipment: AvailableEquipment) =>
+      equipment.name.toLowerCase().includes(equipmentSearchValue.trim().toLowerCase()),
+    )
+    .map((equipment: AvailableEquipment) => ({ label: equipment.name, value: equipment.id }));
   const additionalProductionMaterialLines = draft.materialLines.filter(
     (line: SerializedMaterialLine) => line.materialType === "production",
   );
@@ -1351,14 +1384,16 @@ export default function VariantDetailPage() {
   }, [draft, revalidator, saveFetcher.data]);
 
   function resetAdditionalMaterialModal() {
-    setSelectedMaterialId(availableMaterials[0]?.id ?? "");
+    setSelectedMaterialId("");
+    setMaterialSearchValue("");
     setMatQty("1");
     setMatYield("1");
     setMatUses("");
   }
 
   function resetAdditionalEquipmentModal() {
-    setSelectedEquipmentId(availableEquipment[0]?.id ?? "");
+    setSelectedEquipmentId("");
+    setEquipmentSearchValue("");
     setEqMinutes("");
     setEqUses("");
   }
@@ -1459,15 +1494,14 @@ export default function VariantDetailPage() {
   }
 
   function addAdditionalEquipmentLine() {
-    const equipment = availableEquipment.find((item: { id: string }) => item.id === selectedEquipmentId);
-    if (!equipment) return;
+    if (!selectedEquipment) return;
 
     const nextLine: SerializedEquipmentLine = {
       id: createClientId("draft-equipment"),
-      equipmentId: equipment.id,
-      equipmentName: equipment.name,
-      hourlyRate: equipment.hourlyRate,
-      perUseCost: equipment.perUseCost,
+      equipmentId: selectedEquipment.id,
+      equipmentName: selectedEquipment.name,
+      hourlyRate: selectedEquipment.hourlyRate,
+      perUseCost: selectedEquipment.perUseCost,
       minutes: eqMinutes || null,
       uses: eqUses || null,
     };
@@ -1838,7 +1872,7 @@ export default function VariantDetailPage() {
                   Add variant-only materials that are not part of the assigned template.
                 </Text>
               </BlockStack>
-              <Button onClick={() => setAddMaterialOpen(true)} disabled={availableMaterials.length === 0}>
+              <Button onClick={() => setAddMaterialOpen(true)} disabled={availableMaterials.length === draft.materialLines.length}>
                 Add material
               </Button>
             </InlineStack>
@@ -1959,7 +1993,7 @@ export default function VariantDetailPage() {
                   Add variant-only equipment usage outside the assigned template.
                 </Text>
               </BlockStack>
-              <Button onClick={() => setAddEquipmentOpen(true)} disabled={availableEquipment.length === 0}>
+              <Button onClick={() => setAddEquipmentOpen(true)} disabled={availableEquipment.length === draft.equipmentLines.length}>
                 Add equipment
               </Button>
             </InlineStack>
@@ -2144,6 +2178,7 @@ export default function VariantDetailPage() {
         primaryAction={{
           content: "Add",
           loading: isSaving,
+          disabled: !selectedMaterialId,
           onAction: addAdditionalMaterialLine,
         }}
         secondaryActions={[{
@@ -2156,16 +2191,31 @@ export default function VariantDetailPage() {
       >
         <Modal.Section>
           <BlockStack gap="400">
-            <Select
-              label="Material"
-              options={availableMaterials.map((material: AvailableMaterial) => ({ label: material.name, value: material.id }))}
-              value={selectedMaterialId}
-              onChange={(value) => {
-                const nextMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === value);
-                setSelectedMaterialId(value);
+            <Autocomplete
+              options={filteredMaterialOptions}
+              selected={selectedMaterialId ? [selectedMaterialId] : []}
+              onSelect={(selected) => {
+                const nextId = selected[0] ?? "";
+                const nextMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === nextId);
+                setSelectedMaterialId(nextId);
+                setMaterialSearchValue(nextMaterial?.name ?? "");
                 setMatYield(nextMaterial?.costingModel === "yield" ? "1" : "");
                 setMatUses("");
               }}
+              textField={
+                <Autocomplete.TextField
+                  label="Material"
+                  value={materialSearchValue}
+                  onChange={setMaterialSearchValue}
+                  autoComplete="off"
+                  placeholder="Search materials"
+                />
+              }
+              emptyState={
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  No matching materials found.
+                </Text>
+              }
             />
             {selectedMaterial?.costingModel === "yield" && (
               <>
@@ -2263,6 +2313,7 @@ export default function VariantDetailPage() {
         primaryAction={{
           content: "Add",
           loading: isSaving,
+          disabled: !selectedEquipmentId,
           onAction: addAdditionalEquipmentLine,
         }}
         secondaryActions={[{
@@ -2275,11 +2326,29 @@ export default function VariantDetailPage() {
       >
         <Modal.Section>
           <BlockStack gap="400">
-            <Select
-              label="Equipment"
-              options={availableEquipment.map((equipment: { id: string; name: string }) => ({ label: equipment.name, value: equipment.id }))}
-              value={selectedEquipmentId}
-              onChange={setSelectedEquipmentId}
+            <Autocomplete
+              options={filteredEquipmentOptions}
+              selected={selectedEquipmentId ? [selectedEquipmentId] : []}
+              onSelect={(selected) => {
+                const nextId = selected[0] ?? "";
+                const nextEquipment = availableEquipment.find((equipment: AvailableEquipment) => equipment.id === nextId);
+                setSelectedEquipmentId(nextId);
+                setEquipmentSearchValue(nextEquipment?.name ?? "");
+              }}
+              textField={
+                <Autocomplete.TextField
+                  label="Equipment"
+                  value={equipmentSearchValue}
+                  onChange={setEquipmentSearchValue}
+                  autoComplete="off"
+                  placeholder="Search equipment"
+                />
+              }
+              emptyState={
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  No matching equipment found.
+                </Text>
+              }
             />
             <InlineStack gap="400" wrap={false}>
               <div style={{ flex: 1 }}>
