@@ -38,7 +38,10 @@ test("variant details default new yield-based material lines to 1", async ({ pag
   await page.goto(bootstrap.variantUrl);
 
   await page.getByRole("button", { name: "Add material" }).click();
-  await page.getByLabel("Material", { exact: true }).selectOption({ label: "Playwright Yield Material" });
+  const addDialog = page.getByRole("dialog").filter({ hasText: "Add material line" });
+  await expect(addDialog.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
+  await addDialog.getByPlaceholder("Search materials").click();
+  await addDialog.getByRole("button", { name: "Playwright Yield Material" }).click();
 
   await expect(page.getByLabel("Yield per piece")).toHaveValue("1");
 });
@@ -51,13 +54,42 @@ test("variant details groups additional shipping material lines separately", asy
   await page.goto(bootstrap.variantUrl);
 
   await page.getByRole("button", { name: "Add material" }).click();
-  await page.getByLabel("Material", { exact: true }).selectOption({ label: "ZZZ Playwright Shipping Material" });
-  await page.getByRole("button", { name: "Add", exact: true }).click();
+  let addDialog = page.getByRole("dialog").filter({ hasText: "Add material line" });
+  await addDialog.getByPlaceholder("Search materials").click();
+  await addDialog.getByRole("button", { name: "ZZZ Playwright Shipping Material" }).click();
+  await addDialog.getByRole("button", { name: "Add", exact: true }).click();
 
   await expect(page.getByRole("heading", { name: "Shipping materials" })).toBeVisible();
   await expect(
     page.getByRole("paragraph").filter({ hasText: "ZZZ Playwright Shipping Material" }),
   ).toBeVisible();
+
+  await page.getByRole("button", { name: "Add material" }).click();
+  addDialog = page.getByRole("dialog").filter({ hasText: "Add material line" });
+  await addDialog.getByPlaceholder("Search materials").fill("ZZZ Playwright Shipping Material");
+  await expect(addDialog.getByRole("button", { name: "ZZZ Playwright Shipping Material" })).toHaveCount(0);
+});
+
+test("variant details use searchable equipment add picker and suppress duplicates", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/variant-details-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.variantUrl);
+
+  await page.getByRole("button", { name: "Add equipment" }).click();
+  let addDialog = page.getByRole("dialog").filter({ hasText: "Add equipment line" });
+  await expect(addDialog.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
+  await addDialog.getByPlaceholder("Search equipment").click();
+  await addDialog.getByRole("button", { name: "Playwright Heat Press" }).click();
+  await addDialog.getByRole("button", { name: "Add", exact: true }).click();
+
+  await expect(page.getByRole("paragraph").filter({ hasText: "Playwright Heat Press" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Add equipment" }).click();
+  addDialog = page.getByRole("dialog").filter({ hasText: "Add equipment line" });
+  await addDialog.getByPlaceholder("Search equipment").fill("Playwright Heat Press");
+  await expect(addDialog.getByRole("button", { name: "Playwright Heat Press" })).toHaveCount(0);
 });
 
 test("variant details persist production and shipping template assignments", async ({ page, request }) => {

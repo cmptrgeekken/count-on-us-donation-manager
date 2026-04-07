@@ -132,6 +132,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.equipmentLibraryItem.deleteMany({
+    where: {
+      shopId,
+      name: "Playwright Heat Press",
+    },
+  });
+
   await prisma.materialLibraryItem.create({
     data: {
       shopId,
@@ -156,6 +163,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       purchaseQty: "1.00",
       perUnitCost: "3.000000",
       totalUsesPerUnit: null,
+      status: "active",
+    },
+  });
+
+  await prisma.equipmentLibraryItem.create({
+    data: {
+      shopId,
+      name: "Playwright Heat Press",
+      hourlyRate: "12.00",
+      perUseCost: "0.25",
       status: "active",
     },
   });
