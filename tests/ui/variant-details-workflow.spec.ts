@@ -39,8 +39,11 @@ test("variant details default new yield-based material lines to 1", async ({ pag
 
   await page.getByRole("button", { name: "Add material" }).click();
   const addDialog = page.getByRole("dialog").filter({ hasText: "Add material line" });
+  await expect(addDialog).toBeVisible();
   await expect(addDialog.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
-  await addDialog.getByPlaceholder("Search materials").click();
+  const searchInput = addDialog.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.click();
   await addDialog.getByRole("button", { name: "Playwright Yield Material" }).click();
 
   await expect(page.getByLabel("Yield per piece")).toHaveValue("1");
@@ -55,7 +58,10 @@ test("variant details groups additional shipping material lines separately", asy
 
   await page.getByRole("button", { name: "Add material" }).click();
   let addDialog = page.getByRole("dialog").filter({ hasText: "Add material line" });
-  await addDialog.getByPlaceholder("Search materials").click();
+  await expect(addDialog).toBeVisible();
+  let searchInput = addDialog.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.click();
   await addDialog.getByRole("button", { name: "ZZZ Playwright Shipping Material" }).click();
   await addDialog.getByRole("button", { name: "Add", exact: true }).click();
 
@@ -66,7 +72,10 @@ test("variant details groups additional shipping material lines separately", asy
 
   await page.getByRole("button", { name: "Add material" }).click();
   addDialog = page.getByRole("dialog").filter({ hasText: "Add material line" });
-  await addDialog.getByPlaceholder("Search materials").fill("ZZZ Playwright Shipping Material");
+  await expect(addDialog).toBeVisible();
+  searchInput = addDialog.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.fill("ZZZ Playwright Shipping Material");
   await expect(addDialog.getByRole("button", { name: "ZZZ Playwright Shipping Material" })).toHaveCount(0);
 });
 

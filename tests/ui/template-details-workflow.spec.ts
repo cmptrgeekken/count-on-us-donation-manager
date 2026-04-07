@@ -38,8 +38,12 @@ test("template details default new yield-based material lines to 1", async ({ pa
   await page.goto(bootstrap.templateUrl);
 
   await page.getByRole("button", { name: "Add material" }).click();
-  await page.getByPlaceholder("Search materials").click();
-  await page.getByRole("button", { name: "Fixture Backer" }).click();
+  const addDialog = page.getByRole("dialog").filter({ hasText: "Add material" });
+  await expect(addDialog).toBeVisible();
+  const searchInput = addDialog.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.click();
+  await addDialog.getByRole("button", { name: "Fixture Backer" }).click();
 
   await expect(page.getByLabel("Yield (units produced per purchased unit)")).toHaveValue("1");
 });
@@ -78,14 +82,22 @@ test("template details only offer materials matching the template type", async (
 
   await page.goto(bootstrap.templateUrl);
   await page.getByRole("button", { name: "Add material" }).click();
-  await page.getByPlaceholder("Search materials").click();
-  await expect(page.getByRole("button", { name: "Fixture Backer" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Fixture Shipping Mailer" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Cancel" }).click();
+  let addDialog = page.getByRole("dialog").filter({ hasText: "Add material" });
+  await expect(addDialog).toBeVisible();
+  let searchInput = addDialog.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.click();
+  await expect(addDialog.getByRole("button", { name: "Fixture Backer" })).toBeVisible();
+  await expect(addDialog.getByRole("button", { name: "Fixture Shipping Mailer" })).toHaveCount(0);
+  await addDialog.getByRole("button", { name: "Cancel" }).click();
 
   await page.goto(bootstrap.shippingTemplateUrl);
   await page.getByRole("button", { name: "Add material" }).click();
-  await page.getByPlaceholder("Search materials").click();
-  await expect(page.getByRole("button", { name: "Fixture Shipping Mailer" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Fixture Backer" })).toHaveCount(0);
+  addDialog = page.getByRole("dialog").filter({ hasText: "Add material" });
+  await expect(addDialog).toBeVisible();
+  searchInput = addDialog.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.click();
+  await expect(addDialog.getByRole("button", { name: "Fixture Shipping Mailer" })).toBeVisible();
+  await expect(addDialog.getByRole("button", { name: "Fixture Backer" })).toHaveCount(0);
 });
