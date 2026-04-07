@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   },
   runReconciliation: vi.fn(),
   createReportingPeriodFromPayout: vi.fn(),
+  syncShopifyCharges: vi.fn(),
   adminFactory: vi.fn(),
 }));
 
@@ -18,6 +19,10 @@ vi.mock("../db.server", () => ({
 vi.mock("../services/catalogSync.server", () => ({
   fullSync: vi.fn(),
   incrementalSync: vi.fn(),
+}));
+
+vi.mock("../services/chargeSyncService.server", () => ({
+  syncShopifyCharges: mocks.syncShopifyCharges,
 }));
 
 vi.mock("../services/adjustmentService.server", () => ({
@@ -137,6 +142,59 @@ describe("registerAllProcessors", () => {
       "shop-1",
       payoutPayload,
       mocks.prisma,
+    );
+  });
+
+  it("fans daily Shopify charge sync out into singleton per-shop jobs", async () => {
+    const boss = createBoss();
+    mocks.prisma.shop.findMany.mockResolvedValue([{ shopId: "shop-1" }, { shopId: "shop-2" }]);
+
+    await registerAllProcessors(boss as any);
+
+    const dailyWorker = boss.workers.get("shopify-charges.daily");
+    expect(dailyWorker).toBeTruthy();
+
+    await dailyWorker!([]);
+
+    expect(boss.send).toHaveBeenNthCalledWith(
+      1,
+      "shopify-charges.shop",
+      { shopId: "shop-1" },
+      expect.objectContaining({
+        singletonKey: "shop-1",
+        singletonSeconds: 6 * 60 * 60,
+      }),
+    );
+    expect(boss.send).toHaveBeenNthCalledWith(
+      2,
+      "shopify-charges.shop",
+      { shopId: "shop-2" },
+      expect.objectContaining({
+        singletonKey: "shop-2",
+        singletonSeconds: 6 * 60 * 60,
+      }),
+    );
+  });
+
+  it("logs Shopify charge sync failures per shop and rethrows them", async () => {
+    const boss = createBoss();
+    const error = new Error("Payments API timeout");
+    mocks.adminFactory.mockResolvedValue({ admin: { graphql: vi.fn() } });
+    mocks.syncShopifyCharges.mockRejectedValue(error);
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("shopify-charges.shop");
+    expect(worker).toBeTruthy();
+
+    await expect(worker!([{ data: { shopId: "shop-1" } }])).rejects.toThrow("Payments API timeout");
+    expect(mocks.prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          shopId: "shop-1",
+          action: "SHOPIFY_CHARGES_SYNC_FAILED",
+        }),
+      }),
     );
   });
 });

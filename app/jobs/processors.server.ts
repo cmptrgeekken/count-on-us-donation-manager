@@ -1,5 +1,6 @@
 import type { PgBoss } from "pg-boss";
 import { prisma } from "../db.server";
+import { syncShopifyCharges } from "../services/chargeSyncService.server";
 import { fullSync, incrementalSync } from "../services/catalogSync.server";
 import { processOrderUpdate, processRefund } from "../services/adjustmentService.server";
 import { runReconciliation } from "../services/reconciliationService.server";
@@ -15,6 +16,8 @@ const QUEUES = [
   "orders.refund",
   "reconciliation.daily",
   "reconciliation.shop",
+  "shopify-charges.daily",
+  "shopify-charges.shop",
   "reporting.period.open",
   "shop.delete",
   "webhook.compliance",
@@ -114,6 +117,50 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       throw error;
     }
   });
+
+  await boss.work("shopify-charges.daily", async () => {
+    const shops = await prisma.shop.findMany({
+      select: { shopId: true },
+    });
+
+    for (const shop of shops) {
+      await boss.send(
+        "shopify-charges.shop",
+        { shopId: shop.shopId },
+        {
+          singletonKey: shop.shopId,
+          singletonSeconds: 6 * 60 * 60,
+        },
+      );
+    }
+  });
+
+  await boss.work<{ shopId: string; payoutId?: string; payoutDate?: string }>(
+    "shopify-charges.shop",
+    async (jobs) => {
+      const job = jobs[0];
+      if (!job) return;
+
+      const { shopId, payoutId, payoutDate } = job.data;
+      try {
+        const { admin } = await unauthenticated.admin(shopId);
+        await syncShopifyCharges({ shopId, admin, payoutId, payoutDate, db: prisma });
+      } catch (error) {
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "ShopifyChargeTransaction",
+            action: "SHOPIFY_CHARGES_SYNC_FAILED",
+            actor: "system",
+            payload: {
+              message: error instanceof Error ? error.message : "Unknown Shopify charges sync failure",
+            },
+          },
+        });
+        throw error;
+      }
+    },
+  );
 
   await boss.work<{ shopId: string; payload?: unknown }>(
     "reporting.period.open",
