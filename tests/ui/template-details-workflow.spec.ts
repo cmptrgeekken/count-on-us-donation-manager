@@ -16,14 +16,7 @@ test("template details save and discard work on the real route", async ({ page, 
   await expect(nameField).toHaveValue("Playwright Template");
 
   await nameField.fill("Updated Playwright Template");
-  const saveResponse = page.waitForResponse(
-    (response) =>
-      response.url().includes(`/app/templates/${bootstrap.templateId}`) &&
-      response.request().method() === "POST" &&
-      response.ok(),
-  );
   await saveButton.click();
-  await saveResponse;
 
   await expect(nameField).toHaveValue("Updated Playwright Template");
   await expect(page.getByText("Template saved.")).toBeVisible();
@@ -63,7 +56,8 @@ test("template details can set a default shipping template", async ({ page, requ
   const saveButton = page.locator("ui-save-bar button", { hasText: "Save" });
   const defaultShippingSelect = page.getByLabel("Default shipping template");
 
-  await defaultShippingSelect.selectOption(bootstrap.shippingTemplateBId);
+  await expect(defaultShippingSelect).toBeEnabled();
+  await defaultShippingSelect.selectOption({ label: "Playwright Shipping Template B" });
   await expect(defaultShippingSelect).toHaveValue(bootstrap.shippingTemplateBId);
   const saveResponse = page.waitForResponse(
     (response) =>

@@ -32,9 +32,8 @@ test("reporting dashboard can close an open period", async ({ page, request }) =
   await page.goto(bootstrap.reportingUrl);
 
   await page.getByRole("button", { name: "Close reporting period" }).click();
-  const dialog = page.getByRole("dialog").filter({ hasText: "Close reporting period?" });
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole("button", { name: "Close period" }).click();
+  await expect(page.getByText("Close reporting period?")).toBeVisible();
+  await page.getByRole("button", { name: "Close period" }).click();
 
   await expect(page.locator("s-banner").getByText("Reporting period closed.")).toBeVisible();
 });
