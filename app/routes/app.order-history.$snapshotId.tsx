@@ -264,7 +264,7 @@ export default function OrderSnapshotDetailPage() {
         <s-section heading="Snapshot metadata">
           <div style={{ display: "grid", gap: "1rem" }}>
             <Link to="/app/order-history">Back to Order History</Link>
-            <HelpText>Snapshot totals are immutable captures of the order's resolved financial picture. Effective values include any later adjustments recorded against the snapshot.</HelpText>
+            <HelpText>Snapshot totals are immutable captures of the order&apos;s resolved financial picture. Effective values include any later adjustments recorded against the snapshot.</HelpText>
 
             <div
               style={{
@@ -400,7 +400,7 @@ export default function OrderSnapshotDetailPage() {
                 <details>
                   <summary>Cause allocations ({line.causeAllocations.length})</summary>
                   <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
-                    <HelpText>These amounts are the line's net contribution split by the product-level Cause percentages active when the snapshot was created.</HelpText>
+                    <HelpText>These amounts are the line&apos;s net contribution split by the product-level Cause percentages active when the snapshot was created.</HelpText>
                     {line.causeAllocations.length === 0 ? (
                       <s-text color="subdued">No cause allocations for this line.</s-text>
                     ) : (

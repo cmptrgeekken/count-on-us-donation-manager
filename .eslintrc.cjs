@@ -43,16 +43,20 @@ module.exports = {
     },
   },
   rules: {
+    // These two are still tracked separately because enabling them currently
+    // requires broader type/service and React effect refactors.
     "@typescript-eslint/no-explicit-any": "off",
-    "@typescript-eslint/no-unused-vars": "off",
-    "jsx-a11y/label-has-associated-control": "off",
-    "jsx-a11y/html-has-lang": "off",
     "react-hooks/set-state-in-effect": "off",
-    "react/no-unescaped-entities": "off",
-    "import/no-named-as-default": "off",
-    "import/no-named-as-default-member": "off",
+    // eslint-plugin-jsx-a11y currently crashes on this rule with the installed
+    // dependency set; keep the rest of the a11y preset active.
+    "jsx-a11y/label-has-associated-control": "off",
+    "@typescript-eslint/no-unused-vars": "error",
+    "jsx-a11y/html-has-lang": "error",
+    "react/no-unescaped-entities": "error",
+    "import/no-named-as-default": "error",
+    "import/no-named-as-default-member": "error",
     "react/react-in-jsx-scope": "off",
     "react/prop-types": "off",
-    "import/no-unresolved": "off",
+    "import/no-unresolved": "error",
   },
 };

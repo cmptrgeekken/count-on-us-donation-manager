@@ -4,7 +4,7 @@ import { fullSync, incrementalSync } from "../services/catalogSync.server";
 import { processOrderUpdate, processRefund } from "../services/adjustmentService.server";
 import { runReconciliation } from "../services/reconciliationService.server";
 import { createSnapshot } from "../services/snapshotService.server";
-import shopify from "../shopify.server";
+import { unauthenticated } from "../shopify.server";
 
 const QUEUES = [
   "plan.detect.daily",
@@ -25,7 +25,7 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     await boss.createQueue(name);
   }
 
-  await boss.work("plan.detect.daily", async (_jobs) => {
+  await boss.work("plan.detect.daily", async () => {
     const shops = await prisma.shop.findMany({
       where: { planOverride: false },
       select: { shopId: true },
@@ -72,7 +72,7 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     },
   );
 
-  await boss.work("reconciliation.daily", async (_jobs) => {
+  await boss.work("reconciliation.daily", async () => {
     const shops = await prisma.shop.findMany({
       select: { shopId: true },
     });
@@ -95,7 +95,7 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
 
     const { shopId } = job.data;
     try {
-      const { admin } = await shopify.unauthenticated.admin(shopId);
+      const { admin } = await unauthenticated.admin(shopId);
       await runReconciliation(shopId, admin, prisma);
     } catch (error) {
       await prisma.auditLog.create({
@@ -146,7 +146,7 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     if (!job) return;
     const { shopId } = job.data;
 
-    const { admin } = await shopify.unauthenticated.admin(shopId);
+    const { admin } = await unauthenticated.admin(shopId);
     await fullSync(shopId, admin);
   });
 
@@ -157,7 +157,7 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       if (!job) return;
       const { shopId, productGid } = job.data;
 
-      const { admin } = await shopify.unauthenticated.admin(shopId);
+      const { admin } = await unauthenticated.admin(shopId);
       await incrementalSync(shopId, admin, productGid);
     },
   );

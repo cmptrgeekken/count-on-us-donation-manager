@@ -429,7 +429,6 @@ Modal.Section = ModalSection;
 export function EmptyState({
   heading,
   children,
-  fullWidth,
 }: {
   heading: string;
   image?: string;

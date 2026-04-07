@@ -337,7 +337,7 @@ export default function ProductDetailPage() {
             <s-text>
               Assign one or more active Causes to this product. Total allocation must be 100% or less.
             </s-text>
-            <HelpText>These percentages control how this product's future order-level net contribution is split across Causes when a snapshot is created.</HelpText>
+            <HelpText>These percentages control how this product&apos;s future order-level net contribution is split across Causes when a snapshot is created.</HelpText>
 
             {rows.length === 0 ? (
               <s-banner tone="warning">
@@ -363,7 +363,7 @@ export default function ProductDetailPage() {
                     >
                       <div style={{ display: "grid", gap: "0.35rem" }}>
                         <label htmlFor={`cause-${index}`}>Cause</label>
-                        <HelpText>The recipient that should receive a share of this product's future donation pool.</HelpText>
+                        <HelpText>The recipient that should receive a share of this product&apos;s future donation pool.</HelpText>
                         <select
                           id={`cause-${index}`}
                           value={row.causeId}
@@ -381,7 +381,7 @@ export default function ProductDetailPage() {
 
                       <div style={{ display: "grid", gap: "0.35rem" }}>
                         <label htmlFor={`percentage-${index}`}>Percentage</label>
-                        <HelpText>Percent of this product's net contribution allocated to the selected Cause.</HelpText>
+                        <HelpText>Percent of this product&apos;s net contribution allocated to the selected Cause.</HelpText>
                         <input
                           id={`percentage-${index}`}
                           type="number"

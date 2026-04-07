@@ -70,14 +70,6 @@ function parseOptionalWholeNumber(value: string | null | undefined, field: strin
   return parsed;
 }
 
-function parseRequiredNumber(value: string, field: string) {
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed < 0) {
-    throw new Response(`${field} must be a non-negative number.`, { status: 400 });
-  }
-  return parsed;
-}
-
 function parseRequiredWholeNumber(value: string, field: string) {
   const parsed = Number(value);
   if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
