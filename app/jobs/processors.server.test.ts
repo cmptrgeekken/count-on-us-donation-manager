@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
     auditLog: { create: vi.fn() },
   },
   runReconciliation: vi.fn(),
+  createReportingPeriodFromPayout: vi.fn(),
+  syncShopifyCharges: vi.fn(),
   adminFactory: vi.fn(),
 }));
 
@@ -19,6 +21,10 @@ vi.mock("../services/catalogSync.server", () => ({
   incrementalSync: vi.fn(),
 }));
 
+vi.mock("../services/chargeSyncService.server", () => ({
+  syncShopifyCharges: mocks.syncShopifyCharges,
+}));
+
 vi.mock("../services/adjustmentService.server", () => ({
   processOrderUpdate: vi.fn(),
   processRefund: vi.fn(),
@@ -26,6 +32,10 @@ vi.mock("../services/adjustmentService.server", () => ({
 
 vi.mock("../services/reconciliationService.server", () => ({
   runReconciliation: mocks.runReconciliation,
+}));
+
+vi.mock("../services/reportingPeriodService.server", () => ({
+  createReportingPeriodFromPayout: mocks.createReportingPeriodFromPayout,
 }));
 
 vi.mock("../services/snapshotService.server", () => ({
@@ -112,6 +122,77 @@ describe("registerAllProcessors", () => {
         data: expect.objectContaining({
           shopId: "shop-1",
           action: "RECONCILIATION_RUN_FAILED",
+        }),
+      }),
+    );
+  });
+
+  it("opens reporting periods from payout webhooks", async () => {
+    const boss = createBoss();
+    const payoutPayload = { id: 123, date: "2026-04-07" };
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("reporting.period.open");
+    expect(worker).toBeTruthy();
+
+    await worker!([{ data: { shopId: "shop-1", payload: payoutPayload } }]);
+
+    expect(mocks.createReportingPeriodFromPayout).toHaveBeenCalledWith(
+      "shop-1",
+      payoutPayload,
+      mocks.prisma,
+    );
+  });
+
+  it("fans daily Shopify charge sync out into singleton per-shop jobs", async () => {
+    const boss = createBoss();
+    mocks.prisma.shop.findMany.mockResolvedValue([{ shopId: "shop-1" }, { shopId: "shop-2" }]);
+
+    await registerAllProcessors(boss as any);
+
+    const dailyWorker = boss.workers.get("shopify-charges.daily");
+    expect(dailyWorker).toBeTruthy();
+
+    await dailyWorker!([]);
+
+    expect(boss.send).toHaveBeenNthCalledWith(
+      1,
+      "shopify-charges.shop",
+      { shopId: "shop-1" },
+      expect.objectContaining({
+        singletonKey: "shop-1",
+        singletonSeconds: 6 * 60 * 60,
+      }),
+    );
+    expect(boss.send).toHaveBeenNthCalledWith(
+      2,
+      "shopify-charges.shop",
+      { shopId: "shop-2" },
+      expect.objectContaining({
+        singletonKey: "shop-2",
+        singletonSeconds: 6 * 60 * 60,
+      }),
+    );
+  });
+
+  it("logs Shopify charge sync failures per shop and rethrows them", async () => {
+    const boss = createBoss();
+    const error = new Error("Payments API timeout");
+    mocks.adminFactory.mockResolvedValue({ admin: { graphql: vi.fn() } });
+    mocks.syncShopifyCharges.mockRejectedValue(error);
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("shopify-charges.shop");
+    expect(worker).toBeTruthy();
+
+    await expect(worker!([{ data: { shopId: "shop-1" } }])).rejects.toThrow("Payments API timeout");
+    expect(mocks.prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          shopId: "shop-1",
+          action: "SHOPIFY_CHARGES_SYNC_FAILED",
         }),
       }),
     );
