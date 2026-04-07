@@ -22,6 +22,11 @@ import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import {
+  parseOptionalNonNegativeNumber,
+  parseOptionalNonNegativeWholeNumber,
+  parseRequiredNonNegativeWholeNumber,
+} from "../utils/number-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import {
@@ -51,32 +56,6 @@ const templateDraftSchema = z.object({
     uses: z.string().nullable(),
   })),
 });
-
-function parseOptionalNumber(value: string | null | undefined, field: string) {
-  if (!value || !value.trim()) return null;
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed < 0) {
-    throw new Response(`${field} must be a non-negative number.`, { status: 400 });
-  }
-  return parsed;
-}
-
-function parseOptionalWholeNumber(value: string | null | undefined, field: string) {
-  if (!value || !value.trim()) return null;
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
-    throw new Response(`${field} must be a non-negative whole number.`, { status: 400 });
-  }
-  return parsed;
-}
-
-function parseRequiredWholeNumber(value: string, field: string) {
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
-    throw new Response(`${field} must be a non-negative whole number.`, { status: 400 });
-  }
-  return parsed;
-}
 
 function serializeTemplate(template: {
   id: string;
@@ -340,9 +319,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     for (const line of draft.materialLines) {
       const data = {
-        quantity: parseRequiredWholeNumber(line.quantity, "Material quantity"),
-        yield: parseOptionalWholeNumber(line.yield, "Material yield"),
-        usesPerVariant: parseOptionalWholeNumber(line.usesPerVariant, "Material uses per variant"),
+        quantity: parseRequiredNonNegativeWholeNumber(line.quantity, "Material quantity"),
+        yield: parseOptionalNonNegativeWholeNumber(line.yield, "Material yield"),
+        usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Material uses per variant"),
       };
 
       if (existingMaterialLines.has(line.id)) {
@@ -363,8 +342,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     for (const line of draft.equipmentLines) {
       const data = {
-        minutes: parseOptionalNumber(line.minutes, "Equipment minutes"),
-        uses: parseOptionalWholeNumber(line.uses, "Equipment uses"),
+        minutes: parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes"),
+        uses: parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses"),
       };
 
       if (existingEquipmentLines.has(line.id)) {

@@ -22,6 +22,11 @@ import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
+import {
+  parseOptionalNonNegativeNumber,
+  parseOptionalNonNegativeWholeNumber,
+  parseOptionalPercent,
+} from "../utils/number-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import { resolveEffectiveTemplateSelection } from "../utils/effective-template-selection";
@@ -174,33 +179,6 @@ const variantDraftSchema = z.object({
     uses: z.string().nullable(),
   })),
 });
-
-function parseNullableNumber(value: string | null | undefined, field: string) {
-  if (!value || !value.trim()) return null;
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed < 0) {
-    throw new Response(`${field} must be a non-negative number.`, { status: 400 });
-  }
-  return parsed;
-}
-
-function parseNullableWholeNumber(value: string | null | undefined, field: string) {
-  if (!value || !value.trim()) return null;
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
-    throw new Response(`${field} must be a non-negative whole number.`, { status: 400 });
-  }
-  return parsed;
-}
-
-function parseOptionalPercent(value: string | null | undefined) {
-  if (!value || !value.trim()) return null;
-  const parsed = Number(value);
-  if (Number.isNaN(parsed) || parsed < 0 || parsed > 100) {
-    throw new Response("Mistake buffer must be between 0 and 100.", { status: 400 });
-  }
-  return parsed / 100;
-}
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -692,9 +670,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         shopId,
         templateLineId: line.templateLineId,
         materialId: line.materialId,
-        quantity: parseNullableWholeNumber(line.overrideQuantity, "Material quantity") ?? 0,
-        yield: parseNullableWholeNumber(line.overrideYield, "Material yield"),
-        usesPerVariant: parseNullableWholeNumber(line.overrideUsesPerVariant, "Material uses per variant"),
+        quantity: parseOptionalNonNegativeWholeNumber(line.overrideQuantity, "Material quantity") ?? 0,
+        yield: parseOptionalNonNegativeWholeNumber(line.overrideYield, "Material yield"),
+        usesPerVariant: parseOptionalNonNegativeWholeNumber(line.overrideUsesPerVariant, "Material uses per variant"),
       }));
 
     const equipmentOverrideLines = draft.templateEquipmentLines
@@ -703,23 +681,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         shopId,
         templateLineId: line.templateLineId,
         equipmentId: line.equipmentId,
-        minutes: parseNullableNumber(line.overrideMinutes, "Equipment minutes"),
-        uses: parseNullableWholeNumber(line.overrideUses, "Equipment uses"),
+        minutes: parseOptionalNonNegativeNumber(line.overrideMinutes, "Equipment minutes"),
+        uses: parseOptionalNonNegativeWholeNumber(line.overrideUses, "Equipment uses"),
       }));
 
     const additionalMaterialLines = draft.materialLines.map((line) => ({
       shopId,
       materialId: line.materialId,
-      quantity: parseNullableWholeNumber(line.quantity, "Material quantity") ?? 0,
-      yield: parseNullableWholeNumber(line.yield, "Material yield"),
-      usesPerVariant: parseNullableWholeNumber(line.usesPerVariant, "Material uses per variant"),
+      quantity: parseOptionalNonNegativeWholeNumber(line.quantity, "Material quantity") ?? 0,
+      yield: parseOptionalNonNegativeWholeNumber(line.yield, "Material yield"),
+      usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Material uses per variant"),
     }));
 
     const additionalEquipmentLines = draft.equipmentLines.map((line) => ({
       shopId,
       equipmentId: line.equipmentId,
-      minutes: parseNullableNumber(line.minutes, "Equipment minutes"),
-      uses: parseNullableWholeNumber(line.uses, "Equipment uses"),
+      minutes: parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes"),
+      uses: parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses"),
     }));
 
     await prisma.$transaction(async (tx) => {
@@ -731,9 +709,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           data: {
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
-            laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
-            laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
-            mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
+            laborMinutes: parseOptionalNonNegativeNumber(draft.laborMinutes, "Labor minutes"),
+            laborRate: parseOptionalNonNegativeNumber(draft.laborRate, "Labor rate"),
+            mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer, "Mistake buffer"),
             lineItemCount: draft.materialLines.length + draft.equipmentLines.length,
           },
         });
@@ -744,9 +722,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             variantId,
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
-            laborMinutes: parseNullableNumber(draft.laborMinutes, "Labor minutes"),
-            laborRate: parseNullableNumber(draft.laborRate, "Labor rate"),
-            mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer),
+            laborMinutes: parseOptionalNonNegativeNumber(draft.laborMinutes, "Labor minutes"),
+            laborRate: parseOptionalNonNegativeNumber(draft.laborRate, "Labor rate"),
+            mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer, "Mistake buffer"),
             lineItemCount: draft.materialLines.length + draft.equipmentLines.length,
           },
         });
