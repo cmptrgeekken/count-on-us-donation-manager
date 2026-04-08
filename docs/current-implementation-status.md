@@ -6,7 +6,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 **Project:** Count On Us  
 **Date:** April 8, 2026  
-**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now underway, with the reporting foundation, dashboard, charge sync groundwork, and disbursement logging merged. Current focus is the remaining reporting workflows, starting with tax true-up.
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, and receipt storage merged. Current focus is finishing the remaining reporting workflows, starting with tax true-up and export support.
 
 ---
 
@@ -14,7 +14,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Phase 4 reporting completion, beginning with tax true-up
+- **Current focus:** Phase 4 reporting completion, with tax true-up actively in progress
 - **Phase 3:** Complete
 
 ---
@@ -124,7 +124,8 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 - [x] Reporting dashboard
 - [x] Disbursements
   Includes receipt upload plus split disbursement tracking for allocated amount, extra contribution, and fees covered.
-- [ ] Tax true-up
+- [~] Tax true-up
+  Tax settings, period reserve calculation, and the true-up workflow are implemented on the active branch and awaiting review/merge.
 - [ ] Export flows
 - [ ] Audit log browsing UI
 

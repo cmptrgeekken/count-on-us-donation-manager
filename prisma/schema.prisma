@@ -43,6 +43,8 @@ model Shop {
   currency         String   @default("USD")
   mistakeBuffer    Decimal? @db.Decimal(5, 4)
   defaultLaborRate Decimal? @db.Decimal(10, 4)
+  effectiveTaxRate Decimal? @db.Decimal(5, 4)
+  taxDeductionMode String   @default("dont_deduct")
   wizardStep       Int      @default(0)
   catalogSynced    Boolean  @default(false)
   createdAt        DateTime @default(now())
@@ -290,6 +292,7 @@ model Cause {
   lineAllocations    LineCauseAllocation[]
   periodAllocations  CauseAllocation[]
   disbursements      Disbursement[]
+  trueUpRedistributions TaxTrueUpRedistribution[]
 
   @@index([shopId, status])
 }
@@ -432,7 +435,8 @@ model ReportingPeriod {
   snapshots        OrderSnapshot[]
   causeAllocations CauseAllocation[]
   disbursements    Disbursement[]
-  taxTrueUps        TaxTrueUp[]
+  taxTrueUps       TaxTrueUp[]
+  appliedTrueUps   TaxTrueUp[]      @relation("AppliedTaxTrueUps")
   shopifyCharges   ShopifyChargeTransaction[]
 
   @@unique([shopId, shopifyPayoutId])
@@ -483,6 +487,8 @@ model TaxTrueUp {
   shopId              String
   periodId            String
   period              ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  appliedPeriodId     String?
+  appliedPeriod       ReportingPeriod? @relation("AppliedTaxTrueUps", fields: [appliedPeriodId], references: [id], onDelete: SetNull)
   estimatedTax        Decimal         @db.Decimal(10, 2)
   actualTax           Decimal         @db.Decimal(10, 2)
   delta               Decimal         @db.Decimal(10, 2)
@@ -490,8 +496,26 @@ model TaxTrueUp {
   filedAt             DateTime
   createdAt           DateTime        @default(now())
 
+  redistributions TaxTrueUpRedistribution[]
+
   @@index([shopId])
   @@index([periodId])
+  @@index([appliedPeriodId])
+}
+
+model TaxTrueUpRedistribution {
+  id          String    @id @default(cuid())
+  shopId      String
+  trueUpId    String
+  trueUp      TaxTrueUp @relation(fields: [trueUpId], references: [id], onDelete: Cascade)
+  causeId     String
+  cause       Cause     @relation(fields: [causeId], references: [id], onDelete: Restrict)
+  causeName   String
+  amount      Decimal   @db.Decimal(10, 2)
+  createdAt   DateTime  @default(now())
+
+  @@index([shopId])
+  @@index([trueUpId])
 }
 
 model ShopifyChargeTransaction {

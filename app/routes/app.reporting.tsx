@@ -13,7 +13,15 @@ import {
 } from "../services/disbursementService.server";
 import { closeReportingPeriod } from "../services/reportingPeriodService.server";
 import { createReceiptStorage } from "../services/receiptStorage.server";
+import {
+  calculateEstimatedTaxForPeriod,
+  recordTaxTrueUp,
+  TaxTrueUpError,
+  taxTrueUpErrorCodes,
+} from "../services/taxTrueUpService.server";
+import { normalizeTaxDeductionMode } from "../services/taxReserve.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { parseOptionalNonNegativeMoney } from "../utils/money-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const ZERO = new Prisma.Decimal(0);
@@ -21,6 +29,19 @@ const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
 
 function floorCurrency(value: string) {
   return new Prisma.Decimal(value).toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR).toString();
+}
+
+function formatTaxDeductionMode(mode: string | null | undefined) {
+  switch (mode) {
+    case "all_causes":
+      return "All causes";
+    case "non_501c3_only":
+      return "Non-501(c)3 causes only";
+    case "dont_deduct":
+      return "Don't deduct";
+    default:
+      return "Not configured";
+  }
 }
 
 type PeriodRow = {
@@ -63,28 +84,42 @@ type DisbursementRow = {
   receiptUrl: string | null;
 };
 
-type DisbursementFormState = {
-  periodId: string;
-  causeId: string;
-  allocatedAmount: string;
-  extraContributionAmount: string;
-  feesCoveredAmount: string;
-  paidAt: string;
-  paymentMethod: string;
-  referenceId: string;
-  receipt: string;
-};
-
 type ReportingActionData = {
   ok: boolean;
   message: string;
-  fieldErrors?: Partial<Record<keyof DisbursementFormState, string[]>>;
+  fieldErrors?: Partial<Record<string, string[]>>;
 };
 
 type DisbursementOption = {
   causeId: string;
   label: string;
   remaining: string;
+};
+
+type TaxTrueUpRow = {
+  id: string;
+  estimatedTax: string;
+  actualTax: string;
+  delta: string;
+  filedAt: string;
+  redistributionNotes: string | null;
+  appliedPeriodId: string | null;
+  redistributions: Array<{
+    causeId: string;
+    causeName: string;
+    amount: string;
+  }>;
+};
+
+type TaxTrueUpCarryForwardRow = {
+  id: string;
+  periodId: string;
+  delta: string;
+  redistributions: Array<{
+    causeId: string;
+    causeName: string;
+    amount: string;
+  }>;
 };
 
 const disbursementSchema = z.object({
@@ -110,6 +145,22 @@ const disbursementSchema = z.object({
   paymentMethod: z.string().trim().min(1, "Payment method is required."),
   referenceId: z.string().trim().optional(),
   receipt: z.string().trim().optional(),
+});
+
+const taxTrueUpSchema = z.object({
+  periodId: z.string().trim().cuid("Reporting period id is invalid."),
+  actualTax: z
+    .string()
+    .trim()
+    .min(1, "Actual tax is required.")
+    .refine((value) => !Number.isNaN(Number(value)) && Number(value) >= 0, "Actual tax must be 0 or greater."),
+  filedAt: z
+    .string()
+    .trim()
+    .min(1, "Filed date is required.")
+    .refine((value) => !Number.isNaN(Date.parse(value)), "Filed date must be a valid date."),
+  redistributionNotes: z.string().trim().optional(),
+  confirmShortfall: z.string().trim().optional(),
 });
 
 function addAllocation(
@@ -179,8 +230,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const selectedPeriod = periods.find((period) => period.id === requestedPeriodId) ?? periods[0];
 
-  const [snapshotLines, closedAllocations, expensesSummary, chargesSummary, charges, disbursements] =
+  const [shop, snapshotLines, closedAllocations, expensesSummary, chargesSummary, charges, disbursements, taxTrueUps, carryForwardTrueUps, activeCauses] =
     await Promise.all([
+      prisma.shop.findUnique({
+        where: { shopId },
+        select: {
+          effectiveTaxRate: true,
+          taxDeductionMode: true,
+        },
+      }),
       prisma.orderSnapshotLine.findMany({
         where: {
           shopId,
@@ -285,6 +343,58 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           },
         },
       }),
+      prisma.taxTrueUp.findMany({
+        where: {
+          shopId,
+          periodId: selectedPeriod.id,
+        },
+        orderBy: [{ filedAt: "desc" }, { createdAt: "desc" }],
+        select: {
+          id: true,
+          estimatedTax: true,
+          actualTax: true,
+          delta: true,
+          filedAt: true,
+          redistributionNotes: true,
+          appliedPeriodId: true,
+          redistributions: {
+            select: {
+              causeId: true,
+              causeName: true,
+              amount: true,
+            },
+          },
+        },
+      }),
+      prisma.taxTrueUp.findMany({
+        where: {
+          shopId,
+          appliedPeriodId: selectedPeriod.id,
+        },
+        select: {
+          id: true,
+          periodId: true,
+          delta: true,
+          redistributions: {
+            select: {
+              causeId: true,
+              causeName: true,
+              amount: true,
+            },
+          },
+        },
+      }),
+      prisma.cause.findMany({
+        where: {
+          shopId,
+          status: "active",
+        },
+        orderBy: { name: "asc" },
+        select: {
+          id: true,
+          name: true,
+        },
+      }),
     ]);
 
   const allocationMap = new Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>();
@@ -313,7 +423,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const expenseTotal = expensesSummary._sum.amount ?? ZERO;
   const shopifyCharges = chargesSummary._sum.amount ?? ZERO;
   const useClosedAllocations = selectedPeriod.status === "CLOSED" && closedAllocations.length > 0;
-  const allocationRows = useClosedAllocations
+  let allocationRows = useClosedAllocations
     ? closedAllocations.map((allocation) => ({
         causeId: allocation.causeId,
         causeName: allocation.causeName,
@@ -329,6 +439,37 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         disbursed: ZERO,
       }));
 
+  if (carryForwardTrueUps.length > 0) {
+    const allocationMapWithCarryForward = new Map(
+      allocationRows.map((allocation) => [
+        allocation.causeId,
+        {
+          ...allocation,
+        },
+      ]),
+    );
+
+    for (const trueUp of carryForwardTrueUps) {
+      for (const redistribution of trueUp.redistributions) {
+        const existing = allocationMapWithCarryForward.get(redistribution.causeId);
+        if (existing) {
+          existing.allocated = existing.allocated.add(redistribution.amount);
+          continue;
+        }
+
+        allocationMapWithCarryForward.set(redistribution.causeId, {
+          causeId: redistribution.causeId,
+          causeName: redistribution.causeName,
+          is501c3: false,
+          allocated: redistribution.amount,
+          disbursed: ZERO,
+        });
+      }
+    }
+
+    allocationRows = Array.from(allocationMapWithCarryForward.values());
+  }
+
   const allocation501c3Total = allocationRows.reduce(
     (sum, allocation) => (allocation.is501c3 ? sum.add(allocation.allocated) : sum),
     ZERO,
@@ -337,6 +478,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const deductionPool = expenseTotal.add(allocation501c3Total);
   const taxableExposure = totalNetContribution.sub(deductionPool);
   const widgetTaxSuppressed = taxableExposure.lessThanOrEqualTo(0);
+  const taxEstimate = await calculateEstimatedTaxForPeriod(shopId, selectedPeriod.id, prisma);
+  const carryForwardSurplus = carryForwardTrueUps.reduce(
+    (sum, trueUp) => (trueUp.delta.greaterThan(ZERO) ? sum.add(trueUp.delta) : sum),
+    ZERO,
+  );
+  const carryForwardShortfall = carryForwardTrueUps.reduce(
+    (sum, trueUp) => (trueUp.delta.lessThan(ZERO) ? sum.add(trueUp.delta.abs()) : sum),
+    ZERO,
+  );
   const receiptStorage = createReceiptStorage();
   const disbursementRows = await Promise.all(
     disbursements.map(async (disbursement) => ({
@@ -382,7 +532,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       track1: {
         totalNetContribution: totalNetContribution.toString(),
         shopifyCharges: shopifyCharges.toString(),
-        donationPool: totalNetContribution.sub(shopifyCharges).toString(),
+        donationPool: totalNetContribution.sub(shopifyCharges).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
+        taxTrueUpSurplusApplied: carryForwardSurplus.toString(),
+        taxTrueUpShortfallApplied: carryForwardShortfall.toString(),
         allocations: allocationRows.map((allocation) => ({
           causeId: allocation.causeId,
           causeName: allocation.causeName,
@@ -395,8 +547,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         deductionPool: deductionPool.toString(),
         taxableExposure: taxableExposure.toString(),
         widgetTaxSuppressed,
-        effectiveTaxRate: null,
-        taxDeductionMode: null,
+        taxableBase: taxEstimate.taxableBase.toString(),
+        taxableWeight: taxEstimate.taxableWeight.toString(),
+        estimatedTaxReserve: taxEstimate.estimatedTaxReserve.toString(),
+        effectiveTaxRate: shop?.effectiveTaxRate?.toString() ?? null,
+        taxDeductionMode: normalizeTaxDeductionMode(shop?.taxDeductionMode),
         businessExpenseTotal: expenseTotal.toString(),
         allocation501c3Total: allocation501c3Total.toString(),
       },
@@ -407,6 +562,34 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         processedAt: charge.processedAt?.toISOString() ?? null,
       })),
       disbursements: disbursementRows,
+      taxTrueUps: taxTrueUps.map<TaxTrueUpRow>((trueUp) => ({
+        id: trueUp.id,
+        estimatedTax: trueUp.estimatedTax.toString(),
+        actualTax: trueUp.actualTax.toString(),
+        delta: trueUp.delta.toString(),
+        filedAt: trueUp.filedAt.toISOString(),
+        redistributionNotes: trueUp.redistributionNotes ?? null,
+        appliedPeriodId: trueUp.appliedPeriodId ?? null,
+        redistributions: trueUp.redistributions.map((redistribution) => ({
+          causeId: redistribution.causeId,
+          causeName: redistribution.causeName,
+          amount: redistribution.amount.toString(),
+        })),
+      })),
+      carryForwardTrueUps: carryForwardTrueUps.map<TaxTrueUpCarryForwardRow>((trueUp) => ({
+        id: trueUp.id,
+        periodId: trueUp.periodId,
+        delta: trueUp.delta.toString(),
+        redistributions: trueUp.redistributions.map((redistribution) => ({
+          causeId: redistribution.causeId,
+          causeName: redistribution.causeName,
+          amount: redistribution.amount.toString(),
+        })),
+      })),
+      activeCauses: activeCauses.map((cause) => ({
+        id: cause.id,
+        name: cause.name,
+      })),
     },
   });
 };
@@ -527,6 +710,91 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "record-tax-true-up") {
+    const parsed = taxTrueUpSchema.safeParse({
+      periodId: formData.get("periodId")?.toString() ?? "",
+      actualTax: formData.get("actualTax")?.toString() ?? "",
+      filedAt: formData.get("filedAt")?.toString() ?? "",
+      redistributionNotes: formData.get("redistributionNotes")?.toString() ?? "",
+      confirmShortfall: formData.get("confirmShortfall")?.toString() ?? "",
+    });
+
+    if (!parsed.success) {
+      return Response.json(
+        {
+          ok: false,
+          message: parsed.error.issues[0]?.message ?? "Invalid tax true-up.",
+          fieldErrors: parsed.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+
+    let actualTax: Prisma.Decimal | null;
+    try {
+      actualTax = parseOptionalNonNegativeMoney(parsed.data.actualTax, "Actual tax");
+    } catch (error) {
+      if (error instanceof Response) {
+        const message = await error.text();
+        return Response.json(
+          {
+            ok: false,
+            message,
+            fieldErrors: { actualTax: [message] },
+          },
+          { status: error.status },
+        );
+      }
+      throw error;
+    }
+
+    const redistributions = Array.from(formData.entries())
+      .filter(([key]) => key.startsWith("redistribution:"))
+      .map(([key, value]) => ({
+        causeId: key.replace("redistribution:", ""),
+        amount: value.toString(),
+      }))
+      .filter((entry) => entry.amount.trim() !== "" && entry.amount.trim() !== "0");
+
+    try {
+      await recordTaxTrueUp(shopId, {
+        periodId: parsed.data.periodId,
+        actualTax: actualTax ?? ZERO,
+        filedAt: new Date(parsed.data.filedAt),
+        redistributionNotes: parsed.data.redistributionNotes ?? "",
+        confirmShortfall: parsed.data.confirmShortfall === "on",
+        redistributions,
+      });
+
+      return Response.json({ ok: true, message: "Tax true-up recorded." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to record tax true-up.";
+      const fieldErrors: ReportingActionData["fieldErrors"] =
+        error instanceof TaxTrueUpError
+          ? error.code === taxTrueUpErrorCodes.REDISTRIBUTION_MISMATCH || error.code === taxTrueUpErrorCodes.REDISTRIBUTION_REQUIRED
+            ? { redistributions: [message] }
+            : error.code === taxTrueUpErrorCodes.SHORTFALL_CONFIRMATION_REQUIRED
+              ? { confirmShortfall: [message] }
+              : error.code === taxTrueUpErrorCodes.PERIOD_NOT_CLOSED ||
+                  error.code === taxTrueUpErrorCodes.PERIOD_NOT_FOUND ||
+                  error.code === taxTrueUpErrorCodes.TRUE_UP_ALREADY_EXISTS
+                ? { periodId: [message] }
+                : error.code === taxTrueUpErrorCodes.OPEN_PERIOD_REQUIRED
+                  ? { periodId: [message] }
+                  : undefined
+          : undefined;
+
+      return Response.json(
+        {
+          ok: false,
+          message,
+          fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+  }
+
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
@@ -534,10 +802,12 @@ export default function ReportingPage() {
   const { periods, selectedPeriodId, summary } = useLoaderData<typeof loader>();
   const closeFetcher = useFetcher<ReportingActionData>();
   const disbursementFetcher = useFetcher<ReportingActionData>();
+  const trueUpFetcher = useFetcher<ReportingActionData>();
   const [searchParams] = useSearchParams();
   const { formatMoney, formatPct, locale } = useAppLocalization();
   const closeDialogRef = useRef<HTMLDialogElement>(null);
   const disbursementFormRef = useRef<HTMLFormElement>(null);
+  const trueUpFormRef = useRef<HTMLFormElement>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
 
   useEffect(() => {
@@ -556,10 +826,17 @@ export default function ReportingPage() {
     }
   }, [disbursementFetcher.data]);
 
+  useEffect(() => {
+    if (trueUpFetcher.data?.ok) {
+      trueUpFormRef.current?.reset();
+    }
+  }, [trueUpFetcher.data]);
+
   const selectedPeriod = summary?.period ?? null;
-  const statusMessage = closeFetcher.data?.message ?? disbursementFetcher.data?.message ?? "";
+  const statusMessage = closeFetcher.data?.message ?? disbursementFetcher.data?.message ?? trueUpFetcher.data?.message ?? "";
   const disbursementStatusMessage =
     disbursementFetcher.data && !disbursementFetcher.data.ok ? disbursementFetcher.data.message : "";
+  const trueUpStatusMessage = trueUpFetcher.data && !trueUpFetcher.data.ok ? trueUpFetcher.data.message : "";
 
   const periodOptions = useMemo(
     () =>
@@ -604,6 +881,7 @@ export default function ReportingPage() {
     new Prisma.Decimal(allocation.remaining).greaterThan(0),
   );
   const disbursements: DisbursementRow[] = summary?.disbursements ?? [];
+  const taxTrueUps: TaxTrueUpRow[] = summary?.taxTrueUps ?? [];
   const disbursementOptions = disbursementCauseOptions.map<DisbursementOption>((allocation) => ({
     causeId: allocation.causeId,
     label: `${allocation.causeName} (${formatMoney(allocation.remaining)} remaining)`,
@@ -654,6 +932,11 @@ export default function ReportingPage() {
     color: "var(--p-color-text-subdued, #6d7175)",
     minHeight: "2.6rem",
   };
+  const trueUpCauseOptions =
+    summary?.activeCauses?.map((cause: { id: string; name: string }) => ({
+      causeId: cause.id,
+      causeName: cause.name,
+    })) ?? [];
 
   useEffect(() => {
     setSelectedDisbursementCauseId(disbursementOptions[0]?.causeId ?? "");
@@ -710,6 +993,16 @@ export default function ReportingPage() {
         {disbursementFetcher.data?.ok && disbursementFetcher.data.message && (
           <s-banner tone="success">
             <s-text>{disbursementFetcher.data.message}</s-text>
+          </s-banner>
+        )}
+        {trueUpFetcher.data && !trueUpFetcher.data.ok && (
+          <s-banner tone="critical">
+            <s-text>{trueUpFetcher.data.message}</s-text>
+          </s-banner>
+        )}
+        {trueUpFetcher.data?.ok && trueUpFetcher.data.message && (
+          <s-banner tone="success">
+            <s-text>{trueUpFetcher.data.message}</s-text>
           </s-banner>
         )}
 
@@ -776,8 +1069,18 @@ export default function ReportingPage() {
                   <s-text color="subdued">{formatMoney(summary.track1.shopifyCharges)}</s-text>
                 </div>
                 <div>
-                  <strong>Donation pool (after charges)</strong>
+                  <strong>Donation pool (after carry-forward)</strong>
                   <s-text color="subdued">{formatMoney(summary.track1.donationPool)}</s-text>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+                <div>
+                  <strong>Surplus added from prior true-ups</strong>
+                  <s-text color="subdued">{formatMoney(summary.track1.taxTrueUpSurplusApplied)}</s-text>
+                </div>
+                <div>
+                  <strong>Shortfall deducted from prior true-ups</strong>
+                  <s-text color="subdued">{formatMoney(summary.track1.taxTrueUpShortfallApplied)}</s-text>
                 </div>
               </div>
             </div>
@@ -1057,6 +1360,175 @@ export default function ReportingPage() {
                   </s-table-body>
                 </s-table>
               </s-section>
+
+              <s-section heading="Tax true-up">
+                <div style={{ display: "grid", gap: "0.75rem" }}>
+                  <s-text color="subdued">
+                    Record the actual tax paid for this closed period. Any surplus or shortfall is applied to the current open period.
+                  </s-text>
+
+                  {taxTrueUps.length === 0 ? (
+                    <trueUpFetcher.Form
+                      ref={trueUpFormRef}
+                      method="post"
+                      style={{ display: "grid", gap: "0.9rem" }}
+                    >
+                      <input type="hidden" name="intent" value="record-tax-true-up" />
+                      <input type="hidden" name="periodId" value={selectedPeriod.id} />
+                      <div
+                        aria-live="polite"
+                        aria-atomic="true"
+                        style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
+                      >
+                        {trueUpStatusMessage}
+                      </div>
+
+                      {trueUpFetcher.data && !trueUpFetcher.data.ok ? (
+                        <s-banner tone="critical">
+                          <s-text>{trueUpFetcher.data.message}</s-text>
+                        </s-banner>
+                      ) : null}
+
+                      <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+                        <div>
+                          <strong>Estimated reserve</strong>
+                          <s-text color="subdued">{formatMoney(summary.track2.estimatedTaxReserve)}</s-text>
+                        </div>
+                        <div>
+                          <strong>Applied to active period</strong>
+                          <s-text color="subdued">
+                            {periods.some((period: PeriodRow) => period.status === "OPEN" && period.id !== selectedPeriod.id) ? "Yes" : "Only if exact match"}
+                          </s-text>
+                        </div>
+                      </div>
+
+                      <div style={disbursementTwoColumnGridStyle}>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="true-up-actual-tax">Actual tax paid</label>
+                          <input
+                            id="true-up-actual-tax"
+                            name="actualTax"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            style={disbursementFieldStyle}
+                          />
+                          {trueUpFetcher.data?.fieldErrors?.actualTax?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="true-up-filed-at">Filed date</label>
+                          <input
+                            id="true-up-filed-at"
+                            name="filedAt"
+                            type="date"
+                            defaultValue={new Date().toISOString().slice(0, 10)}
+                            style={disbursementFieldStyle}
+                          />
+                          {trueUpFetcher.data?.fieldErrors?.filedAt?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="true-up-notes">Redistribution notes</label>
+                        <textarea
+                          id="true-up-notes"
+                          name="redistributionNotes"
+                          rows={3}
+                          placeholder="Optional notes for how any surplus should be handled."
+                          style={{ ...disbursementFieldStyle, minHeight: "7rem", resize: "vertical" }}
+                        />
+                      </div>
+
+                      <div style={{ display: "grid", gap: "0.5rem" }}>
+                        <strong>Surplus redistribution</strong>
+                        <s-text color="subdued">
+                          If actual tax is lower than the estimate, enter how the surplus should be redistributed across causes. Leave blank otherwise.
+                        </s-text>
+                        {trueUpCauseOptions.map((cause: { causeId: string; causeName: string }) => (
+                          <div key={cause.causeId} style={disbursementTwoColumnGridStyle}>
+                            <div style={{ display: "grid", gap: "0.25rem" }}>
+                              <span>{cause.causeName}</span>
+                            </div>
+                            <div style={{ display: "grid", gap: "0.25rem" }}>
+                              <input
+                                name={`redistribution:${cause.causeId}`}
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                style={disbursementFieldStyle}
+                              />
+                            </div>
+                          </div>
+                        ))}
+                        {trueUpFetcher.data?.fieldErrors?.redistributions?.map((message) => (
+                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                        ))}
+                      </div>
+
+                      <label style={{ display: "flex", gap: "0.5rem", alignItems: "start" }}>
+                        <input type="checkbox" name="confirmShortfall" />
+                        <span>Confirm any shortfall should be deducted from the current open period&apos;s donation pool.</span>
+                      </label>
+                      {trueUpFetcher.data?.fieldErrors?.confirmShortfall?.map((message) => (
+                        <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                      ))}
+
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <button
+                          type="submit"
+                          disabled={trueUpFetcher.state !== "idle"}
+                          style={{
+                            ...disbursementSubmitStyle,
+                            cursor: trueUpFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                            opacity: trueUpFetcher.state !== "idle" ? 0.6 : 1,
+                          }}
+                        >
+                          Record tax true-up
+                        </button>
+                      </div>
+                    </trueUpFetcher.Form>
+                  ) : (
+                    <s-banner tone="success">
+                      <s-text>A tax true-up has already been recorded for this reporting period.</s-text>
+                    </s-banner>
+                  )}
+
+                  <s-table>
+                    <s-table-header-row>
+                      <s-table-header listSlot="secondary">Filed</s-table-header>
+                      <s-table-header listSlot="secondary">Estimated</s-table-header>
+                      <s-table-header listSlot="secondary">Actual</s-table-header>
+                      <s-table-header listSlot="secondary">Delta</s-table-header>
+                      <s-table-header listSlot="primary">Notes</s-table-header>
+                    </s-table-header-row>
+                    <s-table-body>
+                      {taxTrueUps.length === 0 ? (
+                        <s-table-row>
+                          <s-table-cell>No tax true-up recorded for this period.</s-table-cell>
+                          <s-table-cell></s-table-cell>
+                          <s-table-cell></s-table-cell>
+                          <s-table-cell></s-table-cell>
+                          <s-table-cell></s-table-cell>
+                        </s-table-row>
+                      ) : (
+                        taxTrueUps.map((trueUp) => (
+                          <s-table-row key={trueUp.id}>
+                            <s-table-cell>{formatDate(trueUp.filedAt, locale)}</s-table-cell>
+                            <s-table-cell>{formatMoney(trueUp.estimatedTax)}</s-table-cell>
+                            <s-table-cell>{formatMoney(trueUp.actualTax)}</s-table-cell>
+                            <s-table-cell>{formatMoney(trueUp.delta)}</s-table-cell>
+                            <s-table-cell>{trueUp.redistributionNotes ?? "—"}</s-table-cell>
+                          </s-table-row>
+                        ))
+                      )}
+                    </s-table-body>
+                  </s-table>
+                </div>
+              </s-section>
             </>
           ) : null}
 
@@ -1102,6 +1574,14 @@ export default function ReportingPage() {
                   <s-text color="subdued">{formatMoney(summary.track2.taxableExposure)}</s-text>
                 </div>
                 <div>
+                  <strong>Taxable base</strong>
+                  <s-text color="subdued">{formatMoney(summary.track2.taxableBase)}</s-text>
+                </div>
+                <div>
+                  <strong>Estimated tax reserve</strong>
+                  <s-text color="subdued">{formatMoney(summary.track2.estimatedTaxReserve)}</s-text>
+                </div>
+                <div>
                   <strong>Widget tax suppressed</strong>
                   <s-text color="subdued">{summary.track2.widgetTaxSuppressed ? "Yes" : "No"}</s-text>
                 </div>
@@ -1116,7 +1596,11 @@ export default function ReportingPage() {
                 </div>
                 <div>
                   <strong>Tax deduction mode</strong>
-                  <s-text color="subdued">{summary.track2.taxDeductionMode ?? "Not configured"}</s-text>
+                  <s-text color="subdued">{formatTaxDeductionMode(summary.track2.taxDeductionMode)}</s-text>
+                </div>
+                <div>
+                  <strong>Taxable weight</strong>
+                  <s-text color="subdued">{formatPct(summary.track2.taxableWeight)}</s-text>
                 </div>
               </div>
 

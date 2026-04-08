@@ -33,6 +33,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       currency: true,
       mistakeBuffer: true,
       defaultLaborRate: true,
+      effectiveTaxRate: true,
+      taxDeductionMode: true,
     },
   });
 
@@ -42,6 +44,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     planOverride: shop?.planOverride ?? false,
     mistakeBuffer: shop?.mistakeBuffer ? (Number(shop.mistakeBuffer) * 100).toFixed(2) : "",
     defaultLaborRate: shop?.defaultLaborRate ? Number(shop.defaultLaborRate).toFixed(2) : "",
+    effectiveTaxRate: shop?.effectiveTaxRate ? (Number(shop.effectiveTaxRate) * 100).toFixed(2) : "",
+    taxDeductionMode: shop?.taxDeductionMode ?? "dont_deduct",
   });
 };
 
@@ -117,7 +121,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: true, message: "Payment rate updated." });
   }
 
-  if (intent === "update-cost-defaults") {
+    if (intent === "update-cost-defaults") {
     let mistakeBuffer: Prisma.Decimal;
     let defaultLaborRate: Prisma.Decimal | null;
     try {
@@ -157,8 +161,63 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Cost defaults updated." });
-  }
+      return Response.json({ ok: true, message: "Cost defaults updated." });
+    }
+
+    if (intent === "update-tax-settings") {
+      let effectiveTaxRate: Prisma.Decimal | null;
+      const taxDeductionMode = formData.get("taxDeductionMode")?.toString() ?? "dont_deduct";
+
+      try {
+        effectiveTaxRate = parseOptionalNonNegativeMoney(
+          formData.get("effectiveTaxRate")?.toString(),
+          "Effective tax rate",
+        );
+      } catch (error) {
+        if (error instanceof Response) {
+          return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        }
+        throw error;
+      }
+
+      if (!["dont_deduct", "non_501c3_only", "all_causes"].includes(taxDeductionMode)) {
+        return Response.json({ ok: false, message: "Tax deduction mode is invalid." }, { status: 400 });
+      }
+
+      const normalizedRate =
+        effectiveTaxRate === null
+          ? null
+          : effectiveTaxRate
+              .div(new Prisma.Decimal(100))
+              .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+
+      if (effectiveTaxRate !== null && effectiveTaxRate.greaterThan(new Prisma.Decimal(100))) {
+        return Response.json({ ok: false, message: "Effective tax rate must be between 0 and 100." }, { status: 400 });
+      }
+
+      await prisma.shop.update({
+        where: { shopId },
+        data: {
+          effectiveTaxRate: normalizedRate,
+          taxDeductionMode,
+        },
+      });
+
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "Shop",
+          action: "TAX_SETTINGS_UPDATED",
+          actor: "merchant",
+          payload: {
+            effectiveTaxRate: normalizedRate?.toString() ?? null,
+            taxDeductionMode,
+          },
+        },
+      });
+
+      return Response.json({ ok: true, message: "Tax settings updated." });
+    }
 
   if (intent === "refresh-shop-currency") {
     const response = await admin.graphql(SHOP_CURRENCY_QUERY);
@@ -192,7 +251,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Settings() {
-  const { planTier, paymentRate, planOverride, mistakeBuffer, defaultLaborRate } = useLoaderData<typeof loader>();
+  const { planTier, paymentRate, planOverride, mistakeBuffer, defaultLaborRate, effectiveTaxRate, taxDeductionMode } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
   const { currency, locale, formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
@@ -200,6 +259,8 @@ export default function Settings() {
   const [rateInput, setRateInput] = useState(paymentRate ?? "");
   const [bufferInput, setBufferInput] = useState(mistakeBuffer ?? "");
   const [laborRateInput, setLaborRateInput] = useState(defaultLaborRate ?? "");
+  const [effectiveTaxRateInput, setEffectiveTaxRateInput] = useState(effectiveTaxRate ?? "");
+  const [taxDeductionModeInput, setTaxDeductionModeInput] = useState(taxDeductionMode ?? "dont_deduct");
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
@@ -274,7 +335,7 @@ export default function Settings() {
           </div>
         </s-section>
 
-        <s-section heading="Cost Defaults">
+          <s-section heading="Cost Defaults">
           <fetcher.Form method="post">
             <input type="hidden" name="intent" value="update-cost-defaults" />
             <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -309,7 +370,58 @@ export default function Settings() {
               </div>
             </div>
           </fetcher.Form>
-        </s-section>
+          </s-section>
+
+          <s-section heading="Tax Estimation">
+            <fetcher.Form method="post">
+              <input type="hidden" name="intent" value="update-tax-settings" />
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <s-text-field
+                  label="Effective tax rate (%)"
+                  name="effectiveTaxRate"
+                  value={effectiveTaxRateInput}
+                  onChange={(event) => setEffectiveTaxRateInput((event.currentTarget as HTMLInputElement).value)}
+                  onBlur={(event) => setEffectiveTaxRateInput(normalizeFixedDecimalInput((event.currentTarget as HTMLInputElement).value))}
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.01}
+                />
+                <s-text>
+                  Example: 25 = {formatPct(0.25)}. This is used for estimated reserve reporting only, not tax filing.
+                </s-text>
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="tax-deduction-mode">Tax deduction mode</label>
+                  <select
+                    id="tax-deduction-mode"
+                    name="taxDeductionMode"
+                    value={taxDeductionModeInput}
+                    onChange={(event) => setTaxDeductionModeInput(event.currentTarget.value)}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: "0.75rem",
+                      borderRadius: "0.75rem",
+                      border: "1px solid var(--p-color-border, #c9cccf)",
+                      background: "var(--p-color-bg-surface, #fff)",
+                      color: "var(--p-color-text, #303030)",
+                      font: "inherit",
+                    }}
+                  >
+                    <option value="dont_deduct">Don&apos;t deduct</option>
+                    <option value="non_501c3_only">Deduct from non-501(c)3 causes only</option>
+                    <option value="all_causes">Deduct from all causes</option>
+                  </select>
+                </div>
+                <s-text>
+                  Choose which causes should absorb the estimated tax reserve in reporting.
+                </s-text>
+                <div>
+                  <s-button type="submit" disabled={isSubmitting}>Save tax settings</s-button>
+                </div>
+              </div>
+            </fetcher.Form>
+          </s-section>
 
         <s-section heading="Localization">
           <div style={{ display: "grid", gap: "1rem" }}>

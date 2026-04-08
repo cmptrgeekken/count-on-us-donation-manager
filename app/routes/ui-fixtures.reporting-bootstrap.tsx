@@ -7,6 +7,9 @@ const shopifyDomain = "playwright-test-shop.myshopify.com";
 const snapshotOrderId = "gid://shopify/Order/900000000201";
 const snapshotLineItemId = "gid://shopify/LineItem/900000000201";
 const snapshotVariantId = "gid://shopify/ProductVariant/900000000201";
+const closedSnapshotOrderId = "gid://shopify/Order/900000000202";
+const closedSnapshotLineItemId = "gid://shopify/LineItem/900000000202";
+const closedSnapshotVariantId = "gid://shopify/ProductVariant/900000000202";
 const chargeTransactionId = "gid://shopify/BalanceTransaction/900000000201";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
@@ -15,8 +18,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   await prisma.shop.upsert({
     where: { shopId },
-    update: { shopifyDomain, currency: "USD" },
-    create: { shopId, shopifyDomain, currency: "USD" },
+    update: {
+      shopifyDomain,
+      currency: "USD",
+      effectiveTaxRate: new Prisma.Decimal("0.2500"),
+      taxDeductionMode: "all_causes",
+    },
+    create: {
+      shopId,
+      shopifyDomain,
+      currency: "USD",
+      effectiveTaxRate: new Prisma.Decimal("0.2500"),
+      taxDeductionMode: "all_causes",
+    },
   });
 
   await prisma.adjustment.deleteMany({ where: { shopId } });
@@ -38,6 +52,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       legalName: "Playwright Cause Org",
       is501c3: true,
       status: "active",
+    },
+  });
+
+  const closedPeriod = await prisma.reportingPeriod.create({
+    data: {
+      shopId,
+      status: "CLOSED",
+      source: "payout",
+      startDate: new Date("2026-02-01T00:00:00.000Z"),
+      endDate: new Date("2026-02-15T00:00:00.000Z"),
+      shopifyPayoutId: "payout_fixture_closed",
+      closedAt: new Date("2026-02-16T00:00:00.000Z"),
     },
   });
 
@@ -135,8 +161,52 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.causeAllocation.create({
+    data: {
+      shopId,
+      periodId: closedPeriod.id,
+      causeId: cause.id,
+      causeName: cause.name,
+      is501c3: true,
+      allocated: new Prisma.Decimal("40.00"),
+      disbursed: new Prisma.Decimal("0.00"),
+    },
+  });
+
+  const closedSnapshot = await prisma.orderSnapshot.create({
+    data: {
+      shopId,
+      shopifyOrderId: closedSnapshotOrderId,
+      orderNumber: "1000",
+      origin: "webhook",
+      createdAt: new Date("2026-02-05T12:00:00.000Z"),
+    },
+  });
+
+  await prisma.orderSnapshotLine.create({
+    data: {
+      shopId,
+      snapshotId: closedSnapshot.id,
+      shopifyLineItemId: closedSnapshotLineItemId,
+      shopifyVariantId: closedSnapshotVariantId,
+      variantTitle: "Closed Period Variant",
+      productTitle: "Closed Period Product",
+      quantity: 1,
+      salePrice: new Prisma.Decimal("50.00"),
+      subtotal: new Prisma.Decimal("50.00"),
+      laborCost: new Prisma.Decimal("3.00"),
+      materialCost: new Prisma.Decimal("4.00"),
+      packagingCost: new Prisma.Decimal("1.00"),
+      equipmentCost: new Prisma.Decimal("2.00"),
+      mistakeBufferAmount: new Prisma.Decimal("0.00"),
+      totalCost: new Prisma.Decimal("10.00"),
+      netContribution: new Prisma.Decimal("40.00"),
+    },
+  });
+
   return Response.json({
     shopId,
-    reportingUrl: `${baseUrl}/app/reporting?__playwrightShop=${encodeURIComponent(shopId)}`,
+    reportingUrl: `${baseUrl}/app/reporting?__playwrightShop=${encodeURIComponent(shopId)}&periodId=${encodeURIComponent(period.id)}`,
+    closedReportingUrl: `${baseUrl}/app/reporting?__playwrightShop=${encodeURIComponent(shopId)}&periodId=${encodeURIComponent(closedPeriod.id)}`,
   });
 };
