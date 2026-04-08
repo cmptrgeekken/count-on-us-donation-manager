@@ -1110,7 +1110,10 @@ Returns a signed URL to download the period export (CSV or PDF).
       "id": "dis_01J...",
       "causeId": "gid://shopify/Metaobject/789",
       "causeName": "Ocean Conservancy",
-      "amount": "500.00",
+      "amount": "517.00",
+      "allocatedAmount": "500.00",
+      "extraContributionAmount": "12.00",
+      "feesCoveredAmount": "5.00",
       "paidAt": "2026-03-20",
       "paymentMethod": "wire_transfer",
       "referenceId": "TXN-98765",
@@ -1133,7 +1136,9 @@ Returns a signed URL to download the period export (CSV or PDF).
 | Field | Type | Required |
 | --- | --- | --- |
 | `causeId` | string | Yes |
-| `amount` | string (NUMERIC) | Yes |
+| `allocatedAmount` | string (NUMERIC) | Yes |
+| `extraContributionAmount` | string (NUMERIC) | No |
+| `feesCoveredAmount` | string (NUMERIC) | No |
 | `paidAt` | string (date) | Yes |
 | `paymentMethod` | string | Yes |
 | `referenceId` | string | No |
@@ -1141,9 +1146,16 @@ Returns a signed URL to download the period export (CSV or PDF).
 
 **Validation:**
 - `causeId`: must be assigned to this period
-- `amount`: must be > 0 and ≤ remaining undisbursed amount for this cause
+- At least one of `allocatedAmount`, `extraContributionAmount`, or `feesCoveredAmount` must be > 0
+- `allocatedAmount`: must be >= 0 and ≤ remaining undisbursed amount for this cause
+- `extraContributionAmount`: must be >= 0 and does not reduce future cause allocations
+- `feesCoveredAmount`: must be >= 0 and does not reduce future cause allocations
 - `paymentMethod`: one of `check` | `wire_transfer` | `online_transfer` | `cash` | `other`
 - `receipt`: max 10MB, accepted types: `image/jpeg`, `image/png`, `application/pdf`
+- Disbursements are split into three tracked components:
+  - `allocatedAmount`, which is capped by the current remaining allocation and is the only component that reduces future allocations
+  - `extraContributionAmount`, which records extra giving beyond the current allocation without carrying into future periods
+  - `feesCoveredAmount`, which records optional fee/overhead coverage without reducing future allocations
 
 **Response `201`:** Full disbursement object with presigned receipt URL if receipt uploaded.
 

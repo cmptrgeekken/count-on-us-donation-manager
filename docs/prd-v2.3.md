@@ -770,11 +770,18 @@ Multiple partial disbursements per cause per period. Cumulative disbursed vs rem
 | **Field** | **Required** | **Notes** |
 | --- | --- | --- |
 | Cause | Yes | Selected from active causes |
-| Amount paid | Yes | Dollar amount |
+| Allocated amount | No | Counts against the current period's remaining allocation. Capped at the remaining balance. |
+| Extra contribution | No | Additional gift above the allocated amount. Does not reduce future allocations. |
+| Fees covered | No | Additional amount intended to help cover the cause's processing or operating costs. Does not reduce future allocations. |
 | Date of payment | Yes |  |
 | Payment method | Yes | e.g. check, wire transfer, online |
 | Reference / transaction ID | No | For audit |
 | Receipt upload | No | Image or PDF. PII warning shown at upload. Stored in S3, served via presigned URL (1hr expiry). Visible on /apps/donation-receipts storefront page. |
+
+Validation rules:
+- At least one of `Allocated amount`, `Extra contribution`, or `Fees covered` must be greater than zero.
+- Only `Allocated amount` affects `CauseAllocation.disbursed` and the period's remaining allocation.
+- `Extra contribution` and `Fees covered` are recorded for transparency and reporting but do not bleed into future period allocations.
 
 ## 9.4 Business Expenses
 

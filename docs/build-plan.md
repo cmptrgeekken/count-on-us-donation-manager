@@ -351,6 +351,10 @@ Complete `ReportingService` hourly job (stub started in Phase 3):
 - Multiple partial disbursements per cause per period
 - Receipt upload: S3 storage, presigned URLs (1hr expiry), PII warning at upload
 - Cumulative disbursed vs remaining tracked
+- Split disbursement entry into:
+  - `allocated amount` capped by current remaining allocation
+  - `extra contribution` that does not reduce future allocations
+  - `fees covered` that records optional overhead support without reducing future allocations
 
 ### 4.7 Tax true-up
 - Per-period form after tax filing

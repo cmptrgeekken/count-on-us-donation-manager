@@ -1,10 +1,15 @@
 import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Prisma } from "@prisma/client";
 
 import { prisma } from "../db.server";
 import { authenticate } from "../shopify.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
+import {
+  parseOptionalNonNegativeMoney,
+  parsePercentInputToRate,
+} from "../utils/money-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const SHOP_CURRENCY_QUERY = `#graphql
@@ -84,16 +89,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "update-rate") {
-    const rateStr = formData.get("paymentRate")?.toString() ?? "";
-    const rate = parseFloat(rateStr);
-
-    if (isNaN(rate) || rate < 0 || rate > 100) {
-      return Response.json({ ok: false, message: "Rate must be a number between 0 and 100." }, { status: 400 });
+    let paymentRate: Prisma.Decimal;
+    try {
+      paymentRate = parsePercentInputToRate(formData.get("paymentRate")?.toString(), "Rate");
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
     }
 
     await prisma.shop.update({
       where: { shopId },
-      data: { paymentRate: rate / 100 },
+      data: { paymentRate },
     });
 
     await prisma.auditLog.create({
@@ -102,7 +110,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         entity: "Shop",
         action: "PAYMENT_RATE_UPDATED",
         actor: "merchant",
-        payload: { paymentRate: rate / 100 },
+        payload: { paymentRate: paymentRate.toString() },
       },
     });
 
@@ -110,24 +118,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "update-cost-defaults") {
-    const rateStr = formData.get("mistakeBuffer")?.toString() ?? "";
-    const rate = parseFloat(rateStr);
-
-    const defaultLaborRateStr = formData.get("defaultLaborRate")?.toString().trim() ?? "";
-    const defaultLaborRate = defaultLaborRateStr ? parseFloat(defaultLaborRateStr) : null;
-
-    if (isNaN(rate) || rate < 0 || rate > 100) {
-      return Response.json({ ok: false, message: "Mistake buffer must be a number between 0 and 100." }, { status: 400 });
-    }
-
-    if (defaultLaborRate !== null && (isNaN(defaultLaborRate) || defaultLaborRate < 0)) {
-      return Response.json({ ok: false, message: "Labor rate must be 0 or greater." }, { status: 400 });
+    let mistakeBuffer: Prisma.Decimal;
+    let defaultLaborRate: Prisma.Decimal | null;
+    try {
+      mistakeBuffer = parsePercentInputToRate(
+        formData.get("mistakeBuffer")?.toString(),
+        "Mistake buffer",
+      );
+      defaultLaborRate = parseOptionalNonNegativeMoney(
+        formData.get("defaultLaborRate")?.toString(),
+        "Labor rate",
+      );
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
     }
 
     await prisma.shop.update({
       where: { shopId },
       data: {
-        mistakeBuffer: rate / 100,
+        mistakeBuffer,
         defaultLaborRate,
       },
     });
@@ -138,7 +150,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         entity: "Shop",
         action: "COST_DEFAULTS_UPDATED",
         actor: "merchant",
-        payload: { mistakeBuffer: rate / 100, defaultLaborRate },
+        payload: {
+          mistakeBuffer: mistakeBuffer.toString(),
+          defaultLaborRate: defaultLaborRate?.toString() ?? null,
+        },
       },
     });
 

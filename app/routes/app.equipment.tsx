@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
+import { parseOptionalNonNegativeMoney } from "../utils/money-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const equipmentIdSchema = z.object({
@@ -67,33 +69,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const notes = formData.get("notes")?.toString().trim() || null;
     const purchaseLink = parsed.data.purchaseLink.trim() || null;
 
-    const hourlyRate = hourlyRateStr ? parseFloat(hourlyRateStr) : null;
-    const perUseCost = perUseCostStr ? parseFloat(perUseCostStr) : null;
-    const equipmentCost = equipmentCostStr ? parseFloat(equipmentCostStr) : null;
+    let hourlyRate: Prisma.Decimal | null;
+    let perUseCost: Prisma.Decimal | null;
+    let equipmentCost: Prisma.Decimal | null;
+    try {
+      hourlyRate = parseOptionalNonNegativeMoney(hourlyRateStr, "Hourly rate");
+      perUseCost = parseOptionalNonNegativeMoney(perUseCostStr, "Per-use cost");
+      equipmentCost = parseOptionalNonNegativeMoney(equipmentCostStr, "Equipment cost");
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
+    }
 
-    if ((hourlyRate === null || isNaN(hourlyRate)) && (perUseCost === null || isNaN(perUseCost))) {
+    if (hourlyRate === null && perUseCost === null) {
       return Response.json(
         { ok: false, message: "At least one of hourly rate or per-use cost must be set." },
         { status: 400 },
       );
     }
-    if (hourlyRate !== null && hourlyRate < 0) {
-      return Response.json({ ok: false, message: "Hourly rate must be 0 or greater." }, { status: 400 });
-    }
-    if (perUseCost !== null && perUseCost < 0) {
-      return Response.json({ ok: false, message: "Per-use cost must be 0 or greater." }, { status: 400 });
-    }
-    if (equipmentCost !== null && (isNaN(equipmentCost) || equipmentCost < 0)) {
-      return Response.json({ ok: false, message: "Equipment cost must be 0 or greater." }, { status: 400 });
-    }
 
     const data = {
       shopId,
       name,
-      hourlyRate: hourlyRate !== null && !isNaN(hourlyRate) ? hourlyRate : null,
-      perUseCost: perUseCost !== null && !isNaN(perUseCost) ? perUseCost : null,
+      hourlyRate,
+      perUseCost,
       purchaseLink,
-      equipmentCost: equipmentCost !== null && !isNaN(equipmentCost) ? equipmentCost : null,
+      equipmentCost,
       notes,
     };
 
