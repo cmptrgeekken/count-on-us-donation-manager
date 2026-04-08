@@ -458,18 +458,21 @@ model CauseAllocation {
 }
 
 model Disbursement {
-  id             String          @id @default(cuid())
-  shopId         String
-  periodId       String
-  period         ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
-  causeId        String
-  cause          Cause           @relation(fields: [causeId], references: [id], onDelete: Restrict)
-  amount         Decimal         @db.Decimal(10, 2)
-  paidAt         DateTime
-  paymentMethod  String
-  referenceId    String?
-  receiptFileKey String?
-  createdAt      DateTime        @default(now())
+  id                      String          @id @default(cuid())
+  shopId                  String
+  periodId                String
+  period                  ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  causeId                 String
+  cause                   Cause           @relation(fields: [causeId], references: [id], onDelete: Restrict)
+  amount                  Decimal         @db.Decimal(10, 2)
+  allocatedAmount         Decimal         @default(0) @db.Decimal(10, 2)
+  extraContributionAmount Decimal         @default(0) @db.Decimal(10, 2)
+  feesCoveredAmount       Decimal         @default(0) @db.Decimal(10, 2)
+  paidAt                  DateTime
+  paymentMethod           String
+  referenceId             String?
+  receiptFileKey          String?
+  createdAt               DateTime        @default(now())
 
   @@index([shopId])
   @@index([periodId, causeId])

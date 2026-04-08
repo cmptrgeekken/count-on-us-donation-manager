@@ -47,7 +47,9 @@ describe("logDisbursement", () => {
       {
         periodId: "period-1",
         causeId: "cause-1",
-        amount: "40.00",
+        allocatedAmount: "40.00",
+        extraContributionAmount: "5.00",
+        feesCoveredAmount: "2.00",
         paidAt: new Date("2026-04-08T00:00:00.000Z"),
         paymentMethod: "ACH",
         referenceId: "payout-123",
@@ -72,7 +74,10 @@ describe("logDisbursement", () => {
           shopId: "shop-1",
           periodId: "period-1",
           causeId: "cause-1",
-          amount: decimal("40.00"),
+          amount: decimal("47.00"),
+          allocatedAmount: decimal("40.00"),
+          extraContributionAmount: decimal("5.00"),
+          feesCoveredAmount: decimal("2.00"),
           paymentMethod: "ACH",
           referenceId: "payout-123",
           receiptFileKey: expect.stringContaining("receipt.pdf"),
@@ -115,13 +120,13 @@ describe("logDisbursement", () => {
         {
           periodId: "period-1",
           causeId: "cause-1",
-          amount: "10.00",
+          allocatedAmount: "10.00",
           paidAt: new Date("2026-04-08T00:00:00.000Z"),
           paymentMethod: "ACH",
         },
         { db: db as any },
       ),
-    ).rejects.toThrow("cannot exceed the remaining allocation");
+    ).rejects.toThrow("Allocated amount cannot exceed the remaining allocation.");
   });
 
   it("cleans up uploaded receipts when the transaction fails", async () => {
@@ -140,7 +145,7 @@ describe("logDisbursement", () => {
         {
           periodId: "period-1",
           causeId: "cause-1",
-          amount: "10.00",
+          allocatedAmount: "10.00",
           paidAt: new Date("2026-04-08T00:00:00.000Z"),
           paymentMethod: "ACH",
           receipt: {
@@ -171,7 +176,7 @@ describe("logDisbursement", () => {
         {
           periodId: "period-1",
           causeId: "cause-1",
-          amount: "10.00",
+          allocatedAmount: "10.00",
           paidAt: new Date("2026-04-08T00:00:00.000Z"),
           paymentMethod: "ACH",
           receipt: {
@@ -185,5 +190,115 @@ describe("logDisbursement", () => {
     ).rejects.toThrow("Receipt must be a PDF, PNG, or JPEG file.");
 
     expect(storage.put).not.toHaveBeenCalled();
+  });
+
+  it("allows extra contribution and fees without affecting remaining allocation", async () => {
+    const tx = {
+      reportingPeriod: {
+        findFirst: vi.fn().mockResolvedValue({ id: "period-1", status: "CLOSED" }),
+      },
+      causeAllocation: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "allocation-1",
+          causeId: "cause-1",
+          causeName: "Cause One",
+          allocated: decimal("100.00"),
+          disbursed: decimal("95.00"),
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      disbursement: {
+        create: vi.fn().mockResolvedValue({ id: "disbursement-2" }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
+    };
+
+    const result = await logDisbursement(
+      "shop-1",
+      {
+        periodId: "period-1",
+        causeId: "cause-1",
+        allocatedAmount: "5.00",
+        extraContributionAmount: "25.00",
+        feesCoveredAmount: "3.00",
+        paidAt: new Date("2026-04-08T00:00:00.000Z"),
+        paymentMethod: "ACH",
+      },
+      { db: db as any },
+    );
+
+    expect(tx.causeAllocation.updateMany).toHaveBeenCalledWith({
+      where: { id: "allocation-1", shopId: "shop-1" },
+      data: {
+        disbursed: {
+          increment: decimal("5.00"),
+        },
+      },
+    });
+    expect(tx.disbursement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          amount: decimal("33.00"),
+          allocatedAmount: decimal("5.00"),
+          extraContributionAmount: decimal("25.00"),
+          feesCoveredAmount: decimal("3.00"),
+        }),
+      }),
+    );
+    expect(result.remaining.toString()).toBe("0");
+  });
+
+  it("allows allocated amounts up to the remaining balance floored to cents", async () => {
+    const tx = {
+      reportingPeriod: {
+        findFirst: vi.fn().mockResolvedValue({ id: "period-1", status: "CLOSED" }),
+      },
+      causeAllocation: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "allocation-1",
+          causeId: "cause-1",
+          causeName: "Cause One",
+          allocated: decimal("200.00"),
+          disbursed: decimal("76.043"),
+        }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      disbursement: {
+        create: vi.fn().mockResolvedValue({ id: "disbursement-3" }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
+    };
+
+    const result = await logDisbursement(
+      "shop-1",
+      {
+        periodId: "period-1",
+        causeId: "cause-1",
+        allocatedAmount: "123.95",
+        paidAt: new Date("2026-04-08T00:00:00.000Z"),
+        paymentMethod: "ACH",
+      },
+      { db: db as any },
+    );
+
+    expect(tx.causeAllocation.updateMany).toHaveBeenCalledWith({
+      where: { id: "allocation-1", shopId: "shop-1" },
+      data: {
+        disbursed: {
+          increment: decimal("123.95"),
+        },
+      },
+    });
+    expect(result.remaining.toString()).toBe("0");
   });
 });

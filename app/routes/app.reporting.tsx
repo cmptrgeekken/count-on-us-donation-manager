@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
@@ -16,6 +16,10 @@ import { useAppLocalization } from "../utils/use-app-localization";
 
 const ZERO = new Prisma.Decimal(0);
 const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
+
+function floorCurrency(value: string) {
+  return new Prisma.Decimal(value).toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR).toString();
+}
 
 type PeriodRow = {
   id: string;
@@ -48,6 +52,9 @@ type DisbursementRow = {
   causeId: string;
   causeName: string;
   amount: string;
+  allocatedAmount: string;
+  extraContributionAmount: string;
+  feesCoveredAmount: string;
   paidAt: string;
   paymentMethod: string;
   referenceId: string | null;
@@ -57,7 +64,9 @@ type DisbursementRow = {
 type DisbursementFormState = {
   periodId: string;
   causeId: string;
-  amount: string;
+  allocatedAmount: string;
+  extraContributionAmount: string;
+  feesCoveredAmount: string;
   paidAt: string;
   paymentMethod: string;
   referenceId: string;
@@ -70,13 +79,27 @@ type ReportingActionData = {
   fieldErrors?: Partial<Record<keyof DisbursementFormState, string[]>>;
 };
 
+type DisbursementOption = {
+  causeId: string;
+  label: string;
+  remaining: string;
+};
+
 const disbursementSchema = z.object({
   periodId: z.string().trim().cuid("Reporting period id is invalid."),
   causeId: z.string().trim().cuid("Cause id is invalid."),
-  amount: z
+  allocatedAmount: z
     .string()
     .trim()
-    .refine((value) => !Number.isNaN(Number(value)) && Number(value) > 0, "Amount must be greater than 0."),
+    .refine((value) => value === "" || (!Number.isNaN(Number(value)) && Number(value) >= 0), "Allocated amount must be 0 or greater."),
+  extraContributionAmount: z
+    .string()
+    .trim()
+    .refine((value) => value === "" || (!Number.isNaN(Number(value)) && Number(value) >= 0), "Extra contribution must be 0 or greater."),
+  feesCoveredAmount: z
+    .string()
+    .trim()
+    .refine((value) => value === "" || (!Number.isNaN(Number(value)) && Number(value) >= 0), "Fees covered must be 0 or greater."),
   paidAt: z.string().trim().min(1, "Paid date is required."),
   paymentMethod: z.string().trim().min(1, "Payment method is required."),
   referenceId: z.string().trim().optional(),
@@ -242,6 +265,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           id: true,
           causeId: true,
           amount: true,
+          allocatedAmount: true,
+          extraContributionAmount: true,
+          feesCoveredAmount: true,
           paidAt: true,
           paymentMethod: true,
           referenceId: true,
@@ -312,6 +338,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       causeId: disbursement.causeId,
       causeName: disbursement.cause.name,
       amount: disbursement.amount.toString(),
+      allocatedAmount: disbursement.allocatedAmount.toString(),
+      extraContributionAmount: disbursement.extraContributionAmount.toString(),
+      feesCoveredAmount: disbursement.feesCoveredAmount.toString(),
       paidAt: disbursement.paidAt.toISOString(),
       paymentMethod: disbursement.paymentMethod,
       referenceId: disbursement.referenceId ?? null,
@@ -397,7 +426,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const parsed = disbursementSchema.safeParse({
       periodId: formData.get("periodId")?.toString() ?? "",
       causeId: formData.get("causeId")?.toString() ?? "",
-      amount: formData.get("amount")?.toString() ?? "",
+      allocatedAmount: formData.get("allocatedAmount")?.toString() ?? "",
+      extraContributionAmount: formData.get("extraContributionAmount")?.toString() ?? "",
+      feesCoveredAmount: formData.get("feesCoveredAmount")?.toString() ?? "",
       paidAt: formData.get("paidAt")?.toString() ?? "",
       paymentMethod: formData.get("paymentMethod")?.toString() ?? "",
       referenceId: formData.get("referenceId")?.toString() ?? "",
@@ -445,7 +476,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await logDisbursement(shopId, {
         periodId: parsed.data.periodId,
         causeId: parsed.data.causeId,
-        amount: parsed.data.amount,
+        allocatedAmount: parsed.data.allocatedAmount || "0",
+        extraContributionAmount: parsed.data.extraContributionAmount || "0",
+        feesCoveredAmount: parsed.data.feesCoveredAmount || "0",
         paidAt: new Date(parsed.data.paidAt),
         paymentMethod: parsed.data.paymentMethod,
         referenceId: parsed.data.referenceId ?? "",
@@ -461,10 +494,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       return Response.json({ ok: true, message: "Disbursement logged." });
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to log disbursement.";
+      const fieldErrors: ReportingActionData["fieldErrors"] =
+        message.includes("Allocated amount cannot exceed the remaining allocation.")
+          ? { allocatedAmount: [message] }
+          : message.includes("At least one disbursement amount must be greater than 0.")
+            ? { allocatedAmount: [message] }
+          : message.includes("Payment method")
+            ? { paymentMethod: [message] }
+            : message.includes("closed reporting periods")
+              ? { periodId: [message] }
+              : message.includes("PDF, PNG, or JPEG")
+                ? { receipt: [message] }
+                : undefined;
+
       return Response.json(
         {
           ok: false,
-          message: error instanceof Error ? error.message : "Unable to log disbursement.",
+          message,
+          fieldErrors,
         },
         { status: 400 },
       );
@@ -527,6 +575,80 @@ export default function ReportingPage() {
     setCloseDialogOpen(false);
   }
 
+  const allocationRows: AllocationRow[] = summary
+    ? summary.track1.allocations.map((allocation: AllocationRow) => {
+        const remaining = new Prisma.Decimal(allocation.allocated)
+          .sub(new Prisma.Decimal(allocation.disbursed))
+          .toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
+        return {
+          causeId: allocation.causeId,
+          causeName: allocation.causeName,
+          is501c3: allocation.is501c3,
+          allocated: allocation.allocated,
+          disbursed: allocation.disbursed,
+          remaining: remaining.toString(),
+        };
+      })
+    : [];
+  const disbursementCauseOptions = allocationRows.filter((allocation) =>
+    new Prisma.Decimal(allocation.remaining).greaterThan(0),
+  );
+  const disbursements: DisbursementRow[] = summary?.disbursements ?? [];
+  const disbursementOptions = disbursementCauseOptions.map<DisbursementOption>((allocation) => ({
+    causeId: allocation.causeId,
+    label: `${allocation.causeName} (${formatMoney(allocation.remaining)} remaining)`,
+    remaining: allocation.remaining,
+  }));
+  const [selectedDisbursementCauseId, setSelectedDisbursementCauseId] = useState(
+    disbursementOptions[0]?.causeId ?? "",
+  );
+  const disbursementFieldStyle: CSSProperties = {
+    width: "100%",
+    boxSizing: "border-box",
+    minHeight: "2.75rem",
+    padding: "0.65rem 0.8rem",
+    borderRadius: "0.7rem",
+    border: "1px solid var(--p-color-border, #c9cccf)",
+    background: "var(--p-color-bg-surface, #fff)",
+    color: "var(--p-color-text, #303030)",
+    font: "inherit",
+  };
+  const disbursementFileStyle: CSSProperties = {
+    ...disbursementFieldStyle,
+    padding: "0.5rem 0.65rem",
+  };
+  const disbursementSubmitStyle: CSSProperties = {
+    borderRadius: "0.85rem",
+    border: "1px solid #111",
+    background: "#111",
+    color: "#fff",
+    padding: "0.7rem 1rem",
+    font: "inherit",
+    fontWeight: 600,
+    cursor: disbursementFetcher.state !== "idle" ? "not-allowed" : "pointer",
+    opacity: disbursementFetcher.state !== "idle" ? 0.6 : 1,
+  };
+  const selectedDisbursementOption =
+    disbursementOptions.find((option) => option.causeId === selectedDisbursementCauseId) ??
+    disbursementOptions[0] ??
+    null;
+  const selectedRemainingAmount = floorCurrency(selectedDisbursementOption?.remaining ?? "0");
+  const selectedRemainingAmountInputMax = selectedRemainingAmount;
+  const disbursementTwoColumnGridStyle: CSSProperties = {
+    display: "grid",
+    gap: "0.9rem",
+    gridTemplateColumns: "repeat(auto-fit, minmax(16rem, 1fr))",
+    alignItems: "start",
+  };
+  const disbursementHelpTextStyle: CSSProperties = {
+    color: "var(--p-color-text-subdued, #6d7175)",
+    minHeight: "2.6rem",
+  };
+
+  useEffect(() => {
+    setSelectedDisbursementCauseId(disbursementOptions[0]?.causeId ?? "");
+  }, [selectedPeriodId, disbursementOptions]);
+
   if (!summary) {
     return (
       <>
@@ -539,22 +661,6 @@ export default function ReportingPage() {
       </>
     );
   }
-
-  const allocationRows: AllocationRow[] = summary.track1.allocations.map((allocation: AllocationRow) => {
-    const remaining = new Prisma.Decimal(allocation.allocated).sub(new Prisma.Decimal(allocation.disbursed));
-    return {
-      causeId: allocation.causeId,
-      causeName: allocation.causeName,
-      is501c3: allocation.is501c3,
-      allocated: allocation.allocated,
-      disbursed: allocation.disbursed,
-      remaining: remaining.toString(),
-    };
-  });
-  const disbursementCauseOptions = allocationRows.filter((allocation) =>
-    new Prisma.Decimal(allocation.remaining).greaterThan(0),
-  );
-  const disbursements: DisbursementRow[] = summary.disbursements;
 
   return (
     <>
@@ -721,54 +827,154 @@ export default function ReportingPage() {
                       <input type="hidden" name="intent" value="log-disbursement" />
                       <input type="hidden" name="periodId" value={selectedPeriod.id} />
 
+                      {disbursementFetcher.data && !disbursementFetcher.data.ok ? (
+                        <div
+                          style={{
+                            border: "1px solid #d95c5c",
+                            background: "#fff4f4",
+                            color: "#8e1f0b",
+                            borderRadius: "0.75rem",
+                            padding: "0.85rem 1rem",
+                          }}
+                        >
+                          {disbursementFetcher.data.message}
+                        </div>
+                      ) : null}
+
                       <div style={{ display: "grid", gap: "0.35rem" }}>
                         <label htmlFor="disbursement-cause">Cause</label>
-                        <select id="disbursement-cause" name="causeId" defaultValue={disbursementCauseOptions[0]?.causeId ?? ""}>
-                          {disbursementCauseOptions.map((allocation) => (
-                            <option key={allocation.causeId} value={allocation.causeId}>
-                              {allocation.causeName} ({formatMoney(allocation.remaining)} remaining)
+                        <select
+                          id="disbursement-cause"
+                          name="causeId"
+                          value={selectedDisbursementCauseId}
+                          onChange={(event) => setSelectedDisbursementCauseId(event.currentTarget.value)}
+                          style={disbursementFieldStyle}
+                        >
+                          {disbursementOptions.map((option) => (
+                            <option key={option.causeId} value={option.causeId}>
+                              {option.label}
                             </option>
                           ))}
                         </select>
+                        {selectedDisbursementOption ? (
+                          <s-text color="subdued">
+                            Current remaining balance: {formatMoney(selectedDisbursementOption.remaining)}
+                          </s-text>
+                        ) : null}
                         {disbursementFetcher.data?.fieldErrors?.causeId?.map((message) => (
                           <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
                         ))}
                       </div>
 
-                      <div style={{ display: "grid", gap: "0.9rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))" }}>
+                      <div style={disbursementTwoColumnGridStyle}>
                         <div style={{ display: "grid", gap: "0.35rem" }}>
-                          <label htmlFor="disbursement-amount">Amount</label>
-                          <input id="disbursement-amount" name="amount" type="number" min="0.01" step="0.01" />
-                          {disbursementFetcher.data?.fieldErrors?.amount?.map((message) => (
+                          <label htmlFor="disbursement-allocated-amount">Allocated amount</label>
+                          <input
+                            id="disbursement-allocated-amount"
+                            name="allocatedAmount"
+                            type="number"
+                            min="0"
+                            max={selectedRemainingAmountInputMax}
+                            step="0.01"
+                            style={disbursementFieldStyle}
+                          />
+                          <s-text color="subdued" style={disbursementHelpTextStyle}>
+                            Counts against this period&apos;s remaining allocation. Max {formatMoney(selectedRemainingAmount)}.
+                          </s-text>
+                          {disbursementFetcher.data?.fieldErrors?.allocatedAmount?.map((message) => (
                             <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
                           ))}
                         </div>
                         <div style={{ display: "grid", gap: "0.35rem" }}>
                           <label htmlFor="disbursement-paid-at">Paid date</label>
-                          <input id="disbursement-paid-at" name="paidAt" type="date" defaultValue={new Date().toISOString().slice(0, 10)} />
+                          <input
+                            id="disbursement-paid-at"
+                            name="paidAt"
+                            type="date"
+                            defaultValue={new Date().toISOString().slice(0, 10)}
+                            style={disbursementFieldStyle}
+                          />
+                          <s-text color="subdued" style={disbursementHelpTextStyle}>
+                            Use the date the funds were actually sent to the cause.
+                          </s-text>
                           {disbursementFetcher.data?.fieldErrors?.paidAt?.map((message) => (
                             <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
                           ))}
                         </div>
                       </div>
 
-                      <div style={{ display: "grid", gap: "0.9rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))" }}>
+                      <div style={disbursementTwoColumnGridStyle}>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="disbursement-extra-contribution">Extra contribution</label>
+                          <input
+                            id="disbursement-extra-contribution"
+                            name="extraContributionAmount"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            style={disbursementFieldStyle}
+                          />
+                          <s-text color="subdued" style={disbursementHelpTextStyle}>
+                            Additional gift above the allocated amount. Does not reduce future allocations.
+                          </s-text>
+                          {disbursementFetcher.data?.fieldErrors?.extraContributionAmount?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="disbursement-fees-covered">Fees covered</label>
+                          <input
+                            id="disbursement-fees-covered"
+                            name="feesCoveredAmount"
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            style={disbursementFieldStyle}
+                          />
+                          <s-text color="subdued" style={disbursementHelpTextStyle}>
+                            Extra amount to help cover the cause&apos;s processing or operating costs.
+                          </s-text>
+                          {disbursementFetcher.data?.fieldErrors?.feesCoveredAmount?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={disbursementTwoColumnGridStyle}>
                         <div style={{ display: "grid", gap: "0.35rem" }}>
                           <label htmlFor="disbursement-method">Payment method</label>
-                          <input id="disbursement-method" name="paymentMethod" type="text" placeholder="ACH, check, wire..." />
+                          <input
+                            id="disbursement-method"
+                            name="paymentMethod"
+                            type="text"
+                            placeholder="ACH, check, wire..."
+                            style={disbursementFieldStyle}
+                          />
                           {disbursementFetcher.data?.fieldErrors?.paymentMethod?.map((message) => (
                             <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
                           ))}
                         </div>
                         <div style={{ display: "grid", gap: "0.35rem" }}>
                           <label htmlFor="disbursement-reference">Reference id</label>
-                          <input id="disbursement-reference" name="referenceId" type="text" placeholder="Optional payout or check id" />
+                          <input
+                            id="disbursement-reference"
+                            name="referenceId"
+                            type="text"
+                            placeholder="Optional payout or check id"
+                            style={disbursementFieldStyle}
+                          />
                         </div>
                       </div>
 
                       <div style={{ display: "grid", gap: "0.35rem" }}>
                         <label htmlFor="disbursement-receipt">Receipt</label>
-                        <input id="disbursement-receipt" name="receipt" type="file" accept=".pdf,image/*" />
+                        <input
+                          id="disbursement-receipt"
+                          name="receipt"
+                          type="file"
+                          accept=".pdf,image/*"
+                          style={disbursementFileStyle}
+                        />
                         <s-text color="subdued">Optional. PDF or image, up to 10 MB.</s-text>
                         <s-text color="subdued">
                           This receipt may be publicly visible. Redact all personal information before uploading.
@@ -782,16 +988,7 @@ export default function ReportingPage() {
                         <button
                           type="submit"
                           disabled={disbursementFetcher.state !== "idle"}
-                          style={{
-                            borderRadius: "999px",
-                            border: "1px solid #111",
-                            background: "#111",
-                            color: "#fff",
-                            padding: "0.65rem 1rem",
-                            font: "inherit",
-                            cursor: disbursementFetcher.state !== "idle" ? "not-allowed" : "pointer",
-                            opacity: disbursementFetcher.state !== "idle" ? 0.6 : 1,
-                          }}
+                          style={disbursementSubmitStyle}
                         >
                           Log disbursement
                         </button>
@@ -806,15 +1003,21 @@ export default function ReportingPage() {
                   <s-table-header-row>
                     <s-table-header listSlot="primary">Cause</s-table-header>
                     <s-table-header listSlot="secondary">Paid</s-table-header>
+                    <s-table-header listSlot="secondary">Allocated</s-table-header>
+                    <s-table-header listSlot="secondary">Extra</s-table-header>
+                    <s-table-header listSlot="secondary">Fees</s-table-header>
                     <s-table-header listSlot="secondary">Method</s-table-header>
                     <s-table-header listSlot="secondary">Reference</s-table-header>
                     <s-table-header listSlot="secondary">Receipt</s-table-header>
-                    <s-table-header listSlot="labeled" format="currency">Amount</s-table-header>
+                    <s-table-header listSlot="labeled" format="currency">Total paid</s-table-header>
                   </s-table-header-row>
                   <s-table-body>
                     {disbursements.length === 0 ? (
                       <s-table-row>
                         <s-table-cell>No disbursements logged for this period.</s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
@@ -826,6 +1029,9 @@ export default function ReportingPage() {
                         <s-table-row key={disbursement.id}>
                           <s-table-cell>{disbursement.causeName}</s-table-cell>
                           <s-table-cell>{formatDate(disbursement.paidAt, locale)}</s-table-cell>
+                          <s-table-cell>{formatMoney(disbursement.allocatedAmount)}</s-table-cell>
+                          <s-table-cell>{formatMoney(disbursement.extraContributionAmount)}</s-table-cell>
+                          <s-table-cell>{formatMoney(disbursement.feesCoveredAmount)}</s-table-cell>
                           <s-table-cell>{disbursement.paymentMethod}</s-table-cell>
                           <s-table-cell>{disbursement.referenceId ?? "—"}</s-table-cell>
                           <s-table-cell>

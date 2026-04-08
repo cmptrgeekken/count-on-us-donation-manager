@@ -13,6 +13,7 @@ This directory contains Architecture Decision Records (ADRs) for the Shopify Don
 | [ADR-005](adr-005-direct-giving-mode.md) | Direct Giving Mode — scope removal and standalone app architecture | Removed from core app / Standalone app (future) | March 2026 |
 | [ADR-006](adr-006-bulk-migration-removal.md) | Bulk migration removal and reconciliation scope reduction | Accepted | March 2026 |
 | [ADR-007](adr-007-receipt-storage-strategy.md) | Receipt storage strategy for disbursements | Accepted | April 2026 |
+| [ADR-008](adr-008-financial-precision-policy.md) | Financial precision policy | Accepted | April 2026 |
 
 ## Dependencies
 

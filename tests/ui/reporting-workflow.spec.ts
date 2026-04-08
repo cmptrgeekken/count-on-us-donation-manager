@@ -50,7 +50,9 @@ test("reporting dashboard can log a disbursement with a receipt", async ({ page,
   await page.getByRole("button", { name: "Close period" }).click();
   await expect(page.locator("s-banner").getByText("Reporting period closed.")).toBeVisible();
 
-  await page.locator("#disbursement-amount").fill("20");
+  await page.locator("#disbursement-allocated-amount").fill("20");
+  await page.locator("#disbursement-extra-contribution").fill("5");
+  await page.locator("#disbursement-fees-covered").fill("2");
   await page.locator("#disbursement-paid-at").fill("2026-03-10");
   await page.locator("#disbursement-method").fill("ACH");
   await page.locator("#disbursement-reference").fill("fixture-ach-001");
@@ -67,6 +69,9 @@ test("reporting dashboard can log a disbursement with a receipt", async ({ page,
     .filter({ hasText: "Playwright Cause" })
     .filter({ hasText: "ACH" });
   await expect(disbursementRow).toContainText("$20.00");
+  await expect(disbursementRow).toContainText("$5.00");
+  await expect(disbursementRow).toContainText("$2.00");
+  await expect(disbursementRow).toContainText("$27.00");
   await expect(disbursementRow.getByRole("link", { name: "View receipt" })).toBeVisible();
 
   const allocationRow = page.locator("s-table-row").filter({ hasText: "Playwright Cause" }).first();

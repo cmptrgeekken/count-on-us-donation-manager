@@ -26,7 +26,9 @@ export type DisbursementReceiptInput = {
 export type LogDisbursementInput = {
   periodId: string;
   causeId: string;
-  amount: Prisma.Decimal | string | number;
+  allocatedAmount: Prisma.Decimal | string | number;
+  extraContributionAmount?: Prisma.Decimal | string | number;
+  feesCoveredAmount?: Prisma.Decimal | string | number;
   paidAt: Date;
   paymentMethod: string;
   referenceId?: string | null;
@@ -35,6 +37,10 @@ export type LogDisbursementInput = {
 
 function toDecimal(value: Prisma.Decimal | string | number) {
   return value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
+}
+
+function floorCurrency(value: Prisma.Decimal) {
+  return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
 }
 
 function normalizeReceiptFilename(filename: string) {
@@ -54,10 +60,17 @@ export async function logDisbursement(
   const db = options?.db ?? prisma;
   const storage = options?.storage ?? createReceiptStorage();
   const actor = options?.actor ?? "merchant";
-  const amount = toDecimal(input.amount);
+  const allocatedAmount = toDecimal(input.allocatedAmount);
+  const extraContributionAmount = toDecimal(input.extraContributionAmount ?? 0);
+  const feesCoveredAmount = toDecimal(input.feesCoveredAmount ?? 0);
+  const amount = allocatedAmount.add(extraContributionAmount).add(feesCoveredAmount);
+
+  if (allocatedAmount.lessThan(ZERO) || extraContributionAmount.lessThan(ZERO) || feesCoveredAmount.lessThan(ZERO)) {
+    throw new Error("Disbursement amounts cannot be negative.");
+  }
 
   if (amount.lessThanOrEqualTo(ZERO)) {
-    throw new Error("Disbursement amount must be greater than 0.");
+    throw new Error("At least one disbursement amount must be greater than 0.");
   }
 
   const disbursementId = randomUUID();
@@ -128,8 +141,9 @@ export async function logDisbursement(
       }
 
       const remaining = allocation.allocated.sub(allocation.disbursed);
-      if (amount.greaterThan(remaining)) {
-        throw new Error("Disbursement amount cannot exceed the remaining allocation.");
+      const spendableRemaining = floorCurrency(remaining);
+      if (allocatedAmount.greaterThan(spendableRemaining)) {
+        throw new Error("Allocated amount cannot exceed the remaining allocation.");
       }
 
       const disbursement = await tx.disbursement.create({
@@ -139,6 +153,9 @@ export async function logDisbursement(
           periodId: input.periodId,
           causeId: input.causeId,
           amount,
+          allocatedAmount,
+          extraContributionAmount,
+          feesCoveredAmount,
           paidAt: input.paidAt,
           paymentMethod: input.paymentMethod.trim(),
           referenceId: input.referenceId?.trim() || null,
@@ -153,7 +170,7 @@ export async function logDisbursement(
         },
         data: {
           disbursed: {
-            increment: amount,
+            increment: allocatedAmount,
           },
         },
       });
@@ -170,6 +187,9 @@ export async function logDisbursement(
             causeId: input.causeId,
             causeName: allocation.causeName,
             amount: amount.toString(),
+            allocatedAmount: allocatedAmount.toString(),
+            extraContributionAmount: extraContributionAmount.toString(),
+            feesCoveredAmount: feesCoveredAmount.toString(),
             paidAt: input.paidAt.toISOString(),
             paymentMethod: input.paymentMethod.trim(),
             hasReceipt: Boolean(receiptFileKey),
@@ -180,7 +200,7 @@ export async function logDisbursement(
       return {
         disbursement,
         causeAllocationId: allocation.id,
-        remaining: remaining.sub(amount),
+        remaining: spendableRemaining.sub(allocatedAmount),
       };
     });
   } catch (error) {

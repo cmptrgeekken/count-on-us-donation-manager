@@ -27,6 +27,7 @@ import {
   parseOptionalNonNegativeNumber,
   parseOptionalNonNegativeWholeNumber,
   parseOptionalPercent,
+  parseRequiredNonNegativeWholeNumber,
 } from "../utils/number-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
@@ -919,9 +920,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (intent === "save-material-override") {
     const templateLineId = formData.get("templateLineId")?.toString() ?? "";
     const materialId = formData.get("materialId")?.toString() ?? "";
-    const quantity = parseFloat(formData.get("quantity")?.toString() ?? "1");
+    const quantity = parseRequiredNonNegativeWholeNumber(formData.get("quantity")?.toString(), "Material quantity");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
+    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Material yield");
+    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Material uses per variant");
     const config = await ensureConfig();
     const templateLine = await requireTemplateMaterialLine(config.id, templateLineId);
     await requireMaterial(materialId);
@@ -943,8 +946,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         data: {
           materialId,
           quantity,
-          yield: yieldVal ? parseFloat(yieldVal) : null,
-          usesPerVariant: usesPerVariant ? parseFloat(usesPerVariant) : null,
+          yield: parsedYield,
+          usesPerVariant: parsedUsesPerVariant,
         },
       });
     } else if (legacy) {
@@ -954,8 +957,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           templateLineId,
           materialId,
           quantity,
-          yield: yieldVal ? parseFloat(yieldVal) : null,
-          usesPerVariant: usesPerVariant ? parseFloat(usesPerVariant) : null,
+          yield: parsedYield,
+          usesPerVariant: parsedUsesPerVariant,
         },
       });
     } else {
@@ -966,8 +969,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           templateLineId,
           materialId,
           quantity,
-          yield: yieldVal ? parseFloat(yieldVal) : null,
-          usesPerVariant: usesPerVariant ? parseFloat(usesPerVariant) : null,
+          yield: parsedYield,
+          usesPerVariant: parsedUsesPerVariant,
         },
       });
     }
@@ -1002,9 +1005,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (intent === "add-material-line") {
     const materialId = formData.get("materialId")?.toString() ?? "";
-    const quantity = parseFloat(formData.get("quantity")?.toString() ?? "1");
+    const quantity = parseRequiredNonNegativeWholeNumber(formData.get("quantity")?.toString(), "Material quantity");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
+    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Material yield");
+    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Material uses per variant");
     const config = await ensureConfig();
 
     await prisma.$transaction([
@@ -1014,8 +1019,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           configId: config.id,
           materialId,
           quantity,
-          yield: yieldVal ? parseFloat(yieldVal) : null,
-          usesPerVariant: usesPerVariant ? parseFloat(usesPerVariant) : null,
+          yield: parsedYield,
+          usesPerVariant: parsedUsesPerVariant,
         },
       }),
       prisma.variantCostConfig.updateMany({

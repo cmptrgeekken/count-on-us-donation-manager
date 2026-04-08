@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
+import {
+  parseOptionalPositiveDecimal,
+  parseRequiredPositiveDecimal,
+  parseRequiredPositiveMoney,
+} from "../utils/money-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const materialIdSchema = z.object({
@@ -69,38 +75,42 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     const { name, type, costingModel } = parsed.data;
-    const purchasePrice = parseFloat(formData.get("purchasePrice")?.toString() ?? "0");
-    const purchaseQty = parseFloat(formData.get("purchaseQty")?.toString() ?? "1");
-    const totalUsesPerUnit =
-      costingModel === "uses"
-        ? parseFloat(formData.get("totalUsesPerUnit")?.toString() ?? "0")
-        : null;
-    const weightGramsRaw = formData.get("weightGrams")?.toString().trim() ?? "";
-    const weightGrams = weightGramsRaw ? parseFloat(weightGramsRaw) : null;
     const purchaseLink = parsed.data.purchaseLink.trim() || null;
     const unitDescription = formData.get("unitDescription")?.toString().trim() || null;
     const notes = formData.get("notes")?.toString().trim() || null;
-
-    if (isNaN(purchasePrice) || purchasePrice <= 0) {
-      return Response.json({ ok: false, message: "Purchase price must be greater than 0." }, { status: 400 });
-    }
-    if (isNaN(purchaseQty) || purchaseQty <= 0) {
-      return Response.json({ ok: false, message: "Purchase quantity must be greater than 0." }, { status: 400 });
-    }
-    if (
-      costingModel === "uses" &&
-      (totalUsesPerUnit === null || isNaN(totalUsesPerUnit) || totalUsesPerUnit <= 0)
-    ) {
-      return Response.json(
-        { ok: false, message: "Total uses per unit must be greater than 0 for uses-based costing." },
-        { status: 400 },
+    let purchasePrice: Prisma.Decimal;
+    let purchaseQty: Prisma.Decimal;
+    let totalUsesPerUnit: Prisma.Decimal | null;
+    let weightGrams: Prisma.Decimal | null;
+    try {
+      purchasePrice = parseRequiredPositiveMoney(
+        formData.get("purchasePrice")?.toString(),
+        "Purchase price",
       );
-    }
-    if (weightGramsRaw && (weightGrams === null || isNaN(weightGrams) || weightGrams <= 0)) {
-      return Response.json({ ok: false, message: "Material weight must be greater than 0 grams." }, { status: 400 });
+      purchaseQty = parseRequiredPositiveDecimal(
+        formData.get("purchaseQty")?.toString(),
+        "Purchase quantity",
+      );
+      totalUsesPerUnit =
+        costingModel === "uses"
+          ? parseRequiredPositiveDecimal(
+              formData.get("totalUsesPerUnit")?.toString(),
+              "Total uses per unit",
+            )
+          : null;
+      weightGrams = parseOptionalPositiveDecimal(
+        formData.get("weightGrams")?.toString(),
+        "Material weight",
+        3,
+      );
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
     }
 
-    const perUnitCost = purchasePrice / purchaseQty;
+    const perUnitCost = purchasePrice.div(purchaseQty).toDecimalPlaces(6, Prisma.Decimal.ROUND_HALF_UP);
     const data = {
       shopId,
       name,

@@ -121,7 +121,8 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 - [ ] Cause allocation materialization
 - [ ] Shopify charge sync
 - [ ] Reporting dashboard
-- [ ] Disbursements
+- [~] Disbursements
+  Active branch work includes receipt upload plus split disbursement tracking for allocated amount, extra contribution, and fees covered.
 - [ ] Tax true-up
 - [ ] Export flows
 - [ ] Audit log browsing UI
