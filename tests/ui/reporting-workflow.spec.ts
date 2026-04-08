@@ -21,7 +21,7 @@ test("reporting dashboard shows track summaries and charges", async ({ page, req
 
   await expect(page.getByText("Donation pool (after charges)")).toBeVisible();
   const donationPoolSection = page.locator("s-section").filter({ hasText: "Track 1 — Donation pool" });
-  await expect(donationPoolSection.getByText("$78.00")).toBeVisible();
+  await expect(donationPoolSection.getByText("$58.00")).toBeVisible();
 });
 
 test("reporting dashboard can close an open period", async ({ page, request }) => {

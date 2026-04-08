@@ -266,7 +266,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       track1: {
         totalNetContribution: totalNetContribution.toString(),
         shopifyCharges: shopifyCharges.toString(),
-        donationPool: totalNetContribution.sub(shopifyCharges).toString(),
+        donationPool: totalNetContribution.sub(expenseTotal).sub(shopifyCharges).toString(),
         allocations: allocationRows.map((allocation) => ({
           causeId: allocation.causeId,
           causeName: allocation.causeName,
