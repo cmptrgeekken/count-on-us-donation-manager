@@ -1,17 +1,30 @@
 import { Prisma, PrismaClient } from "@prisma/client";
+import { faker } from "@faker-js/faker";
 
 const prisma = new PrismaClient();
+const SEED_MARKER = "Seed:";
+const DEFAULT_MONTHS = 6;
+const DEFAULT_ORDERS_MIN = 20;
+const DEFAULT_ORDERS_MAX = 30;
 
 function parseArgs() {
   const args = process.argv.slice(2);
   const result = {
     shopId: null,
     reset: false,
+    months: DEFAULT_MONTHS,
+    ordersMin: DEFAULT_ORDERS_MIN,
+    ordersMax: DEFAULT_ORDERS_MAX,
+    endDate: null,
   };
 
   for (const arg of args) {
     if (arg === "--reset") result.reset = true;
     if (arg.startsWith("--shop=")) result.shopId = arg.slice("--shop=".length).trim();
+    if (arg.startsWith("--months=")) result.months = Number(arg.slice("--months=".length));
+    if (arg.startsWith("--orders-min=")) result.ordersMin = Number(arg.slice("--orders-min=".length));
+    if (arg.startsWith("--orders-max=")) result.ordersMax = Number(arg.slice("--orders-max=".length));
+    if (arg.startsWith("--end-date=")) result.endDate = arg.slice("--end-date=".length).trim();
   }
 
   return result;
@@ -19,6 +32,37 @@ function parseArgs() {
 
 function decimal(value) {
   return new Prisma.Decimal(value);
+}
+
+function sanitizeShopId(shopId) {
+  return shopId.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+function gid(type, id) {
+  return `gid+seed://shopify/${type}/${id}`;
+}
+
+function hashStringToInt(value) {
+  let hash = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function startOfUtcMonth(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
+}
+
+function addUtcMonths(date, months) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + months, 1));
+}
+
+function parseEndDate(value) {
+  if (!value) return null;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 async function resolveShopId(explicitShopId) {
@@ -35,9 +79,15 @@ async function resetShopData(shopId) {
   await prisma.$transaction([
     deleteByShop(prisma.adjustment),
     deleteByShop(prisma.lineCauseAllocation),
-    deleteByShop(prisma.orderSnapshotMaterialLine),
-    deleteByShop(prisma.orderSnapshotEquipmentLine),
-    deleteByShop(prisma.orderSnapshotPODLine),
+    prisma.orderSnapshotMaterialLine.deleteMany({
+      where: { snapshotLine: { snapshot: { shopId } } },
+    }),
+    prisma.orderSnapshotEquipmentLine.deleteMany({
+      where: { snapshotLine: { snapshot: { shopId } } },
+    }),
+    prisma.orderSnapshotPODLine.deleteMany({
+      where: { snapshotLine: { snapshot: { shopId } } },
+    }),
     deleteByShop(prisma.orderSnapshotLine),
     deleteByShop(prisma.orderSnapshot),
     deleteByShop(prisma.causeAllocation),
@@ -52,8 +102,12 @@ async function resetShopData(shopId) {
     deleteByShop(prisma.variantCostConfig),
     deleteByShop(prisma.variant),
     deleteByShop(prisma.product),
-    deleteByShop(prisma.costTemplateMaterialLine),
-    deleteByShop(prisma.costTemplateEquipmentLine),
+    prisma.costTemplateMaterialLine.deleteMany({
+      where: { template: { shopId } },
+    }),
+    prisma.costTemplateEquipmentLine.deleteMany({
+      where: { template: { shopId } },
+    }),
     deleteByShop(prisma.costTemplate),
     deleteByShop(prisma.materialLibraryItem),
     deleteByShop(prisma.equipmentLibraryItem),
@@ -62,9 +116,153 @@ async function resetShopData(shopId) {
   ]);
 }
 
-async function seed(shopId) {
+async function clearSeedArtifacts(shopId, shopKey) {
+  const seedGidPrefix = `gid+seed://shopify/`;
+
+  await prisma.lineCauseAllocation.deleteMany({
+    where: {
+      snapshotLine: {
+        snapshot: {
+          shopId,
+          shopifyOrderId: { startsWith: `${seedGidPrefix}Order/` },
+        },
+      },
+    },
+  });
+
+  await prisma.adjustment.deleteMany({
+    where: {
+      snapshotLine: {
+        snapshot: {
+          shopId,
+          shopifyOrderId: { startsWith: `${seedGidPrefix}Order/` },
+        },
+      },
+    },
+  });
+
+  await prisma.orderSnapshotLine.deleteMany({
+    where: {
+      snapshot: {
+        shopId,
+        shopifyOrderId: { startsWith: `${seedGidPrefix}Order/` },
+      },
+    },
+  });
+
+  await prisma.orderSnapshot.deleteMany({
+    where: {
+      shopId,
+      shopifyOrderId: { startsWith: `${seedGidPrefix}Order/` },
+    },
+  });
+
+  await prisma.reportingPeriod.deleteMany({
+    where: {
+      shopId,
+      shopifyPayoutId: { startsWith: `${seedGidPrefix}Payout/` },
+    },
+  });
+
+  await prisma.productCauseAssignment.deleteMany({
+    where: {
+      product: {
+        shopifyId: { startsWith: `${seedGidPrefix}Product/` },
+      },
+    },
+  });
+
+  await prisma.variantCostConfig.deleteMany({
+    where: {
+      variant: {
+        shopifyId: { startsWith: `${seedGidPrefix}ProductVariant/` },
+      },
+    },
+  });
+
+  await prisma.variant.deleteMany({
+    where: {
+      shopId,
+      shopifyId: { startsWith: `${seedGidPrefix}ProductVariant/` },
+    },
+  });
+
+  await prisma.product.deleteMany({
+    where: {
+      shopId,
+      shopifyId: { startsWith: `${seedGidPrefix}Product/` },
+    },
+  });
+
+  await prisma.costTemplate.deleteMany({
+    where: {
+      shopId,
+      name: { startsWith: SEED_MARKER },
+    },
+  });
+
+  await prisma.materialLibraryItem.deleteMany({
+    where: {
+      shopId,
+      name: { startsWith: SEED_MARKER },
+    },
+  });
+
+  await prisma.equipmentLibraryItem.deleteMany({
+    where: {
+      shopId,
+      name: { startsWith: SEED_MARKER },
+    },
+  });
+
+  await prisma.cause.deleteMany({
+    where: {
+      shopId,
+      name: { startsWith: SEED_MARKER },
+    },
+  });
+
+  await prisma.shopifyChargeTransaction.deleteMany({
+    where: {
+      shopId,
+      shopifyTransactionId: {
+        startsWith: `${seedGidPrefix}BalanceTransaction/`,
+      },
+    },
+  });
+
+  await prisma.businessExpense.deleteMany({
+    where: {
+      shopId,
+      name: { startsWith: SEED_MARKER },
+    },
+  });
+
+  await prisma.disbursement.deleteMany({
+    where: {
+      shopId,
+      referenceId: { startsWith: SEED_MARKER },
+    },
+  });
+
+  await prisma.taxTrueUp.deleteMany({
+    where: {
+      shopId,
+      redistributionNotes: { startsWith: SEED_MARKER },
+    },
+  });
+}
+
+async function seed(shopId, options) {
   const shopifyDomain = shopId;
-  const now = new Date("2026-04-01T12:00:00.000Z");
+  const shopKey = sanitizeShopId(shopId);
+  const parsedEndDate = parseEndDate(options.endDate);
+  const endDate = parsedEndDate ?? startOfUtcMonth(new Date());
+  const seedKey = `${shopId}|${endDate.toISOString().slice(0, 10)}|${options.months}|${options.ordersMin}|${options.ordersMax}`;
+
+  faker.seed(hashStringToInt(seedKey));
+
+  const startDate = addUtcMonths(endDate, -options.months);
 
   await prisma.shop.upsert({
     where: { shopId },
@@ -85,11 +283,13 @@ async function seed(shopId) {
     },
   });
 
-  const [causeA, causeB] = await prisma.$transaction([
+  await clearSeedArtifacts(shopId, shopKey);
+
+  const causes = await prisma.$transaction([
     prisma.cause.create({
       data: {
         shopId,
-        name: "Community Relief",
+        name: `${SEED_MARKER} Community Relief`,
         legalName: "Community Relief Fund",
         is501c3: true,
         donationLink: "https://example.org/relief",
@@ -99,10 +299,20 @@ async function seed(shopId) {
     prisma.cause.create({
       data: {
         shopId,
-        name: "Neighborhood Arts",
+        name: `${SEED_MARKER} Neighborhood Arts`,
         legalName: "Neighborhood Arts Collective",
         is501c3: false,
         donationLink: "https://example.org/arts",
+        status: "active",
+      },
+    }),
+    prisma.cause.create({
+      data: {
+        shopId,
+        name: `${SEED_MARKER} Local Food Bank`,
+        legalName: "Local Food Bank",
+        is501c3: true,
+        donationLink: "https://example.org/food",
         status: "active",
       },
     }),
@@ -112,7 +322,7 @@ async function seed(shopId) {
     prisma.materialLibraryItem.create({
       data: {
         shopId,
-        name: "Premium Cotton",
+        name: `${SEED_MARKER} Premium Cotton`,
         type: "production",
         costingModel: "yield",
         purchasePrice: decimal("25.00"),
@@ -125,7 +335,7 @@ async function seed(shopId) {
     prisma.materialLibraryItem.create({
       data: {
         shopId,
-        name: "Ink Cartridge",
+        name: `${SEED_MARKER} Ink Cartridge`,
         type: "production",
         costingModel: "uses",
         purchasePrice: decimal("60.00"),
@@ -139,7 +349,7 @@ async function seed(shopId) {
     prisma.materialLibraryItem.create({
       data: {
         shopId,
-        name: "Shipping Mailer",
+        name: `${SEED_MARKER} Shipping Mailer`,
         type: "shipping",
         costingModel: "yield",
         purchasePrice: decimal("12.00"),
@@ -152,7 +362,7 @@ async function seed(shopId) {
     prisma.equipmentLibraryItem.create({
       data: {
         shopId,
-        name: "Heat Press",
+        name: `${SEED_MARKER} Heat Press`,
         hourlyRate: decimal("18.00"),
         perUseCost: decimal("0.40"),
         equipmentCost: decimal("950.00"),
@@ -162,7 +372,7 @@ async function seed(shopId) {
     prisma.equipmentLibraryItem.create({
       data: {
         shopId,
-        name: "Cutter",
+        name: `${SEED_MARKER} Cutter`,
         hourlyRate: decimal("14.00"),
         perUseCost: null,
         equipmentCost: decimal("250.00"),
@@ -174,7 +384,7 @@ async function seed(shopId) {
   const shippingTemplate = await prisma.costTemplate.create({
     data: {
       shopId,
-      name: "Standard Shipping",
+      name: `${SEED_MARKER} Standard Shipping`,
       type: "shipping",
       status: "active",
       materialLines: {
@@ -190,7 +400,7 @@ async function seed(shopId) {
   const productionTemplate = await prisma.costTemplate.create({
     data: {
       shopId,
-      name: "Core Production",
+      name: `${SEED_MARKER} Core Production`,
       type: "production",
       status: "active",
       defaultShippingTemplateId: shippingTemplate.id,
@@ -223,65 +433,83 @@ async function seed(shopId) {
     },
   });
 
-  const product = await prisma.product.create({
-    data: {
-      shopId,
-      shopifyId: "gid://shopify/Product/900000100001",
-      title: "Donation Tee",
-      handle: "donation-tee",
-      status: "active",
-      syncedAt: now,
-    },
-  });
+  const products = [];
+  for (let i = 0; i < 3; i += 1) {
+    const title = `${SEED_MARKER} ${faker.commerce.productName()}`;
+    const handle = `${shopKey}-product-${i + 1}`;
+    const product = await prisma.product.upsert({
+      where: { shopId_shopifyId: { shopId, shopifyId: gid("Product", `${shopKey}-product-${i + 1}`) } },
+      create: {
+        shopId,
+        shopifyId: gid("Product", `${shopKey}-product-${i + 1}`),
+        title,
+        handle,
+        status: "active",
+        syncedAt: endDate,
+      },
+      update: {
+        title,
+        handle,
+        status: "active",
+        syncedAt: endDate,
+      },
+    });
 
-  const [variantA, variantB] = await prisma.$transaction([
-    prisma.variant.create({
-      data: {
-        shopId,
-        shopifyId: "gid://shopify/ProductVariant/900000100011",
-        productId: product.id,
-        title: "Donation Tee / Small",
-        sku: "TEE-S",
-        price: decimal("32.00"),
-        syncedAt: now,
-      },
-    }),
-    prisma.variant.create({
-      data: {
-        shopId,
-        shopifyId: "gid://shopify/ProductVariant/900000100012",
-        productId: product.id,
-        title: "Donation Tee / Large",
-        sku: "TEE-L",
-        price: decimal("34.00"),
-        syncedAt: now,
-      },
-    }),
-  ]);
+    const variants = [];
+    for (let v = 0; v < 2; v += 1) {
+      const variantTitle = `${title} / ${v === 0 ? "Small" : "Large"}`;
+      const sku = `${handle.toUpperCase().slice(0, 8)}-${v === 0 ? "S" : "L"}`;
+      const price = decimal(faker.commerce.price({ min: 20, max: 50, dec: 2 }));
+      const variant = await prisma.variant.upsert({
+        where: { shopId_shopifyId: { shopId, shopifyId: gid("ProductVariant", `${shopKey}-variant-${i + 1}-${v + 1}`) } },
+        create: {
+          shopId,
+          shopifyId: gid("ProductVariant", `${shopKey}-variant-${i + 1}-${v + 1}`),
+          productId: product.id,
+          title: variantTitle,
+          sku,
+          price,
+          syncedAt: endDate,
+        },
+        update: {
+          title: variantTitle,
+          sku,
+          price,
+          syncedAt: endDate,
+        },
+      });
+      variants.push(variant);
+    }
 
-  await prisma.productCauseAssignment.createMany({
-    data: [
-      {
-        shopId,
-        shopifyProductId: product.shopifyId,
-        productId: product.id,
-        causeId: causeA.id,
-        percentage: decimal("70.00"),
-      },
-      {
-        shopId,
-        shopifyProductId: product.shopifyId,
-        productId: product.id,
-        causeId: causeB.id,
-        percentage: decimal("30.00"),
-      },
-    ],
-  });
+    products.push({ product, variants });
+  }
+
+  for (const { product } of products) {
+    await prisma.productCauseAssignment.createMany({
+      data: [
+        {
+          shopId,
+          shopifyProductId: product.shopifyId,
+          productId: product.id,
+          causeId: causes[0].id,
+          percentage: decimal("70.00"),
+        },
+        {
+          shopId,
+          shopifyProductId: product.shopifyId,
+          productId: product.id,
+          causeId: causes[1].id,
+          percentage: decimal("30.00"),
+        },
+      ],
+      skipDuplicates: true,
+    });
+  }
 
   const config = await prisma.variantCostConfig.create({
     data: {
       shopId,
-      variantId: variantA.id,
+      variantId: products[0].variants[0].id,
       productionTemplateId: productionTemplate.id,
       shippingTemplateId: shippingTemplate.id,
       laborMinutes: decimal("8.00"),
@@ -291,7 +519,7 @@ async function seed(shopId) {
         create: {
           shopId,
           materialId: materialYield.id,
-          quantity: decimal("0.25"),
+          quantity: decimal("1.00"),
           yield: decimal("1.00"),
         },
       },
@@ -315,198 +543,275 @@ async function seed(shopId) {
     },
   });
 
-  const periodStart = new Date("2026-03-01T00:00:00.000Z");
-  const periodEnd = new Date("2026-03-15T00:00:00.000Z");
+  const periodAllocations = new Map();
+  const periodIds = [];
 
-  const reportingPeriod = await prisma.reportingPeriod.create({
-    data: {
-      shopId,
-      status: "OPEN",
-      source: "payout",
-      startDate: periodStart,
-      endDate: periodEnd,
-      shopifyPayoutId: "dev_payout_fixture_001",
-    },
-  });
+  for (let monthIndex = 0; monthIndex < options.months; monthIndex += 1) {
+    const periodStart = addUtcMonths(startDate, monthIndex);
+    const periodEnd = addUtcMonths(periodStart, 1);
+    const periodKey = `${periodStart.getUTCFullYear()}-${String(periodStart.getUTCMonth() + 1).padStart(2, "0")}`;
+    const shopifyPayoutId = `gid+seed://shopify/Payout/${shopKey}-${periodKey}`;
+    const status = monthIndex < options.months - 1 ? "CLOSED" : "OPEN";
 
-  const snapshot = await prisma.orderSnapshot.create({
-    data: {
-      shopId,
-      shopifyOrderId: "gid://shopify/Order/900000200001",
-      orderNumber: "#2001",
-      origin: "webhook",
-      createdAt: new Date("2026-03-05T12:00:00.000Z"),
-      periodId: reportingPeriod.id,
-    },
-  });
+    const period = await prisma.reportingPeriod.upsert({
+      where: { shopId_shopifyPayoutId: { shopId, shopifyPayoutId } },
+      create: {
+        shopId,
+        status,
+        source: "payout",
+        startDate: periodStart,
+        endDate: periodEnd,
+        shopifyPayoutId,
+      },
+      update: {
+        status,
+        startDate: periodStart,
+        endDate: periodEnd,
+      },
+    });
 
-  const snapshotLine = await prisma.orderSnapshotLine.create({
-    data: {
-      shopId,
-      snapshotId: snapshot.id,
-      shopifyLineItemId: "gid://shopify/LineItem/900000200011",
-      shopifyVariantId: variantA.shopifyId,
-      variantTitle: variantA.title,
-      productTitle: product.title,
-      quantity: 1,
-      salePrice: decimal("32.00"),
-      subtotal: decimal("32.00"),
-      laborCost: decimal("6.00"),
-      materialCost: decimal("9.00"),
-      packagingCost: decimal("1.50"),
-      equipmentCost: decimal("1.25"),
-      mistakeBufferAmount: decimal("0.96"),
-      totalCost: decimal("18.71"),
-      netContribution: decimal("13.29"),
-    },
-  });
+    periodIds.push(period);
+    periodAllocations.set(period.id, new Map());
 
-  await prisma.lineCauseAllocation.create({
-    data: {
-      shopId,
-      snapshotLineId: snapshotLine.id,
-      causeId: causeA.id,
-      causeName: causeA.name,
-      is501c3: causeA.is501c3,
-      percentage: decimal("70.00"),
-      amount: decimal("9.30"),
-    },
-  });
+    const chargeId = gid("BalanceTransaction", `${shopKey}-charge-${periodKey}`);
+    await prisma.shopifyChargeTransaction.upsert({
+      where: { shopId_shopifyTransactionId: { shopId, shopifyTransactionId: chargeId } },
+      create: {
+        shopId,
+        shopifyTransactionId: chargeId,
+        shopifyPayoutId,
+        periodId: period.id,
+        amount: decimal(faker.finance.amount({ min: 8, max: 18, dec: 2 })),
+        currency: "USD",
+        description: `${SEED_MARKER} Processing fee ${periodKey}`,
+        processedAt: faker.date.between({ from: periodStart, to: periodEnd }),
+      },
+      update: {
+        periodId: period.id,
+        amount: decimal(faker.finance.amount({ min: 8, max: 18, dec: 2 })),
+        processedAt: faker.date.between({ from: periodStart, to: periodEnd }),
+      },
+    });
 
-  await prisma.lineCauseAllocation.create({
-    data: {
-      shopId,
-      snapshotLineId: snapshotLine.id,
-      causeId: causeB.id,
-      causeName: causeB.name,
-      is501c3: causeB.is501c3,
-      percentage: decimal("30.00"),
-      amount: decimal("3.99"),
-    },
-  });
+    await prisma.businessExpense.create({
+      data: {
+        shopId,
+        category: "inventory_materials",
+        subType: "material_purchase",
+        name: `${SEED_MARKER} Bulk materials ${periodKey}`,
+        amount: decimal(faker.finance.amount({ min: 80, max: 220, dec: 2 })),
+        expenseDate: faker.date.between({ from: periodStart, to: periodEnd }),
+      },
+    });
+  }
 
-  await prisma.adjustment.create({
-    data: {
-      shopId,
-      snapshotLineId: snapshotLine.id,
-      type: "refund",
-      reason: "Customer refund",
-      netContribAdj: decimal("-1.50"),
-      laborAdj: decimal("0.00"),
-      materialAdj: decimal("0.00"),
-      packagingAdj: decimal("0.00"),
-      equipmentAdj: decimal("0.00"),
-      actor: "system",
-    },
-  });
+  for (let monthIndex = 0; monthIndex < options.months; monthIndex += 1) {
+    const period = periodIds[monthIndex];
+    const periodStart = period.startDate;
+    const periodEnd = period.endDate;
+    const orderCount = faker.number.int({ min: options.ordersMin, max: options.ordersMax });
 
-  await prisma.businessExpense.create({
-    data: {
-      shopId,
-      category: "inventory_materials",
-      subType: "material_purchase",
-      name: "Bulk cotton rolls",
-      amount: decimal("120.00"),
-      expenseDate: new Date("2026-03-06T00:00:00.000Z"),
-    },
-  });
+    for (let orderIndex = 0; orderIndex < orderCount; orderIndex += 1) {
+      const createdAt = faker.date.between({ from: periodStart, to: periodEnd });
+      const productEntry = faker.helpers.arrayElement(products);
+      const variant = faker.helpers.arrayElement(productEntry.variants);
+      const quantity = faker.number.int({ min: 1, max: 3 });
+      const salePrice = decimal(variant.price);
+      const subtotal = decimal(salePrice.mul(quantity));
 
-  await prisma.shopifyChargeTransaction.create({
-    data: {
-      shopId,
-      shopifyTransactionId: "gid://shopify/BalanceTransaction/900000200001",
-      shopifyPayoutId: "dev_payout_fixture_001",
-      periodId: reportingPeriod.id,
-      amount: decimal("12.50"),
-      currency: "USD",
-      description: "Shopify processing fee",
-      processedAt: new Date("2026-03-07T00:00:00.000Z"),
-    },
-  });
+      const laborCost = decimal(faker.finance.amount({ min: 2, max: 8, dec: 2 }));
+      const materialCost = decimal(faker.finance.amount({ min: 3, max: 10, dec: 2 }));
+      const packagingCost = decimal(faker.finance.amount({ min: 0.5, max: 2.5, dec: 2 }));
+      const equipmentCost = decimal(faker.finance.amount({ min: 0.5, max: 2.0, dec: 2 }));
+      const mistakeBufferAmount = decimal(faker.finance.amount({ min: 0.3, max: 1.2, dec: 2 }));
 
-  await prisma.disbursement.create({
-    data: {
-      shopId,
-      periodId: reportingPeriod.id,
-      causeId: causeA.id,
-      amount: decimal("40.00"),
-      paidAt: new Date("2026-03-12T00:00:00.000Z"),
-      paymentMethod: "ach",
-      referenceId: "DISB-1001",
-    },
-  });
+      const totalCost = laborCost.add(materialCost).add(packagingCost).add(equipmentCost).add(mistakeBufferAmount);
+      const netContribution = subtotal.sub(totalCost);
 
-  await prisma.taxTrueUp.create({
-    data: {
-      shopId,
-      periodId: reportingPeriod.id,
-      estimatedTax: decimal("8.00"),
-      actualTax: decimal("7.50"),
-      delta: decimal("-0.50"),
-      filedAt: new Date("2026-03-10T00:00:00.000Z"),
-      redistributionNotes: "Rounded down after final filing.",
-    },
-  });
+      const orderKey = `${shopKey}-${periodStart.getUTCFullYear()}${String(periodStart.getUTCMonth() + 1).padStart(2, "0")}-${orderIndex + 1}`;
+      const shopifyOrderId = gid("Order", orderKey);
 
-  const reconciliationSnapshot = await prisma.orderSnapshot.create({
-    data: {
-      shopId,
-      shopifyOrderId: "gid://shopify/Order/900000200002",
-      orderNumber: "#2002",
-      origin: "reconciliation",
-      createdAt: new Date("2026-03-08T14:00:00.000Z"),
-      periodId: reportingPeriod.id,
-    },
-  });
+      const snapshot = await prisma.orderSnapshot.upsert({
+        where: { shopId_shopifyOrderId: { shopId, shopifyOrderId } },
+        create: {
+          shopId,
+          shopifyOrderId,
+          orderNumber: `#S-${String(orderIndex + 1).padStart(3, "0")}`,
+          origin: faker.helpers.arrayElement(["webhook", "reconciliation"]),
+          createdAt,
+          periodId: period.id,
+        },
+        update: {
+          createdAt,
+          periodId: period.id,
+        },
+      });
 
-  const reconciliationLine = await prisma.orderSnapshotLine.create({
-    data: {
-      shopId,
-      snapshotId: reconciliationSnapshot.id,
-      shopifyLineItemId: "gid://shopify/LineItem/900000200012",
-      shopifyVariantId: variantB.shopifyId,
-      variantTitle: variantB.title,
-      productTitle: product.title,
-      quantity: 2,
-      salePrice: decimal("34.00"),
-      subtotal: decimal("68.00"),
-      laborCost: decimal("12.00"),
-      materialCost: decimal("15.00"),
-      packagingCost: decimal("3.50"),
-      equipmentCost: decimal("2.75"),
-      mistakeBufferAmount: decimal("2.04"),
-      totalCost: decimal("35.29"),
-      netContribution: decimal("32.71"),
-    },
-  });
+      await prisma.lineCauseAllocation.deleteMany({
+        where: { snapshotLine: { snapshotId: snapshot.id } },
+      });
+      await prisma.adjustment.deleteMany({
+        where: { snapshotLine: { snapshotId: snapshot.id } },
+      });
+      await prisma.orderSnapshotLine.deleteMany({
+        where: { snapshotId: snapshot.id },
+      });
 
-  await prisma.lineCauseAllocation.create({
-    data: {
-      shopId,
-      snapshotLineId: reconciliationLine.id,
-      causeId: causeA.id,
-      causeName: causeA.name,
-      is501c3: causeA.is501c3,
-      percentage: decimal("70.00"),
-      amount: decimal("22.90"),
-    },
-  });
+      const line = await prisma.orderSnapshotLine.create({
+        data: {
+          shopId,
+          snapshotId: snapshot.id,
+          shopifyLineItemId: gid("LineItem", `${orderKey}-line-1`),
+          shopifyVariantId: variant.shopifyId,
+          variantTitle: variant.title,
+          productTitle: productEntry.product.title,
+          quantity,
+          salePrice,
+          subtotal,
+          laborCost,
+          materialCost,
+          packagingCost,
+          equipmentCost,
+          mistakeBufferAmount,
+          totalCost,
+          netContribution,
+        },
+      });
+
+      const causeSplit = faker.number.int({ min: 55, max: 85 });
+      const primaryAllocation = netContribution.mul(decimal(causeSplit)).div(decimal(100));
+      const secondaryAllocation = netContribution.sub(primaryAllocation);
+
+      const allocations = [
+        { cause: causes[0], percentage: causeSplit, amount: primaryAllocation },
+        { cause: causes[1], percentage: 100 - causeSplit, amount: secondaryAllocation },
+      ];
+
+      for (const allocation of allocations) {
+        await prisma.lineCauseAllocation.create({
+          data: {
+            shopId,
+            snapshotLineId: line.id,
+            causeId: allocation.cause.id,
+            causeName: allocation.cause.name,
+            is501c3: allocation.cause.is501c3,
+            percentage: decimal(allocation.percentage.toFixed(2)),
+            amount: allocation.amount,
+          },
+        });
+
+        const allocationMap = periodAllocations.get(period.id);
+        const current = allocationMap.get(allocation.cause.id) ?? decimal(0);
+        allocationMap.set(allocation.cause.id, current.add(allocation.amount));
+      }
+
+      if (faker.datatype.boolean({ probability: 0.2 })) {
+        await prisma.adjustment.create({
+          data: {
+            shopId,
+            snapshotLineId: line.id,
+            type: "refund",
+            reason: "Seeded refund",
+            netContribAdj: decimal("-1.00"),
+            laborAdj: decimal("0.00"),
+            materialAdj: decimal("0.00"),
+            packagingAdj: decimal("0.00"),
+            equipmentAdj: decimal("0.00"),
+            actor: "system",
+          },
+        });
+      }
+    }
+  }
+
+  for (const period of periodIds) {
+    const allocationMap = periodAllocations.get(period.id);
+    for (const cause of causes) {
+      const allocated = allocationMap.get(cause.id) ?? decimal(0);
+      if (allocated.equals(0)) continue;
+
+      await prisma.causeAllocation.upsert({
+        where: { periodId_causeId: { periodId: period.id, causeId: cause.id } },
+        create: {
+          shopId,
+          periodId: period.id,
+          causeId: cause.id,
+          causeName: cause.name,
+          is501c3: cause.is501c3,
+          allocated,
+          disbursed: decimal("0.00"),
+        },
+        update: {
+          allocated,
+        },
+      });
+
+      if (period.status === "CLOSED") {
+        const disbursedAmount = allocated.mul(decimal("0.5"));
+        await prisma.disbursement.create({
+          data: {
+            shopId,
+            periodId: period.id,
+            causeId: cause.id,
+            amount: disbursedAmount,
+            paidAt: faker.date.between({ from: period.startDate, to: period.endDate }),
+            paymentMethod: "ach",
+            referenceId: `${SEED_MARKER}DISB-${period.id}-${cause.id}`,
+          },
+        });
+
+        await prisma.causeAllocation.update({
+          where: { periodId_causeId: { periodId: period.id, causeId: cause.id } },
+          data: { disbursed: disbursedAmount },
+        });
+      }
+    }
+
+    if (period.status === "CLOSED") {
+      await prisma.taxTrueUp.create({
+        data: {
+          shopId,
+          periodId: period.id,
+          estimatedTax: decimal(faker.finance.amount({ min: 5, max: 12, dec: 2 })),
+          actualTax: decimal(faker.finance.amount({ min: 4, max: 11, dec: 2 })),
+          delta: decimal(faker.finance.amount({ min: -2, max: 2, dec: 2 })),
+          filedAt: faker.date.between({ from: period.startDate, to: period.endDate }),
+          redistributionNotes: `${SEED_MARKER} Month-end tax true-up`,
+        },
+      });
+    }
+  }
+
+  console.log(
+    `Seeded dev data for ${shopId} (${options.months} months ending ${endDate.toISOString().slice(0, 10)}).`,
+  );
 }
 
 async function main() {
-  const { shopId: shopArg, reset } = parseArgs();
+  const { shopId: shopArg, reset, months, ordersMin, ordersMax, endDate } = parseArgs();
   const shopId = await resolveShopId(shopArg);
 
   if (!shopId) {
     throw new Error("No shop found. Pass --shop=your-shop.myshopify.com or set SEED_SHOP_ID.");
   }
 
+  if (Number.isNaN(months) || months <= 0) {
+    throw new Error("--months must be a positive number.");
+  }
+
+  if (Number.isNaN(ordersMin) || Number.isNaN(ordersMax) || ordersMin <= 0 || ordersMax < ordersMin) {
+    throw new Error("--orders-min and --orders-max must be positive numbers, with max >= min.");
+  }
+
+  if (endDate && !parseEndDate(endDate)) {
+    throw new Error("--end-date must be formatted as YYYY-MM-DD.");
+  }
+
   if (reset) {
     await resetShopData(shopId);
   }
 
-  await seed(shopId);
-  console.log(`Seeded dev data for ${shopId}${reset ? " (reset)" : ""}.`);
+  await seed(shopId, { months, ordersMin, ordersMax, endDate });
 }
 
 main()
