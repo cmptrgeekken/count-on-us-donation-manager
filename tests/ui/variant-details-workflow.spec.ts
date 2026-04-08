@@ -38,10 +38,12 @@ test("variant details default new yield-based material lines to 1", async ({ pag
   await page.goto(bootstrap.variantUrl);
 
   await page.getByRole("button", { name: "Add material" }).click();
-  const addDialog = page.getByRole("dialog").filter({ hasText: "Add material line" });
-  await expect(addDialog.getByRole("button", { name: "Add", exact: true })).toBeDisabled();
-  await addDialog.getByPlaceholder("Search materials").click();
-  await addDialog.getByRole("button", { name: "Playwright Yield Material" }).click();
+  await expect(page.getByText("Add material line")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add", exact: true }).first()).toBeDisabled();
+  const searchInput = page.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.fill("Playwright Yield Material");
+  await page.getByRole("button", { name: "Playwright Yield Material" }).click();
 
   await expect(page.getByLabel("Yield per piece")).toHaveValue("1");
 });
@@ -54,10 +56,12 @@ test("variant details groups additional shipping material lines separately", asy
   await page.goto(bootstrap.variantUrl);
 
   await page.getByRole("button", { name: "Add material" }).click();
-  let addDialog = page.getByRole("dialog").filter({ hasText: "Add material line" });
-  await addDialog.getByPlaceholder("Search materials").click();
-  await addDialog.getByRole("button", { name: "ZZZ Playwright Shipping Material" }).click();
-  await addDialog.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.getByText("Add material line")).toBeVisible();
+  let searchInput = page.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.fill("ZZZ Playwright Shipping Material");
+  await page.getByRole("button", { name: "ZZZ Playwright Shipping Material" }).click();
+  await page.getByRole("button", { name: "Add", exact: true }).first().click();
 
   await expect(page.getByRole("heading", { name: "Shipping materials" })).toBeVisible();
   await expect(
@@ -65,9 +69,11 @@ test("variant details groups additional shipping material lines separately", asy
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Add material" }).click();
-  addDialog = page.getByRole("dialog").filter({ hasText: "Add material line" });
-  await addDialog.getByPlaceholder("Search materials").fill("ZZZ Playwright Shipping Material");
-  await expect(addDialog.getByRole("button", { name: "ZZZ Playwright Shipping Material" })).toHaveCount(0);
+  await expect(page.getByText("Add material line")).toBeVisible();
+  searchInput = page.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.fill("ZZZ Playwright Shipping Material");
+  await expect(page.getByRole("button", { name: "ZZZ Playwright Shipping Material" })).toHaveCount(0);
 });
 
 test("variant details use searchable equipment add picker and suppress duplicates", async ({ page, request }) => {
@@ -100,7 +106,8 @@ test("variant details persist production and shipping template assignments", asy
   await page.goto(bootstrap.variantUrl);
 
   await page.getByRole("button", { name: "Assign production template" }).click();
-  const productionDialog = page.getByRole("dialog").filter({ hasText: "Assign production template" });
+  const productionDialog = page.locator("dialog").filter({ hasText: "Assign production template" });
+  await expect(productionDialog).toBeVisible();
   await productionDialog.getByLabel("Production template").selectOption({ label: "Playwright Production Template" });
   await productionDialog.getByRole("button", { name: "Assign", exact: true }).click();
 
@@ -113,7 +120,8 @@ test("variant details persist production and shipping template assignments", asy
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Set override" }).click();
-  const shippingDialog = page.getByRole("dialog").filter({ hasText: "Assign shipping template override" });
+  const shippingDialog = page.locator("dialog").filter({ hasText: "Assign shipping template override" });
+  await expect(shippingDialog).toBeVisible();
   await shippingDialog.getByLabel("Shipping template").selectOption({ label: "Playwright Shipping Override Template" });
   await shippingDialog.getByRole("button", { name: "Set override", exact: true }).click();
 

@@ -29,7 +29,7 @@ export default defineConfig({
       PLAYWRIGHT_BYPASS_ENABLED: "true",
     },
     url: baseURL,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: false,
     timeout: 120_000,
   },
 });

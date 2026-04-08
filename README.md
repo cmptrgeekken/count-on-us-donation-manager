@@ -39,6 +39,16 @@ shopify app init --template=https://github.com/Shopify/shopify-app-template-remi
 shopify app dev
 ```
 
+### Seed Data
+
+Use the deterministic seed script to generate multi-month dev data for UI testing:
+
+```shell
+npm run seed:dev -- --shop=your-dev-store.myshopify.com --reset
+```
+
+See [docs/seed-data.md](./docs/seed-data.md) for defaults and advanced options.
+
 
 
 Local development is powered by [the Shopify CLI](https://shopify.dev/docs/apps/tools/cli). It logs into your partners account, connects to an app, provides environment variables, updates remote config, creates a tunnel and provides commands to generate extensions.

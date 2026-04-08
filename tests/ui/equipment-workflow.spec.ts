@@ -9,8 +9,8 @@ test("equipment can be created, deactivated, and reactivated on the real route",
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(bootstrap.equipmentUrl);
 
-  await page.locator("ui-title-bar button").filter({ hasText: "New equipment" }).click();
-  const equipmentDialog = page.getByRole("dialog").filter({ hasText: "New equipment" });
+  await page.locator("s-page").getByRole("button", { name: "New equipment" }).click();
+  const equipmentDialog = page.locator("dialog").filter({ hasText: "New equipment" });
   await expect(equipmentDialog).toBeVisible();
 
   await equipmentDialog.getByLabel("Name").fill("Playwright Equipment UI Fresh");
@@ -24,7 +24,7 @@ test("equipment can be created, deactivated, and reactivated on the real route",
   await expect(equipmentRow).toBeVisible();
 
   await equipmentRow.getByRole("button", { name: "Deactivate" }).click();
-  const deactivateDialog = page.getByRole("dialog").filter({ hasText: "Deactivate equipment" });
+  const deactivateDialog = page.locator("dialog").filter({ hasText: "Deactivate equipment" });
   await expect(deactivateDialog).toBeVisible();
   await deactivateDialog.getByRole("button", { name: "Deactivate" }).click();
 
@@ -44,8 +44,8 @@ test("unused equipment can be deleted and used equipment hide the delete action"
   const bootstrap = await bootstrapResponse.json();
   await page.goto(bootstrap.equipmentUrl);
 
-  await page.locator("ui-title-bar button").filter({ hasText: "New equipment" }).click();
-  const equipmentDialog = page.getByRole("dialog").filter({ hasText: "New equipment" });
+  await page.locator("s-page").getByRole("button", { name: "New equipment" }).click();
+  const equipmentDialog = page.locator("dialog").filter({ hasText: "New equipment" });
   await equipmentDialog.getByLabel("Name").fill("Playwright Equipment UI Delete");
   await equipmentDialog.getByLabel(/Hourly rate/).fill("45.00");
   await equipmentDialog.getByRole("button", { name: "Create" }).click();
@@ -54,7 +54,7 @@ test("unused equipment can be deleted and used equipment hide the delete action"
   const deletableRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Equipment UI Delete") });
   await expect(deletableRow).toBeVisible();
   await deletableRow.getByRole("button", { name: "Delete" }).click();
-  const deleteDialog = page.getByRole("dialog").filter({ hasText: "Delete equipment" });
+  const deleteDialog = page.locator("dialog").filter({ hasText: "Delete equipment" });
   await deleteDialog.getByRole("button", { name: "Delete" }).click();
   await expect(page.getByText("Equipment deleted.")).toBeVisible();
   await expect(deletableRow).toHaveCount(0);
@@ -71,8 +71,8 @@ test("equipment can save purchase link and equipment cost metadata", async ({ pa
   const bootstrap = await bootstrapResponse.json();
   await page.goto(bootstrap.equipmentUrl);
 
-  await page.locator("ui-title-bar button").filter({ hasText: "New equipment" }).click();
-  const equipmentDialog = page.getByRole("dialog").filter({ hasText: "New equipment" });
+  await page.locator("s-page").getByRole("button", { name: "New equipment" }).click();
+  const equipmentDialog = page.locator("dialog").filter({ hasText: "New equipment" });
   await expect(equipmentDialog).toBeVisible();
 
   await equipmentDialog.getByLabel("Name").fill("Playwright Equipment UI Metadata");
@@ -88,7 +88,7 @@ test("equipment can save purchase link and equipment cost metadata", async ({ pa
   await expect(equipmentRow.getByRole("link", { name: "Open" })).toHaveAttribute("href", "https://example.com/equipment");
 
   await equipmentRow.getByRole("button", { name: "Edit" }).click();
-  const editDialog = page.getByRole("dialog").filter({ hasText: "Edit equipment" });
+  const editDialog = page.locator("dialog").filter({ hasText: "Edit equipment" });
   await expect(editDialog).toBeVisible();
   await expect(editDialog.getByLabel("Equipment purchase link")).toHaveValue("https://example.com/equipment");
   await expect(editDialog.getByLabel(/Equipment cost/)).toHaveValue("1200.00");

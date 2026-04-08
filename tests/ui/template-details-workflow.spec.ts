@@ -38,7 +38,9 @@ test("template details default new yield-based material lines to 1", async ({ pa
   await page.goto(bootstrap.templateUrl);
 
   await page.getByRole("button", { name: "Add material" }).click();
-  await page.getByPlaceholder("Search materials").click();
+  const searchInput = page.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.click();
   await page.getByRole("button", { name: "Fixture Backer" }).click();
 
   await expect(page.getByLabel("Yield (units produced per purchased unit)")).toHaveValue("1");
@@ -54,7 +56,8 @@ test("template details can set a default shipping template", async ({ page, requ
   const saveButton = page.locator("ui-save-bar button", { hasText: "Save" });
   const defaultShippingSelect = page.getByLabel("Default shipping template");
 
-  await defaultShippingSelect.selectOption(bootstrap.shippingTemplateBId);
+  await expect(defaultShippingSelect).toBeEnabled();
+  await defaultShippingSelect.selectOption({ label: "Playwright Shipping Template B" });
   await expect(defaultShippingSelect).toHaveValue(bootstrap.shippingTemplateBId);
   const saveResponse = page.waitForResponse(
     (response) =>
@@ -78,14 +81,18 @@ test("template details only offer materials matching the template type", async (
 
   await page.goto(bootstrap.templateUrl);
   await page.getByRole("button", { name: "Add material" }).click();
-  await page.getByPlaceholder("Search materials").click();
+  let searchInput = page.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.click();
   await expect(page.getByRole("button", { name: "Fixture Backer" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Fixture Shipping Mailer" })).toHaveCount(0);
   await page.getByRole("button", { name: "Cancel" }).click();
 
   await page.goto(bootstrap.shippingTemplateUrl);
   await page.getByRole("button", { name: "Add material" }).click();
-  await page.getByPlaceholder("Search materials").click();
+  searchInput = page.getByPlaceholder("Search materials");
+  await expect(searchInput).toBeVisible();
+  await searchInput.click();
   await expect(page.getByRole("button", { name: "Fixture Shipping Mailer" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Fixture Backer" })).toHaveCount(0);
 });

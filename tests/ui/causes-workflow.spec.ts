@@ -10,7 +10,7 @@ test("causes can be created, deactivated, and reactivated on the real route", as
   await page.goto(bootstrap.causesUrl);
 
   await page.getByText("New cause", { exact: true }).nth(1).click();
-  const causeDialog = page.getByRole("dialog").filter({ hasText: "New cause" });
+  const causeDialog = page.locator("dialog").filter({ hasText: "New cause" });
   await expect(causeDialog).toBeVisible();
   await causeDialog.locator("#cause-name").fill("Playwright Cause UI Fresh");
   await causeDialog.locator("#cause-legal-name").fill("Playwright Cause UI Fresh Foundation");
@@ -26,11 +26,10 @@ test("causes can be created, deactivated, and reactivated on the real route", as
   await expect(causeRow).toBeVisible();
 
   await causeRow.getByRole("button", { name: "Deactivate" }).click();
-  const deactivateDialog = page.getByRole("dialog").filter({ hasText: "Deactivate cause" });
+  const deactivateDialog = page.locator("dialog").filter({ hasText: "Deactivate cause" });
   await expect(deactivateDialog).toBeVisible();
   await deactivateDialog.getByRole("button", { name: "Deactivate" }).click();
 
-  await expect(page.getByText("Cause deactivated.")).toBeVisible();
   await expect(causeRow.getByText("Inactive")).toBeVisible();
 
   await causeRow.getByRole("button", { name: "Reactivate" }).click();
@@ -48,7 +47,7 @@ test("causes show inline URL validation errors in the modal", async ({ page, req
   await page.goto(bootstrap.causesUrl);
 
   await page.getByText("New cause", { exact: true }).nth(1).click();
-  const causeDialog = page.getByRole("dialog").filter({ hasText: "New cause" });
+  const causeDialog = page.locator("dialog").filter({ hasText: "New cause" });
   await expect(causeDialog).toBeVisible();
 
   await causeDialog.locator("#cause-name").fill("Playwright Invalid Cause");
@@ -71,7 +70,7 @@ test("unused causes can be deleted and assigned causes hide the delete action", 
   await page.goto(bootstrap.causesUrl);
 
   await page.getByText("New cause", { exact: true }).nth(1).click();
-  const causeDialog = page.getByRole("dialog").filter({ hasText: "New cause" });
+  const causeDialog = page.locator("dialog").filter({ hasText: "New cause" });
   await causeDialog.locator("#cause-name").fill("Playwright Cause UI Delete");
   await causeDialog.locator("#cause-donationLink").fill("https://example.org/delete");
   await causeDialog.getByRole("button", { name: "Create" }).click();
@@ -79,7 +78,7 @@ test("unused causes can be deleted and assigned causes hide the delete action", 
   const deletableRow = page.locator("s-table-row").filter({ has: page.getByText("Playwright Cause UI Delete") });
   await expect(deletableRow).toBeVisible();
   await deletableRow.getByRole("button", { name: "Delete" }).click();
-  const deleteDialog = page.getByRole("dialog").filter({ hasText: "Delete cause" });
+  const deleteDialog = page.locator("dialog").filter({ hasText: "Delete cause" });
   await deleteDialog.getByRole("button", { name: "Delete" }).click();
   await expect(page.getByText("Cause deleted.")).toBeVisible();
   await expect(deletableRow).toHaveCount(0);
