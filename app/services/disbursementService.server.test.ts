@@ -157,4 +157,33 @@ describe("logDisbursement", () => {
       key: expect.stringContaining("receipt.pdf"),
     });
   });
+
+  it("rejects unsupported receipt types before upload", async () => {
+    const storage = {
+      put: vi.fn().mockResolvedValue({ key: "receipt-key" }),
+      getSignedReadUrl: vi.fn(),
+      delete: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await expect(
+      logDisbursement(
+        "shop-1",
+        {
+          periodId: "period-1",
+          causeId: "cause-1",
+          amount: "10.00",
+          paidAt: new Date("2026-04-08T00:00:00.000Z"),
+          paymentMethod: "ACH",
+          receipt: {
+            filename: "receipt.gif",
+            contentType: "image/gif",
+            body: new Uint8Array(10),
+          },
+        },
+        { storage: storage as any },
+      ),
+    ).rejects.toThrow("Receipt must be a PDF, PNG, or JPEG file.");
+
+    expect(storage.put).not.toHaveBeenCalled();
+  });
 });

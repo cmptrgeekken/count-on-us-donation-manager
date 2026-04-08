@@ -4,7 +4,11 @@ import { useFetcher, useLoaderData, useRouteError, useSearchParams } from "@remi
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db.server";
-import { logDisbursement, MAX_RECEIPT_BYTES } from "../services/disbursementService.server";
+import {
+  ACCEPTED_RECEIPT_CONTENT_TYPES,
+  logDisbursement,
+  MAX_RECEIPT_BYTES,
+} from "../services/disbursementService.server";
 import { closeReportingPeriod } from "../services/reportingPeriodService.server";
 import { createReceiptStorage } from "../services/receiptStorage.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
@@ -422,6 +426,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
+    if (
+      receiptEntry instanceof File &&
+      receiptEntry.size > 0 &&
+      !ACCEPTED_RECEIPT_CONTENT_TYPES.has(receiptEntry.type || "application/octet-stream")
+    ) {
+      return Response.json(
+        {
+          ok: false,
+          message: "Receipt must be a PDF, PNG, or JPEG file.",
+          fieldErrors: { receipt: ["Receipt must be a PDF, PNG, or JPEG file."] },
+        },
+        { status: 400 },
+      );
+    }
+
     try {
       await logDisbursement(shopId, {
         periodId: parsed.data.periodId,
@@ -751,6 +770,9 @@ export default function ReportingPage() {
                         <label htmlFor="disbursement-receipt">Receipt</label>
                         <input id="disbursement-receipt" name="receipt" type="file" accept=".pdf,image/*" />
                         <s-text color="subdued">Optional. PDF or image, up to 10 MB.</s-text>
+                        <s-text color="subdued">
+                          This receipt may be publicly visible. Redact all personal information before uploading.
+                        </s-text>
                         {disbursementFetcher.data?.fieldErrors?.receipt?.map((message) => (
                           <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
                         ))}

@@ -11,6 +11,11 @@ type DbClient = typeof prisma;
 
 const ZERO = new Prisma.Decimal(0);
 export const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
+export const ACCEPTED_RECEIPT_CONTENT_TYPES = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+]);
 
 export type DisbursementReceiptInput = {
   filename: string;
@@ -69,6 +74,10 @@ export async function logDisbursement(
   if (receipt) {
     if (receipt.body.byteLength > MAX_RECEIPT_BYTES) {
       throw new Error("Receipt file must be 10 MB or smaller.");
+    }
+
+    if (!ACCEPTED_RECEIPT_CONTENT_TYPES.has(receipt.contentType)) {
+      throw new Error("Receipt must be a PDF, PNG, or JPEG file.");
     }
 
     await storage.put({
