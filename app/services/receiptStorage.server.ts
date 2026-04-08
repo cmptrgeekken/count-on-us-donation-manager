@@ -3,6 +3,7 @@ import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { PutObjectCommand, DeleteObjectCommand, GetObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { DEV_RECEIPT_ROUTE_PATH } from "../utils/receipt-routes";
 
 export type ReceiptStorageDriver = "s3" | "local" | "memory";
 
@@ -143,7 +144,7 @@ class LocalReceiptStorage implements ReceiptStorage {
       expires: String(expires),
       signature,
     });
-    return `${getAppBaseUrl()}/dev/receipt-file?${params.toString()}`;
+    return `${getAppBaseUrl()}${DEV_RECEIPT_ROUTE_PATH}?${params.toString()}`;
   }
 
   async delete(input: { key: string }) {

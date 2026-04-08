@@ -17,6 +17,29 @@ export const ACCEPTED_RECEIPT_CONTENT_TYPES = new Set([
   "image/png",
 ]);
 
+export const disbursementErrorCodes = {
+  NEGATIVE_AMOUNT: "NEGATIVE_AMOUNT",
+  ZERO_TOTAL: "ZERO_TOTAL",
+  RECEIPT_TOO_LARGE: "RECEIPT_TOO_LARGE",
+  RECEIPT_INVALID_TYPE: "RECEIPT_INVALID_TYPE",
+  PERIOD_NOT_FOUND: "PERIOD_NOT_FOUND",
+  PERIOD_NOT_CLOSED: "PERIOD_NOT_CLOSED",
+  ALLOCATION_NOT_FOUND: "ALLOCATION_NOT_FOUND",
+  ALLOCATED_EXCEEDS_REMAINING: "ALLOCATED_EXCEEDS_REMAINING",
+} as const;
+
+type DisbursementErrorCode = (typeof disbursementErrorCodes)[keyof typeof disbursementErrorCodes];
+
+export class DisbursementError extends Error {
+  constructor(
+    public code: DisbursementErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "DisbursementError";
+  }
+}
+
 export type DisbursementReceiptInput = {
   filename: string;
   contentType: string;
@@ -66,11 +89,11 @@ export async function logDisbursement(
   const amount = allocatedAmount.add(extraContributionAmount).add(feesCoveredAmount);
 
   if (allocatedAmount.lessThan(ZERO) || extraContributionAmount.lessThan(ZERO) || feesCoveredAmount.lessThan(ZERO)) {
-    throw new Error("Disbursement amounts cannot be negative.");
+    throw new DisbursementError(disbursementErrorCodes.NEGATIVE_AMOUNT, "Disbursement amounts cannot be negative.");
   }
 
   if (amount.lessThanOrEqualTo(ZERO)) {
-    throw new Error("At least one disbursement amount must be greater than 0.");
+    throw new DisbursementError(disbursementErrorCodes.ZERO_TOTAL, "At least one disbursement amount must be greater than 0.");
   }
 
   const disbursementId = randomUUID();
@@ -86,11 +109,11 @@ export async function logDisbursement(
 
   if (receipt) {
     if (receipt.body.byteLength > MAX_RECEIPT_BYTES) {
-      throw new Error("Receipt file must be 10 MB or smaller.");
+      throw new DisbursementError(disbursementErrorCodes.RECEIPT_TOO_LARGE, "Receipt file must be 10 MB or smaller.");
     }
 
     if (!ACCEPTED_RECEIPT_CONTENT_TYPES.has(receipt.contentType)) {
-      throw new Error("Receipt must be a PDF, PNG, or JPEG file.");
+      throw new DisbursementError(disbursementErrorCodes.RECEIPT_INVALID_TYPE, "Receipt must be a PDF, PNG, or JPEG file.");
     }
 
     await storage.put({
@@ -114,11 +137,11 @@ export async function logDisbursement(
       });
 
       if (!period) {
-        throw new Error("Reporting period not found.");
+        throw new DisbursementError(disbursementErrorCodes.PERIOD_NOT_FOUND, "Reporting period not found.");
       }
 
       if (period.status !== "CLOSED") {
-        throw new Error("Disbursements can only be logged for closed reporting periods.");
+        throw new DisbursementError(disbursementErrorCodes.PERIOD_NOT_CLOSED, "Disbursements can only be logged for closed reporting periods.");
       }
 
       const allocation = await tx.causeAllocation.findFirst({
@@ -137,13 +160,13 @@ export async function logDisbursement(
       });
 
       if (!allocation) {
-        throw new Error("Cause allocation not found for this reporting period.");
+        throw new DisbursementError(disbursementErrorCodes.ALLOCATION_NOT_FOUND, "Cause allocation not found for this reporting period.");
       }
 
       const remaining = allocation.allocated.sub(allocation.disbursed);
       const spendableRemaining = floorCurrency(remaining);
       if (allocatedAmount.greaterThan(spendableRemaining)) {
-        throw new Error("Allocated amount cannot exceed the remaining allocation.");
+        throw new DisbursementError(disbursementErrorCodes.ALLOCATED_EXCEEDS_REMAINING, "Allocated amount cannot exceed the remaining allocation.");
       }
 
       const disbursement = await tx.disbursement.create({

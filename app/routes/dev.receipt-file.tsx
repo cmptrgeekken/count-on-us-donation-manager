@@ -1,5 +1,8 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { readLocalReceiptFile, verifyReceiptSignature } from "../services/receiptStorage.server";
+import { DEV_RECEIPT_ROUTE_PATH } from "../utils/receipt-routes";
+
+export { DEV_RECEIPT_ROUTE_PATH };
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   if (process.env.NODE_ENV === "production" || (process.env.RECEIPT_STORAGE_DRIVER ?? "local") !== "local") {
@@ -34,6 +37,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       "Content-Type": file.contentType,
       "Content-Length": String(file.size),
       "Cache-Control": "private, max-age=60",
+      "Content-Disposition": "inline",
+      "X-Content-Type-Options": "nosniff",
     },
   });
 };

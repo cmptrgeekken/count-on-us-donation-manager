@@ -6,6 +6,8 @@ import { z } from "zod";
 import { prisma } from "../db.server";
 import {
   ACCEPTED_RECEIPT_CONTENT_TYPES,
+  DisbursementError,
+  disbursementErrorCodes,
   logDisbursement,
   MAX_RECEIPT_BYTES,
 } from "../services/disbursementService.server";
@@ -100,7 +102,11 @@ const disbursementSchema = z.object({
     .string()
     .trim()
     .refine((value) => value === "" || (!Number.isNaN(Number(value)) && Number(value) >= 0), "Fees covered must be 0 or greater."),
-  paidAt: z.string().trim().min(1, "Paid date is required."),
+  paidAt: z
+    .string()
+    .trim()
+    .min(1, "Paid date is required.")
+    .refine((value) => !Number.isNaN(Date.parse(value)), "Paid date must be a valid date."),
   paymentMethod: z.string().trim().min(1, "Payment method is required."),
   referenceId: z.string().trim().optional(),
   receipt: z.string().trim().optional(),
@@ -496,17 +502,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to log disbursement.";
       const fieldErrors: ReportingActionData["fieldErrors"] =
-        message.includes("Allocated amount cannot exceed the remaining allocation.")
-          ? { allocatedAmount: [message] }
-          : message.includes("At least one disbursement amount must be greater than 0.")
+        error instanceof DisbursementError
+          ? error.code === disbursementErrorCodes.ALLOCATED_EXCEEDS_REMAINING
             ? { allocatedAmount: [message] }
-          : message.includes("Payment method")
-            ? { paymentMethod: [message] }
-            : message.includes("closed reporting periods")
-              ? { periodId: [message] }
-              : message.includes("PDF, PNG, or JPEG")
+            : error.code === disbursementErrorCodes.ZERO_TOTAL
+              ? { allocatedAmount: [message] }
+              : error.code === disbursementErrorCodes.RECEIPT_TOO_LARGE || error.code === disbursementErrorCodes.RECEIPT_INVALID_TYPE
                 ? { receipt: [message] }
-                : undefined;
+                : error.code === disbursementErrorCodes.PERIOD_NOT_CLOSED || error.code === disbursementErrorCodes.PERIOD_NOT_FOUND
+                  ? { periodId: [message] }
+                  : error.code === disbursementErrorCodes.ALLOCATION_NOT_FOUND
+                    ? { causeId: [message] }
+                    : undefined
+          : undefined;
 
       return Response.json(
         {
@@ -550,6 +558,8 @@ export default function ReportingPage() {
 
   const selectedPeriod = summary?.period ?? null;
   const statusMessage = closeFetcher.data?.message ?? disbursementFetcher.data?.message ?? "";
+  const disbursementStatusMessage =
+    disbursementFetcher.data && !disbursementFetcher.data.ok ? disbursementFetcher.data.message : "";
 
   const periodOptions = useMemo(
     () =>
@@ -826,19 +836,18 @@ export default function ReportingPage() {
                     >
                       <input type="hidden" name="intent" value="log-disbursement" />
                       <input type="hidden" name="periodId" value={selectedPeriod.id} />
+                      <div
+                        aria-live="polite"
+                        aria-atomic="true"
+                        style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
+                      >
+                        {disbursementStatusMessage}
+                      </div>
 
                       {disbursementFetcher.data && !disbursementFetcher.data.ok ? (
-                        <div
-                          style={{
-                            border: "1px solid #d95c5c",
-                            background: "#fff4f4",
-                            color: "#8e1f0b",
-                            borderRadius: "0.75rem",
-                            padding: "0.85rem 1rem",
-                          }}
-                        >
-                          {disbursementFetcher.data.message}
-                        </div>
+                        <s-banner tone="critical">
+                          <s-text>{disbursementFetcher.data.message}</s-text>
+                        </s-banner>
                       ) : null}
 
                       <div style={{ display: "grid", gap: "0.35rem" }}>
