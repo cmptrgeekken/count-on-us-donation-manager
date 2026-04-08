@@ -17,6 +17,7 @@
     "docker-start": "npm run setup && npm run start",
     "setup": "prisma generate && prisma migrate deploy",
     "prisma:generate:best-effort": "node ./scripts/prisma-generate-best-effort.mjs",
+    "seed:dev": "node ./scripts/seed-dev.mjs",
     "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
