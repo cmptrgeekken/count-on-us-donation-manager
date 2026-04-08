@@ -31,3 +31,4 @@ database.sqlite
 playwright-report/
 test-results/
 playwright/.cache/
+.storage/

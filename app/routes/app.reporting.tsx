@@ -2,8 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 import { prisma } from "../db.server";
+import { logDisbursement, MAX_RECEIPT_BYTES } from "../services/disbursementService.server";
 import { closeReportingPeriod } from "../services/reportingPeriodService.server";
+import { createReceiptStorage } from "../services/receiptStorage.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
 
@@ -35,6 +38,46 @@ type ChargeRow = {
   amount: string;
   processedAt: string | null;
 };
+
+type DisbursementRow = {
+  id: string;
+  causeId: string;
+  causeName: string;
+  amount: string;
+  paidAt: string;
+  paymentMethod: string;
+  referenceId: string | null;
+  receiptUrl: string | null;
+};
+
+type DisbursementFormState = {
+  periodId: string;
+  causeId: string;
+  amount: string;
+  paidAt: string;
+  paymentMethod: string;
+  referenceId: string;
+  receipt: string;
+};
+
+type ReportingActionData = {
+  ok: boolean;
+  message: string;
+  fieldErrors?: Partial<Record<keyof DisbursementFormState, string[]>>;
+};
+
+const disbursementSchema = z.object({
+  periodId: z.string().trim().cuid("Reporting period id is invalid."),
+  causeId: z.string().trim().cuid("Cause id is invalid."),
+  amount: z
+    .string()
+    .trim()
+    .refine((value) => !Number.isNaN(Number(value)) && Number(value) > 0, "Amount must be greater than 0."),
+  paidAt: z.string().trim().min(1, "Paid date is required."),
+  paymentMethod: z.string().trim().min(1, "Payment method is required."),
+  referenceId: z.string().trim().optional(),
+  receipt: z.string().trim().optional(),
+});
 
 function addAllocation(
   allocations: Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>,
@@ -101,101 +144,118 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
-  const selectedPeriod =
-    periods.find((period) => period.id === requestedPeriodId) ?? periods[0];
+  const selectedPeriod = periods.find((period) => period.id === requestedPeriodId) ?? periods[0];
 
-  const [snapshotLines, closedAllocations, expensesSummary, chargesSummary, charges] = await Promise.all([
-    prisma.orderSnapshotLine.findMany({
-      where: {
-        shopId,
-        snapshot: {
-          createdAt: {
+  const [snapshotLines, closedAllocations, expensesSummary, chargesSummary, charges, disbursements] =
+    await Promise.all([
+      prisma.orderSnapshotLine.findMany({
+        where: {
+          shopId,
+          snapshot: {
+            createdAt: {
+              gte: selectedPeriod.startDate,
+              lt: selectedPeriod.endDate,
+            },
+          },
+        },
+        select: {
+          netContribution: true,
+          adjustments: { select: { netContribAdj: true } },
+          causeAllocations: {
+            select: { causeId: true, causeName: true, is501c3: true, amount: true },
+          },
+        },
+      }),
+      prisma.causeAllocation.findMany({
+        where: {
+          shopId,
+          periodId: selectedPeriod.id,
+        },
+        select: {
+          causeId: true,
+          causeName: true,
+          is501c3: true,
+          allocated: true,
+          disbursed: true,
+        },
+      }),
+      prisma.businessExpense.aggregate({
+        where: {
+          shopId,
+          expenseDate: {
             gte: selectedPeriod.startDate,
             lt: selectedPeriod.endDate,
           },
         },
-      },
-      select: {
-        netContribution: true,
-        adjustments: { select: { netContribAdj: true } },
-        causeAllocations: {
-          select: { causeId: true, causeName: true, is501c3: true, amount: true },
+        _sum: { amount: true },
+      }),
+      prisma.shopifyChargeTransaction.aggregate({
+        where: {
+          shopId,
+          OR: [
+            { periodId: selectedPeriod.id },
+            {
+              periodId: null,
+              processedAt: {
+                gte: selectedPeriod.startDate,
+                lt: selectedPeriod.endDate,
+              },
+            },
+          ],
         },
-      },
-    }),
-    prisma.causeAllocation.findMany({
-      where: {
-        shopId,
-        periodId: selectedPeriod.id,
-      },
-      select: {
-        causeId: true,
-        causeName: true,
-        is501c3: true,
-        allocated: true,
-        disbursed: true,
-      },
-    }),
-    prisma.businessExpense.aggregate({
-      where: {
-        shopId,
-        expenseDate: {
-          gte: selectedPeriod.startDate,
-          lt: selectedPeriod.endDate,
+        _sum: { amount: true },
+      }),
+      prisma.shopifyChargeTransaction.findMany({
+        where: {
+          shopId,
+          OR: [
+            { periodId: selectedPeriod.id },
+            {
+              periodId: null,
+              processedAt: {
+                gte: selectedPeriod.startDate,
+                lt: selectedPeriod.endDate,
+              },
+            },
+          ],
         },
-      },
-      _sum: { amount: true },
-    }),
-    prisma.shopifyChargeTransaction.aggregate({
-      where: {
-        shopId,
-        OR: [
-          { periodId: selectedPeriod.id },
-          {
-            periodId: null,
-            processedAt: {
-              gte: selectedPeriod.startDate,
-              lt: selectedPeriod.endDate,
+        orderBy: [{ processedAt: "desc" }, { createdAt: "desc" }],
+        take: 15,
+        select: {
+          id: true,
+          description: true,
+          amount: true,
+          processedAt: true,
+        },
+      }),
+      prisma.disbursement.findMany({
+        where: {
+          shopId,
+          periodId: selectedPeriod.id,
+        },
+        orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
+        select: {
+          id: true,
+          causeId: true,
+          amount: true,
+          paidAt: true,
+          paymentMethod: true,
+          referenceId: true,
+          receiptFileKey: true,
+          cause: {
+            select: {
+              name: true,
             },
           },
-        ],
-      },
-      _sum: { amount: true },
-    }),
-    prisma.shopifyChargeTransaction.findMany({
-      where: {
-        shopId,
-        OR: [
-          { periodId: selectedPeriod.id },
-          {
-            periodId: null,
-            processedAt: {
-              gte: selectedPeriod.startDate,
-              lt: selectedPeriod.endDate,
-            },
-          },
-        ],
-      },
-      orderBy: [{ processedAt: "desc" }, { createdAt: "desc" }],
-      take: 15,
-      select: {
-        id: true,
-        description: true,
-        amount: true,
-        processedAt: true,
-      },
-    }),
-  ]);
+        },
+      }),
+    ]);
 
   const allocationMap = new Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>();
-
   let totalNetContribution = ZERO;
 
   for (const line of snapshotLines) {
-    const adjustmentTotal = line.adjustments.reduce(
-      (sum, adj) => sum.add(adj.netContribAdj),
-      ZERO,
-    );
+    const adjustmentTotal = line.adjustments.reduce((sum, adj) => sum.add(adj.netContribAdj), ZERO);
     totalNetContribution = totalNetContribution.add(line.netContribution).add(adjustmentTotal);
 
     for (const allocation of line.causeAllocations) {
@@ -216,7 +276,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const expenseTotal = expensesSummary._sum.amount ?? ZERO;
   const shopifyCharges = chargesSummary._sum.amount ?? ZERO;
-
   const useClosedAllocations = selectedPeriod.status === "CLOSED" && closedAllocations.length > 0;
   const allocationRows = useClosedAllocations
     ? closedAllocations.map((allocation) => ({
@@ -242,6 +301,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const deductionPool = expenseTotal.add(allocation501c3Total);
   const taxableExposure = totalNetContribution.sub(deductionPool);
   const widgetTaxSuppressed = taxableExposure.lessThanOrEqualTo(0);
+  const receiptStorage = createReceiptStorage();
+  const disbursementRows = await Promise.all(
+    disbursements.map(async (disbursement) => ({
+      id: disbursement.id,
+      causeId: disbursement.causeId,
+      causeName: disbursement.cause.name,
+      amount: disbursement.amount.toString(),
+      paidAt: disbursement.paidAt.toISOString(),
+      paymentMethod: disbursement.paymentMethod,
+      referenceId: disbursement.referenceId ?? null,
+      receiptUrl: disbursement.receiptFileKey
+        ? await receiptStorage.getSignedReadUrl({
+            key: disbursement.receiptFileKey,
+            expiresInSeconds: 60 * 60,
+          })
+        : null,
+    })),
+  );
 
   return Response.json({
     periods: periods.map<PeriodRow>((period) => ({
@@ -290,6 +367,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         amount: charge.amount.toString(),
         processedAt: charge.processedAt?.toISOString() ?? null,
       })),
+      disbursements: disbursementRows,
     },
   });
 };
@@ -310,15 +388,81 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: true, message: "Reporting period closed." });
   }
 
+  if (intent === "log-disbursement") {
+    const receiptEntry = formData.get("receipt");
+    const parsed = disbursementSchema.safeParse({
+      periodId: formData.get("periodId")?.toString() ?? "",
+      causeId: formData.get("causeId")?.toString() ?? "",
+      amount: formData.get("amount")?.toString() ?? "",
+      paidAt: formData.get("paidAt")?.toString() ?? "",
+      paymentMethod: formData.get("paymentMethod")?.toString() ?? "",
+      referenceId: formData.get("referenceId")?.toString() ?? "",
+      receipt: receiptEntry instanceof File ? receiptEntry.name : "",
+    });
+
+    if (!parsed.success) {
+      return Response.json(
+        {
+          ok: false,
+          message: parsed.error.issues[0]?.message ?? "Invalid disbursement.",
+          fieldErrors: parsed.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+
+    if (receiptEntry instanceof File && receiptEntry.size > MAX_RECEIPT_BYTES) {
+      return Response.json(
+        {
+          ok: false,
+          message: "Receipt file must be 10 MB or smaller.",
+          fieldErrors: { receipt: ["Receipt file must be 10 MB or smaller."] },
+        },
+        { status: 400 },
+      );
+    }
+
+    try {
+      await logDisbursement(shopId, {
+        periodId: parsed.data.periodId,
+        causeId: parsed.data.causeId,
+        amount: parsed.data.amount,
+        paidAt: new Date(parsed.data.paidAt),
+        paymentMethod: parsed.data.paymentMethod,
+        referenceId: parsed.data.referenceId ?? "",
+        receipt:
+          receiptEntry instanceof File && receiptEntry.size > 0
+            ? {
+                filename: receiptEntry.name,
+                contentType: receiptEntry.type || "application/octet-stream",
+                body: new Uint8Array(await receiptEntry.arrayBuffer()),
+              }
+            : null,
+      });
+
+      return Response.json({ ok: true, message: "Disbursement logged." });
+    } catch (error) {
+      return Response.json(
+        {
+          ok: false,
+          message: error instanceof Error ? error.message : "Unable to log disbursement.",
+        },
+        { status: 400 },
+      );
+    }
+  }
+
   return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 export default function ReportingPage() {
   const { periods, selectedPeriodId, summary } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const closeFetcher = useFetcher<ReportingActionData>();
+  const disbursementFetcher = useFetcher<ReportingActionData>();
   const [searchParams] = useSearchParams();
   const { formatMoney, formatPct, locale } = useAppLocalization();
   const closeDialogRef = useRef<HTMLDialogElement>(null);
+  const disbursementFormRef = useRef<HTMLFormElement>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
 
   useEffect(() => {
@@ -331,8 +475,14 @@ export default function ReportingPage() {
     }
   }, [closeDialogOpen]);
 
+  useEffect(() => {
+    if (disbursementFetcher.data?.ok) {
+      disbursementFormRef.current?.reset();
+    }
+  }, [disbursementFetcher.data]);
+
   const selectedPeriod = summary?.period ?? null;
-  const statusMessage = fetcher.data?.message ?? "";
+  const statusMessage = closeFetcher.data?.message ?? disbursementFetcher.data?.message ?? "";
 
   const periodOptions = useMemo(
     () =>
@@ -354,7 +504,7 @@ export default function ReportingPage() {
     const fd = new FormData();
     fd.append("intent", "close-period");
     fd.append("periodId", selectedPeriod.id);
-    fetcher.submit(fd, { method: "post" });
+    closeFetcher.submit(fd, { method: "post" });
     setCloseDialogOpen(false);
   }
 
@@ -382,6 +532,10 @@ export default function ReportingPage() {
       remaining: remaining.toString(),
     };
   });
+  const disbursementCauseOptions = allocationRows.filter((allocation) =>
+    new Prisma.Decimal(allocation.remaining).greaterThan(0),
+  );
+  const disbursements: DisbursementRow[] = summary.disbursements;
 
   return (
     <>
@@ -403,14 +557,24 @@ export default function ReportingPage() {
       </div>
 
       <s-page>
-        {fetcher.data && !fetcher.data.ok && (
+        {closeFetcher.data && !closeFetcher.data.ok && (
           <s-banner tone="critical">
-            <s-text>{fetcher.data.message}</s-text>
+            <s-text>{closeFetcher.data.message}</s-text>
           </s-banner>
         )}
-        {fetcher.data?.ok && fetcher.data.message && (
+        {closeFetcher.data?.ok && closeFetcher.data.message && (
           <s-banner tone="success">
-            <s-text>{fetcher.data.message}</s-text>
+            <s-text>{closeFetcher.data.message}</s-text>
+          </s-banner>
+        )}
+        {disbursementFetcher.data && !disbursementFetcher.data.ok && (
+          <s-banner tone="critical">
+            <s-text>{disbursementFetcher.data.message}</s-text>
+          </s-banner>
+        )}
+        {disbursementFetcher.data?.ok && disbursementFetcher.data.message && (
+          <s-banner tone="success">
+            <s-text>{disbursementFetcher.data.message}</s-text>
           </s-banner>
         )}
 
@@ -453,7 +617,11 @@ export default function ReportingPage() {
               <s-text>This period is open. Closing will materialize cause allocations and lock the period.</s-text>
             </s-banner>
             <div style={{ marginTop: "0.75rem" }}>
-              <s-button variant="primary" onClick={() => setCloseDialogOpen(true)} disabled={fetcher.state !== "idle"}>
+              <s-button
+                variant="primary"
+                onClick={() => setCloseDialogOpen(true)}
+                disabled={closeFetcher.state !== "idle"}
+              >
                 Close reporting period
               </s-button>
             </div>
@@ -512,6 +680,148 @@ export default function ReportingPage() {
               </s-table-body>
             </s-table>
           </s-section>
+
+          {selectedPeriod?.status === "CLOSED" ? (
+            <>
+              <s-section heading="Log disbursement">
+                <div style={{ display: "grid", gap: "0.75rem" }}>
+                  <s-text color="subdued">
+                    Record funds paid out to a Cause for this closed period. Remaining balances update immediately.
+                  </s-text>
+                  {disbursementCauseOptions.length === 0 ? (
+                    <s-banner tone="info">
+                      <s-text>All available allocations for this period have already been fully disbursed.</s-text>
+                    </s-banner>
+                  ) : (
+                    <disbursementFetcher.Form
+                      ref={disbursementFormRef}
+                      method="post"
+                      encType="multipart/form-data"
+                      style={{ display: "grid", gap: "0.9rem" }}
+                    >
+                      <input type="hidden" name="intent" value="log-disbursement" />
+                      <input type="hidden" name="periodId" value={selectedPeriod.id} />
+
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="disbursement-cause">Cause</label>
+                        <select id="disbursement-cause" name="causeId" defaultValue={disbursementCauseOptions[0]?.causeId ?? ""}>
+                          {disbursementCauseOptions.map((allocation) => (
+                            <option key={allocation.causeId} value={allocation.causeId}>
+                              {allocation.causeName} ({formatMoney(allocation.remaining)} remaining)
+                            </option>
+                          ))}
+                        </select>
+                        {disbursementFetcher.data?.fieldErrors?.causeId?.map((message) => (
+                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                        ))}
+                      </div>
+
+                      <div style={{ display: "grid", gap: "0.9rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))" }}>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="disbursement-amount">Amount</label>
+                          <input id="disbursement-amount" name="amount" type="number" min="0.01" step="0.01" />
+                          {disbursementFetcher.data?.fieldErrors?.amount?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="disbursement-paid-at">Paid date</label>
+                          <input id="disbursement-paid-at" name="paidAt" type="date" defaultValue={new Date().toISOString().slice(0, 10)} />
+                          {disbursementFetcher.data?.fieldErrors?.paidAt?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gap: "0.9rem", gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))" }}>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="disbursement-method">Payment method</label>
+                          <input id="disbursement-method" name="paymentMethod" type="text" placeholder="ACH, check, wire..." />
+                          {disbursementFetcher.data?.fieldErrors?.paymentMethod?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="disbursement-reference">Reference id</label>
+                          <input id="disbursement-reference" name="referenceId" type="text" placeholder="Optional payout or check id" />
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="disbursement-receipt">Receipt</label>
+                        <input id="disbursement-receipt" name="receipt" type="file" accept=".pdf,image/*" />
+                        <s-text color="subdued">Optional. PDF or image, up to 10 MB.</s-text>
+                        {disbursementFetcher.data?.fieldErrors?.receipt?.map((message) => (
+                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                        ))}
+                      </div>
+
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <button
+                          type="submit"
+                          disabled={disbursementFetcher.state !== "idle"}
+                          style={{
+                            borderRadius: "999px",
+                            border: "1px solid #111",
+                            background: "#111",
+                            color: "#fff",
+                            padding: "0.65rem 1rem",
+                            font: "inherit",
+                            cursor: disbursementFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                            opacity: disbursementFetcher.state !== "idle" ? 0.6 : 1,
+                          }}
+                        >
+                          Log disbursement
+                        </button>
+                      </div>
+                    </disbursementFetcher.Form>
+                  )}
+                </div>
+              </s-section>
+
+              <s-section heading="Disbursements">
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header listSlot="primary">Cause</s-table-header>
+                    <s-table-header listSlot="secondary">Paid</s-table-header>
+                    <s-table-header listSlot="secondary">Method</s-table-header>
+                    <s-table-header listSlot="secondary">Reference</s-table-header>
+                    <s-table-header listSlot="secondary">Receipt</s-table-header>
+                    <s-table-header listSlot="labeled" format="currency">Amount</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {disbursements.length === 0 ? (
+                      <s-table-row>
+                        <s-table-cell>No disbursements logged for this period.</s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                      </s-table-row>
+                    ) : (
+                      disbursements.map((disbursement) => (
+                        <s-table-row key={disbursement.id}>
+                          <s-table-cell>{disbursement.causeName}</s-table-cell>
+                          <s-table-cell>{formatDate(disbursement.paidAt, locale)}</s-table-cell>
+                          <s-table-cell>{disbursement.paymentMethod}</s-table-cell>
+                          <s-table-cell>{disbursement.referenceId ?? "—"}</s-table-cell>
+                          <s-table-cell>
+                            {disbursement.receiptUrl ? (
+                              <a href={disbursement.receiptUrl} target="_blank" rel="noreferrer">
+                                View receipt
+                              </a>
+                            ) : "—"}
+                          </s-table-cell>
+                          <s-table-cell>{formatMoney(disbursement.amount)}</s-table-cell>
+                        </s-table-row>
+                      ))
+                    )}
+                  </s-table-body>
+                </s-table>
+              </s-section>
+            </>
+          ) : null}
 
           <s-section heading="Shopify charges">
             <div style={{ display: "grid", gap: "0.5rem" }}>
@@ -632,7 +942,7 @@ export default function ReportingPage() {
             <s-button
               variant="primary"
               tone="critical"
-              disabled={fetcher.state !== "idle"}
+              disabled={closeFetcher.state !== "idle"}
               onClick={closePeriod}
             >
               Close period
