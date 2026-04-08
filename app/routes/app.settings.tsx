@@ -20,6 +20,34 @@ const SHOP_CURRENCY_QUERY = `#graphql
   }
 `;
 
+const TAX_RATE_PRESETS = [
+  {
+    value: "15.30",
+    label: "15.30%",
+    description: "Self-employment tax only baseline.",
+  },
+  {
+    value: "22.00",
+    label: "22.00%",
+    description: "Common federal bracket starting point.",
+  },
+  {
+    value: "25.00",
+    label: "25.00%",
+    description: "Balanced planning estimate for many sole proprietors.",
+  },
+  {
+    value: "30.00",
+    label: "30.00%",
+    description: "Conservative blended estimate.",
+  },
+  {
+    value: "35.00",
+    label: "35.00%",
+    description: "Very conservative placeholder until confirmed.",
+  },
+] as const;
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopId = session.shop;
@@ -390,6 +418,56 @@ export default function Settings() {
                 <s-text>
                   Example: 25 = {formatPct(0.25)}. This is used for estimated reserve reporting only, not tax filing.
                 </s-text>
+                <div style={{ display: "grid", gap: "0.5rem" }}>
+                  <strong>Planning presets</strong>
+                  <s-text>
+                    These are rough starting points for planning only. They are not tax advice, and your real blended rate may differ.
+                  </s-text>
+                  <div style={{ display: "grid", gap: "0.5rem" }}>
+                    {TAX_RATE_PRESETS.map((preset) => (
+                      <div
+                        key={preset.value}
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          gap: "0.75rem",
+                          flexWrap: "wrap",
+                          padding: "0.6rem 0.75rem",
+                          border: "1px solid var(--p-color-border, #d2d5d8)",
+                          borderRadius: "0.75rem",
+                          background: "var(--p-color-bg-surface-secondary, #f6f6f7)",
+                        }}
+                      >
+                        <div style={{ display: "grid", gap: "0.2rem" }}>
+                          <strong>{preset.label}</strong>
+                          <s-text>{preset.description}</s-text>
+                        </div>
+                        <s-button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => setEffectiveTaxRateInput(preset.value)}
+                        >
+                          Use {preset.label}
+                        </s-button>
+                      </div>
+                    ))}
+                  </div>
+                  <s-text>
+                    If you are unsure, start conservative and confirm the rate with your accountant or tax preparer.
+                  </s-text>
+                  <s-text>
+                    U.S. merchants can use the{" "}
+                    <a
+                      href="https://apps.irs.gov/app/tax-withholding-estimator"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      IRS Tax Withholding Estimator
+                    </a>{" "}
+                    as an initial reference point before setting a blended reserve rate here.
+                  </s-text>
+                </div>
                 <div style={{ display: "grid", gap: "0.35rem" }}>
                   <label htmlFor="tax-deduction-mode">Tax deduction mode</label>
                   <select
