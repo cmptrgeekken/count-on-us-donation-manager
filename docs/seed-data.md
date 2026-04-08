@@ -45,3 +45,30 @@ Other seeded rows use a `Seed:` prefix in their name/description fields.
 
 - The catalog sync does not delete local products/variants, so seeded data will persist until removed.
 - Use `--reset` to clear all data for a shop before reseeding.
+
+## Reporting cache smoke test
+
+After seeding, refresh the Phase 4 tax offset cache through the local dev helper route:
+
+```text
+/ui-fixtures/reporting-tax-offset-refresh
+```
+
+Usage options:
+
+- In a normal authenticated local app session, open the route directly while logged into the app.
+- For local bypass-based testing, append `?__playwrightShop=your-dev-store.myshopify.com`.
+
+The route returns the computed:
+
+- `taxableExposure`
+- `deductionPool`
+- `cumulativeNetContrib`
+- `widgetTaxSuppressed`
+
+Recommended E2E flow:
+
+1. Seed deterministic data.
+2. Hit the refresh route.
+3. Confirm the JSON values look reasonable for the seeded scenario.
+4. Open Reporting and verify Track 2 reflects the expected deduction / suppression behavior.

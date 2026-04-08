@@ -44,6 +44,7 @@ export async function startJobQueue(): Promise<void> {
   await jobQueue.schedule("plan.detect.daily", "0 6 * * *", {});
   await jobQueue.schedule("reconciliation.daily", "0 3 * * *", {});
   await jobQueue.schedule("shopify-charges.daily", "0 4 * * *", {});
+  await jobQueue.schedule("reporting.tax-offset.daily", "15 * * * *", {});
 
   // Graceful shutdown
   process.on("SIGTERM", async () => {
