@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   },
   runReconciliation: vi.fn(),
   createReportingPeriodFromPayout: vi.fn(),
+  refreshTaxOffsetCacheForShop: vi.fn(),
   syncShopifyCharges: vi.fn(),
   adminFactory: vi.fn(),
 }));
@@ -36,6 +37,10 @@ vi.mock("../services/reconciliationService.server", () => ({
 
 vi.mock("../services/reportingPeriodService.server", () => ({
   createReportingPeriodFromPayout: mocks.createReportingPeriodFromPayout,
+}));
+
+vi.mock("../services/reportingService.server", () => ({
+  refreshTaxOffsetCacheForShop: mocks.refreshTaxOffsetCacheForShop,
 }));
 
 vi.mock("../services/snapshotService.server", () => ({
@@ -172,6 +177,58 @@ describe("registerAllProcessors", () => {
       expect.objectContaining({
         singletonKey: "shop-2",
         singletonSeconds: 6 * 60 * 60,
+      }),
+    );
+  });
+
+  it("fans hourly tax offset cache refresh out into singleton per-shop jobs", async () => {
+    const boss = createBoss();
+    mocks.prisma.shop.findMany.mockResolvedValue([{ shopId: "shop-1" }, { shopId: "shop-2" }]);
+
+    await registerAllProcessors(boss as any);
+
+    const dailyWorker = boss.workers.get("reporting.tax-offset.daily");
+    expect(dailyWorker).toBeTruthy();
+
+    await dailyWorker!([]);
+
+    expect(boss.send).toHaveBeenNthCalledWith(
+      1,
+      "reporting.tax-offset.shop",
+      { shopId: "shop-1" },
+      expect.objectContaining({
+        singletonKey: "shop-1",
+        singletonSeconds: 60 * 60,
+      }),
+    );
+    expect(boss.send).toHaveBeenNthCalledWith(
+      2,
+      "reporting.tax-offset.shop",
+      { shopId: "shop-2" },
+      expect.objectContaining({
+        singletonKey: "shop-2",
+        singletonSeconds: 60 * 60,
+      }),
+    );
+  });
+
+  it("logs tax offset cache refresh failures per shop and rethrows them", async () => {
+    const boss = createBoss();
+    const error = new Error("Tax cache timeout");
+    mocks.refreshTaxOffsetCacheForShop.mockRejectedValue(error);
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("reporting.tax-offset.shop");
+    expect(worker).toBeTruthy();
+
+    await expect(worker!([{ data: { shopId: "shop-1" } }])).rejects.toThrow("Tax cache timeout");
+    expect(mocks.prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          shopId: "shop-1",
+          action: "TAX_OFFSET_CACHE_REFRESH_FAILED",
+        }),
       }),
     );
   });

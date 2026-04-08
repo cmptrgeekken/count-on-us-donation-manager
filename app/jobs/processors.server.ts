@@ -5,6 +5,7 @@ import { fullSync, incrementalSync } from "../services/catalogSync.server";
 import { processOrderUpdate, processRefund } from "../services/adjustmentService.server";
 import { runReconciliation } from "../services/reconciliationService.server";
 import { createReportingPeriodFromPayout } from "../services/reportingPeriodService.server";
+import { refreshTaxOffsetCacheForShop } from "../services/reportingService.server";
 import { createSnapshot } from "../services/snapshotService.server";
 import { unauthenticated } from "../shopify.server";
 
@@ -19,6 +20,8 @@ const QUEUES = [
   "shopify-charges.daily",
   "shopify-charges.shop",
   "reporting.period.open",
+  "reporting.tax-offset.daily",
+  "reporting.tax-offset.shop",
   "shop.delete",
   "webhook.compliance",
   "catalog.sync",
@@ -171,6 +174,46 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       await createReportingPeriodFromPayout(shopId, payload as any, prisma);
     },
   );
+
+  await boss.work("reporting.tax-offset.daily", async () => {
+    const shops = await prisma.shop.findMany({
+      select: { shopId: true },
+    });
+
+    for (const shop of shops) {
+      await boss.send(
+        "reporting.tax-offset.shop",
+        { shopId: shop.shopId },
+        {
+          singletonKey: shop.shopId,
+          singletonSeconds: 60 * 60,
+        },
+      );
+    }
+  });
+
+  await boss.work<{ shopId: string }>("reporting.tax-offset.shop", async (jobs) => {
+    const job = jobs[0];
+    if (!job) return;
+
+    const { shopId } = job.data;
+    try {
+      await refreshTaxOffsetCacheForShop(shopId, prisma);
+    } catch (error) {
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "TaxOffsetCache",
+          action: "TAX_OFFSET_CACHE_REFRESH_FAILED",
+          actor: "system",
+          payload: {
+            message: error instanceof Error ? error.message : "Unknown tax offset cache refresh failure",
+          },
+        },
+      });
+      throw error;
+    }
+  });
 
   await boss.work<{ shopId: string; deletionJobId: string }>(
     "shop.delete",
