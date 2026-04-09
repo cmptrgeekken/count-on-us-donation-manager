@@ -1,0 +1,81 @@
+# Remaining Issue Review Log
+
+This document tracks the multi-issue implementation pass after the Phase 4 reporting core landed.
+Each section is meant to give a compact review summary, automated/manual test focus, and any follow-up questions.
+
+## Working Order
+
+1. `#69` Standardize admin auth helper usage across app routes
+2. `#70` Standardize Decimal parsing for monetary form inputs
+3. Remaining issues to follow in priority order after the cleanup tranche
+
+## Issue `#69` Review Notes
+
+### Summary
+
+- Replace remaining `/app/*` route uses of `authenticate.admin(...)` with `authenticateAdminRequest(...)`.
+- Keep Shopify admin access only where it is actually needed, with explicit fallback behavior for local fixture mode.
+
+### Files
+
+- `app/routes/app._index.tsx`
+- `app/routes/app.dashboard.tsx`
+- `app/routes/app.provider-connections.tsx`
+- `app/routes/app.settings.tsx`
+- `app/utils/admin-auth.server.test.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `admin-auth.server.test.ts`
+  - local Playwright bypass returns a synthetic session and skips Shopify admin auth
+  - normal requests still call through to Shopify admin auth
+- full `npm test`
+  - regression coverage stays green after the route auth swap
+
+#### Manual
+
+- Open Dashboard, Settings, and Provider Connections through the embedded admin.
+- Confirm the app root still redirects to Dashboard.
+- In local fixture mode, confirm Settings still loads and the refresh-currency action fails gracefully instead of crashing.
+
+## Issue `#70` Review Notes
+
+### Summary
+
+- Remove the remaining money-related `parseFloat(...)` writes from Variant configuration actions.
+- Standardize labor rate and mistake buffer writes onto shared Decimal-based parsing helpers.
+
+### Files
+
+- `app/routes/app.variants.$variantId.tsx`
+- `app/utils/money-parsing.ts`
+- `app/utils/money-parsing.test.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `money-parsing.test.ts`
+  - optional percent parsing returns `null` for blank input
+  - optional percent parsing stores rounded four-decimal rates for percent inputs
+- full `npm test`
+  - existing reporting, receipt, export, and parser coverage remains green after the Decimal parsing cleanup
+
+#### Manual
+
+- On a Variant detail page:
+  - update labor minutes and labor rate
+  - update mistake buffer
+  - save and reload
+  - confirm values persist and display correctly
+- Try invalid values:
+  - negative labor rate
+  - mistake buffer over `100`
+  - invalid numeric text
+  - confirm user-facing validation remains intact
+
+## Pending Questions
+
+- None yet for the cleanup tranche.

@@ -3,10 +3,10 @@ import type { LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useLoaderData, useRouteError } from "@remix-run/react";
 
 import { prisma } from "../db.server";
-import { authenticate } from "../shopify.server";
+import { authenticateAdminRequest } from "../utils/admin-auth.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
 
   const shop = await prisma.shop.findUnique({

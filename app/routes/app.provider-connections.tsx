@@ -1,9 +1,9 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { authenticate } from "../shopify.server";
 import { PlaceholderPage } from "../components/PlaceholderPage";
+import { authenticateAdminRequest } from "../utils/admin-auth.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
+  await authenticateAdminRequest(request);
   return null;
 };
 

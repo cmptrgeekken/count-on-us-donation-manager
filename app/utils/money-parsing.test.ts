@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   parseOptionalNonNegativeMoney,
+  parseOptionalPercentInputToRate,
   parseOptionalPositiveDecimal,
   parsePercentInputToRate,
   parseRequiredPositiveMoney,
@@ -19,6 +20,8 @@ describe("money parsing", () => {
   it("parses percent inputs into four-decimal stored rates", () => {
     expect(parsePercentInputToRate("2.90", "Payment rate").toString()).toBe("0.029");
     expect(parsePercentInputToRate("5.55", "Mistake buffer").toString()).toBe("0.0555");
+    expect(parseOptionalPercentInputToRate("", "Optional rate")).toBeNull();
+    expect(parseOptionalPercentInputToRate("7.25", "Optional rate")?.toString()).toBe("0.0725");
   });
 
   it("rejects invalid money values", () => {

@@ -4,7 +4,7 @@ import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "../db.server";
-import { authenticate } from "../shopify.server";
+import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import {
   parseOptionalNonNegativeMoney,
@@ -49,7 +49,7 @@ const TAX_RATE_PRESETS = [
 ] as const;
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
 
   const shop = await prisma.shop.findUnique({
@@ -78,7 +78,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { admin, session } = await authenticate.admin(request);
+  const { admin, session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
 
   const formData = await request.formData();
@@ -248,6 +248,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
   if (intent === "refresh-shop-currency") {
+    if (!admin) {
+      return Response.json(
+        { ok: false, message: "Shopify admin is unavailable in local fixture mode." },
+        { status: 400 },
+      );
+    }
+
     const response = await admin.graphql(SHOP_CURRENCY_QUERY);
     const json = await response.json();
     const currency = json?.data?.shop?.currencyCode;

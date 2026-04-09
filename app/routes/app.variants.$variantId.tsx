@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
+import { Prisma } from "@prisma/client";
 import {
   Autocomplete,
   Badge,
@@ -23,6 +24,10 @@ import { prisma } from "../db.server";
 import { resolveCosts } from "../services/costEngine.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
+import {
+  parseOptionalNonNegativeMoney,
+  parseOptionalPercentInputToRate,
+} from "../utils/money-parsing";
 import {
   parseOptionalNonNegativeNumber,
   parseOptionalNonNegativeWholeNumber,
@@ -888,12 +893,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const laborMinutes = formData.get("laborMinutes")?.toString();
     const laborRate = formData.get("laborRate")?.toString();
     const config = await ensureConfig();
+    let parsedLaborMinutes: number | null;
+    let parsedLaborRate: Prisma.Decimal | null;
+
+    try {
+      parsedLaborMinutes = parseOptionalNonNegativeNumber(laborMinutes, "Labor minutes");
+      parsedLaborRate = parseOptionalNonNegativeMoney(laborRate, "Labor rate");
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
+    }
 
     await prisma.variantCostConfig.updateMany({
       where: { id: config.id, shopId },
       data: {
-        laborMinutes: laborMinutes ? parseFloat(laborMinutes) : null,
-        laborRate: laborRate ? parseFloat(laborRate) : null,
+        laborMinutes: parsedLaborMinutes,
+        laborRate: parsedLaborRate,
       },
     });
     await prisma.auditLog.create({
@@ -904,15 +921,21 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (intent === "update-mistake-buffer") {
     const bufferStr = formData.get("mistakeBuffer")?.toString() ?? "";
-    const buffer = bufferStr ? parseFloat(bufferStr) : null;
-    if (buffer !== null && (isNaN(buffer) || buffer < 0 || buffer > 100)) {
-      return Response.json({ ok: false, message: "Mistake buffer must be 0-100." }, { status: 400 });
+    let buffer: Prisma.Decimal | null;
+
+    try {
+      buffer = parseOptionalPercentInputToRate(bufferStr, "Mistake buffer");
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
     }
 
     const config = await ensureConfig();
     await prisma.variantCostConfig.updateMany({
       where: { id: config.id, shopId },
-      data: { mistakeBuffer: buffer !== null ? buffer / 100 : null },
+      data: { mistakeBuffer: buffer },
     });
     return Response.json({ ok: true, message: "Mistake buffer updated." });
   }
