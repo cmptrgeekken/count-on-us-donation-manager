@@ -12,7 +12,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 5. `#53` Build storefront widget data endpoint and display-safe projection
 6. `#54` Build product page Theme App Extension donation widget
 7. `#64` Add cart donation summary modal
-8. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+8. `#57` Add app proxy donation receipts page
+9. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -311,3 +312,50 @@ Each section is meant to give a compact review summary, automated/manual test fo
 - Confirm `Escape`, overlay click, and the close button all dismiss the modal and return focus to the trigger.
 - Confirm carts without donation products show a non-broken empty state.
 - Confirm external cause links only render when a valid donation link exists.
+
+## Issue `#57` Review Notes
+
+### Summary
+
+- Add a public app-proxy donation receipts page for closed periods with recorded disbursements.
+- Verify app-proxy auth via the existing public-auth helper, apply IP-based rate limiting, and refresh signed receipt URLs on each request.
+- Keep the page semantically structured with skip navigation, section headings, and accessible disbursement tables.
+
+### Files
+
+- `app/routes/apps.count-on-us.donation-receipts.tsx`
+- `app/routes/apps.count-on-us.donation-receipts.test.tsx`
+- `app/routes/ui-fixtures.donation-receipts-bootstrap.tsx`
+- `app/services/donationReceiptsPage.server.ts`
+- `app/services/donationReceiptsPage.server.test.ts`
+- `app/utils/public-routes.ts`
+- `tests/ui/donation-receipts-workflow.spec.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `donationReceiptsPage.server.test.ts`
+  - returns closed periods in reverse chronological order
+  - generates fresh receipt URLs for disbursements with uploaded receipts
+  - returns an empty state when no closed periods have disbursements
+- `apps.count-on-us.donation-receipts.test.tsx`
+  - valid app-proxy requests return page data
+  - invalid/failed app-proxy auth propagates as a forbidden response
+  - IP-based rate limiting returns `429` after the per-minute limit is exceeded
+- full `npm test`
+  - regression coverage remains green with the public receipts route added
+- `donation-receipts-workflow.spec.ts`
+  - receipts page renders a closed period, disbursement rows, and a receipt link
+
+#### Manual
+
+- Open the donation receipts page through the app proxy path.
+- Confirm the page shows closed periods in reverse chronological order.
+- Confirm each period shows:
+  - total donated
+  - cause breakdown pills
+  - disbursement table with amount, paid date, method, reference, and receipt link
+- Confirm receipts with uploads get a working refreshed link on page load.
+- Confirm shops with no disbursements show the empty state instead of a broken table.
+- Confirm keyboard users can skip directly to the main receipts content.

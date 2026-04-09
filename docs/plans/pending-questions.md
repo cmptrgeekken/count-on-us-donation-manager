@@ -45,3 +45,9 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - a separate cart drawer-compatible integration surface
   - or both
 - That decision affects whether we keep the current block as-is or factor the modal trigger/summary logic into a more reusable storefront bundle later.
+
+### Public donation receipts URL shape
+
+- `#57` uses the current app proxy base path, so the public receipts page lives at `/apps/count-on-us/donation-receipts`.
+- Older product/docs language still sometimes implies a shorter `/apps/donation-receipts` path.
+- We should decide whether the current proxy base is the long-term canonical storefront URL, or whether we want a broader app-proxy path cleanup later and accept the migration/install constraints that come with it.
