@@ -18,7 +18,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 11. `#58` Build first-run setup wizard and persistent setup checklist
 12. `#61` Prepare demo store for App Store review
 13. `#62` Prepare App Store listing assets and copy
-14. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+14. `#59` Run App Store pre-submission technical audit
+15. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -586,3 +587,34 @@ Each section is meant to give a compact review summary, automated/manual test fo
   - DPA request path
   - response-time commitment
 - Recheck the draft after any remaining Phase 6 hardening work lands so the listing copy does not overstate support.
+
+## Issue `#59` Review Notes
+
+### Summary
+
+- Add a concrete technical-audit worksheet so App Store readiness is tracked as evidence, not memory.
+- Separate repo-backed implementation evidence from manual verification that still must happen on a live store.
+- Record the first blockers found during repo review, including missing `compliance_topics` in the current app config.
+
+### Files
+
+- `docs/app-store-technical-audit.md`
+
+### Test Cases For Review
+
+#### Automated
+
+- No automated coverage added for this docs-oriented audit worksheet.
+- Full `npm test`, `npx tsc --noEmit`, and `npm run lint` should remain green after the docs update.
+
+#### Manual
+
+- Work through every row in `docs/app-store-technical-audit.md`.
+- For each item:
+  - confirm the repo evidence still matches reality
+  - add live-store/browser verification notes
+  - create blocking issues for unresolved submission problems
+- Pay particular attention to the currently documented blockers:
+  - missing `compliance_topics`
+  - missing privacy policy URL
+  - missing DPA request path

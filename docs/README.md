@@ -10,6 +10,8 @@ This folder is organized by purpose rather than by a global numbering scheme.
   Practical snapshot of what is implemented right now.
 - [App Store Listing Draft](app-store-listing-draft.md)
   Working listing copy, screenshot plan, and submission disclosures draft.
+- [App Store Technical Audit](app-store-technical-audit.md)
+  Submission-readiness checklist with repo evidence and manual verification gaps.
 
 ## Product And Planning
 

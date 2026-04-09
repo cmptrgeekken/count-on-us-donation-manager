@@ -91,3 +91,11 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - privacy policy URL
   - DPA request path
   - response-time commitment wording
+
+### Technical audit blockers to resolve
+
+- `#59` identified three immediate submission-readiness blockers from repo inspection:
+  - `compliance_topics` are not present in the active app TOML configs
+  - privacy policy URL is still undefined in submission docs
+  - DPA request path is still undefined in submission docs
+- We should decide whether each of those becomes its own tracked blocker issue or is resolved directly in the Phase 6 branch before wider submission review.
