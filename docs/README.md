@@ -8,6 +8,8 @@ This folder is organized by purpose rather than by a global numbering scheme.
   Collaboration rules, transparency tenet, persona model, and the main reference list.
 - [Current Implementation Status](current-implementation-status.md)
   Practical snapshot of what is implemented right now.
+- [App Store Listing Draft](app-store-listing-draft.md)
+  Working listing copy, screenshot plan, and submission disclosures draft.
 
 ## Product And Planning
 

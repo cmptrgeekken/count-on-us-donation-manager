@@ -17,7 +17,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 10. `#56` Add post-purchase donation email
 11. `#58` Build first-run setup wizard and persistent setup checklist
 12. `#61` Prepare demo store for App Store review
-13. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+13. `#62` Prepare App Store listing assets and copy
+14. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -553,3 +554,35 @@ Each section is meant to give a compact review summary, automated/manual test fo
   - verify cart / post-purchase surfaces if they are in review scope
   - add a representative disbursement receipt
   - decide whether POD review is included
+
+## Issue `#62` Review Notes
+
+### Summary
+
+- Draft the App Store listing copy directly from implemented functionality instead of leaving it as a late-stage scramble.
+- Capture the screenshot plan and required disclosures in one place.
+- Leave only the truly owner-specific fields (support email, privacy-policy URL, final approval) as open fill-ins.
+
+### Files
+
+- `docs/app-store-listing-draft.md`
+
+### Test Cases For Review
+
+#### Automated
+
+- No automated coverage added for this docs-only issue.
+- Full `npm test`, `npx tsc --noEmit`, and `npm run lint` should still remain green after the docs update.
+
+#### Manual
+
+- Review the proposed app name and confirm it is acceptable for submission.
+- Review the three key benefits and detailed description against the current product surface.
+- Capture the listed screenshots from the actual product experience once the branch set is merged.
+- Fill in:
+  - support contact email
+  - support URL
+  - privacy policy URL
+  - DPA request path
+  - response-time commitment
+- Recheck the draft after any remaining Phase 6 hardening work lands so the listing copy does not overstate support.

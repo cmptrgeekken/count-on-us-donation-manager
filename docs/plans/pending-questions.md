@@ -82,3 +82,12 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - Which dev store is the canonical review store?
   - Is POD provider review in scope for App Store reviewers or intentionally excluded?
   - Which theme should be treated as the primary reviewer theme once the widget is enabled?
+
+### App Store listing final fields
+
+- `#62` drafts the listing copy, but the following owner-controlled fields still need confirmation:
+  - final approved app name
+  - support contact email / URL
+  - privacy policy URL
+  - DPA request path
+  - response-time commitment wording
