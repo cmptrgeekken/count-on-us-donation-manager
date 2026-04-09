@@ -206,6 +206,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return Response.json({
     shopId,
+    closedPeriodId: closedPeriod.id,
     reportingUrl: `${baseUrl}/app/reporting?__playwrightShop=${encodeURIComponent(shopId)}&periodId=${encodeURIComponent(period.id)}`,
     closedReportingUrl: `${baseUrl}/app/reporting?__playwrightShop=${encodeURIComponent(shopId)}&periodId=${encodeURIComponent(closedPeriod.id)}`,
   });

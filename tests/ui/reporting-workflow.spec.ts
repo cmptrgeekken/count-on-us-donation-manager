@@ -107,3 +107,22 @@ test("reporting dashboard can record a surplus tax true-up", async ({ page, requ
   await expect(trueUpRow).toContainText("$8.00");
   await expect(trueUpRow).toContainText("$2.00");
 });
+
+test("reporting dashboard export routes return csv and pdf downloads", async ({ request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/reporting-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  const csvResponse = await request.get(`/app/reporting-export?__playwrightShop=${encodeURIComponent(bootstrap.shopId)}&periodId=${encodeURIComponent(bootstrap.closedPeriodId)}&format=csv`);
+  expect(csvResponse.ok()).toBeTruthy();
+  expect(csvResponse.headers()["content-type"]).toContain("text/csv");
+  expect(csvResponse.headers()["content-disposition"]).toContain(".csv");
+  expect(await csvResponse.text()).toContain("Outstanding cause payables");
+
+  const pdfResponse = await request.get(`/app/reporting-export?__playwrightShop=${encodeURIComponent(bootstrap.shopId)}&periodId=${encodeURIComponent(bootstrap.closedPeriodId)}&format=pdf`);
+  expect(pdfResponse.ok()).toBeTruthy();
+  expect(pdfResponse.headers()["content-type"]).toContain("application/pdf");
+  expect(pdfResponse.headers()["content-disposition"]).toContain(".pdf");
+  const pdfBuffer = await pdfResponse.body();
+  expect(Buffer.from(pdfBuffer).subarray(0, 8).toString("utf8")).toContain("%PDF-1.4");
+});
