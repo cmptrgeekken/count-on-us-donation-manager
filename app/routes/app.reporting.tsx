@@ -939,8 +939,19 @@ export default function ReportingPage() {
     })) ?? [];
 
   useEffect(() => {
-    setSelectedDisbursementCauseId(disbursementOptions[0]?.causeId ?? "");
-  }, [selectedPeriodId, disbursementOptions]);
+    if (disbursementOptions.length === 0) {
+      setSelectedDisbursementCauseId("");
+      return;
+    }
+
+    const currentStillValid = disbursementOptions.some(
+      (option) => option.causeId === selectedDisbursementCauseId,
+    );
+
+    if (!currentStillValid) {
+      setSelectedDisbursementCauseId(disbursementOptions[0]?.causeId ?? "");
+    }
+  }, [selectedPeriodId, selectedDisbursementCauseId, disbursementOptions]);
 
   if (!summary) {
     return (
