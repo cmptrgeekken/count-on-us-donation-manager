@@ -68,7 +68,8 @@ test("reporting dashboard can log a disbursement with a receipt", async ({ page,
     .locator("s-table-row")
     .filter({ hasText: "Playwright Cause" })
     .filter({ hasText: "ACH" });
-  await expect(disbursementRow).toContainText("Feb 1, 2026");
+  await expect(disbursementRow).toContainText("Jan 31, 2026");
+  await expect(disbursementRow).toContainText("Feb 14, 2026");
   await expect(disbursementRow).toContainText("$20.00");
   await expect(disbursementRow).toContainText("$5.00");
   await expect(disbursementRow).toContainText("$2.00");
