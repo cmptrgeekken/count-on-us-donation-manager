@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, type Prisma } from "@prisma/client";
 
 // Tenant-scoped models: every read/update/delete query MUST include a shopId filter.
 // This extension enforces that invariant at the ORM layer.
@@ -96,5 +96,8 @@ export const prisma: PrismaClientWithExtension =
 if (process.env.NODE_ENV !== "production") {
   global.__prisma = prisma;
 }
+
+export type DbClient = PrismaClientWithExtension | Prisma.TransactionClient;
+export type TransactionCapableDbClient = PrismaClientWithExtension;
 
 export default prisma;

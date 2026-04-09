@@ -1,9 +1,12 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "../db.server";
-
-type DbClient = typeof prisma;
 
 const ZERO = new Prisma.Decimal(0);
+
+type CausePayablesDbClient = {
+  causeAllocation: {
+    findMany: typeof import("../db.server").prisma.causeAllocation.findMany;
+  };
+};
 
 function floorCurrency(value: Prisma.Decimal) {
   return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
@@ -28,8 +31,8 @@ export async function listOutstandingCauseAllocations(
     throughPeriodEndDate: Date;
     causeId?: string;
   },
-  db: DbClient = prisma,
-) {
+  db: CausePayablesDbClient,
+): Promise<OutstandingCauseAllocation[]> {
   const allocations = await db.causeAllocation.findMany({
     where: {
       shopId,
@@ -74,4 +77,3 @@ export async function listOutstandingCauseAllocations(
     }))
     .filter((allocation) => allocation.remaining.greaterThan(ZERO));
 }
-

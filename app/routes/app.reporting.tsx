@@ -195,6 +195,8 @@ const taxTrueUpSchema = z.object({
   confirmShortfall: z.string().trim().optional(),
 });
 
+const periodIdSchema = z.string().trim().cuid("Reporting period id is invalid.");
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -242,21 +244,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "close-period") {
     const periodId = formData.get("periodId")?.toString() ?? "";
-    if (!periodId) {
-      return Response.json({ ok: false, message: "Reporting period id is required." }, { status: 400 });
+    const parsedPeriodId = periodIdSchema.safeParse(periodId);
+    if (!parsedPeriodId.success) {
+      return Response.json({ ok: false, message: parsedPeriodId.error.issues[0]?.message ?? "Reporting period id is required." }, { status: 400 });
     }
 
-    await closeReportingPeriod(shopId, periodId);
+    await closeReportingPeriod(shopId, parsedPeriodId.data);
     return Response.json({ ok: true, message: "Reporting period closed." });
   }
 
   if (intent === "run-analytical-recalculation") {
     const periodId = formData.get("periodId")?.toString() ?? "";
-    if (!periodId) {
-      return Response.json({ ok: false, message: "Reporting period id is required." }, { status: 400 });
+    const parsedPeriodId = periodIdSchema.safeParse(periodId);
+    if (!parsedPeriodId.success) {
+      return Response.json({ ok: false, message: parsedPeriodId.error.issues[0]?.message ?? "Reporting period id is required." }, { status: 400 });
     }
 
-    await queueAnalyticalRecalculation(shopId, periodId);
+    await queueAnalyticalRecalculation(shopId, parsedPeriodId.data);
     return Response.json({ ok: true, message: "Analytical recalculation queued." });
   }
 
@@ -404,7 +408,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         causeId: key.replace("redistribution:", ""),
         amount: value.toString(),
       }))
-      .filter((entry) => entry.amount.trim() !== "" && entry.amount.trim() !== "0");
+      .filter(
+        (entry) =>
+          z.string().cuid().safeParse(entry.causeId).success &&
+          entry.amount.trim() !== "" &&
+          entry.amount.trim() !== "0",
+      );
 
     try {
       await recordTaxTrueUp(shopId, {

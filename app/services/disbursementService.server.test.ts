@@ -1,9 +1,26 @@
 import { Prisma } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { TransactionCapableDbClient } from "../db.server";
+import type { ReceiptStorage } from "./receiptStorage.server";
 import { logDisbursement, MAX_RECEIPT_BYTES } from "./disbursementService.server";
 
 function decimal(value: string | number) {
   return new Prisma.Decimal(value);
+}
+
+function createDb(tx: object): TransactionCapableDbClient {
+  return {
+    $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
+  } as unknown as TransactionCapableDbClient;
+}
+
+function createStorage(overrides?: Partial<ReceiptStorage>): ReceiptStorage {
+  return {
+    put: vi.fn().mockResolvedValue({ key: "receipt-key" }),
+    getSignedReadUrl: vi.fn(),
+    delete: vi.fn().mockResolvedValue(undefined),
+    ...overrides,
+  };
 }
 
 describe("logDisbursement", () => {
@@ -48,14 +65,8 @@ describe("logDisbursement", () => {
         create: vi.fn().mockResolvedValue(undefined),
       },
     };
-    const db = {
-      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
-    };
-    const storage = {
-      put: vi.fn().mockResolvedValue({ key: "receipt-key" }),
-      getSignedReadUrl: vi.fn(),
-      delete: vi.fn().mockResolvedValue(undefined),
-    };
+    const db = createDb(tx);
+    const storage = createStorage();
 
     const result = await logDisbursement(
       "shop-1",
@@ -74,7 +85,7 @@ describe("logDisbursement", () => {
           body: new TextEncoder().encode("receipt-body"),
         },
       },
-      { db: db as any, storage: storage as any, actor: "merchant" },
+      { db, storage, actor: "merchant" },
     );
 
     expect(storage.put).toHaveBeenCalledWith(
@@ -147,9 +158,7 @@ describe("logDisbursement", () => {
         ]),
       },
     };
-    const db = {
-      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
-    };
+    const db = createDb(tx);
 
     await expect(
       logDisbursement(
@@ -161,7 +170,7 @@ describe("logDisbursement", () => {
           paidAt: new Date("2026-04-08T00:00:00.000Z"),
           paymentMethod: "ACH",
         },
-        { db: db as any },
+        { db },
       ),
     ).rejects.toThrow("Allocated amount cannot exceed the remaining allocation.");
   });
@@ -169,12 +178,8 @@ describe("logDisbursement", () => {
   it("cleans up uploaded receipts when the transaction fails", async () => {
     const db = {
       $transaction: vi.fn().mockRejectedValue(new Error("database boom")),
-    };
-    const storage = {
-      put: vi.fn().mockResolvedValue({ key: "receipt-key" }),
-      getSignedReadUrl: vi.fn(),
-      delete: vi.fn().mockResolvedValue(undefined),
-    };
+    } as unknown as TransactionCapableDbClient;
+    const storage = createStorage();
 
     await expect(
       logDisbursement(
@@ -191,7 +196,7 @@ describe("logDisbursement", () => {
             body: new Uint8Array(MAX_RECEIPT_BYTES),
           },
         },
-        { db: db as any, storage: storage as any },
+        { db, storage },
       ),
     ).rejects.toThrow("database boom");
 
@@ -201,11 +206,7 @@ describe("logDisbursement", () => {
   });
 
   it("rejects unsupported receipt types before upload", async () => {
-    const storage = {
-      put: vi.fn().mockResolvedValue({ key: "receipt-key" }),
-      getSignedReadUrl: vi.fn(),
-      delete: vi.fn().mockResolvedValue(undefined),
-    };
+    const storage = createStorage();
 
     await expect(
       logDisbursement(
@@ -222,7 +223,7 @@ describe("logDisbursement", () => {
             body: new Uint8Array(10),
           },
         },
-        { storage: storage as any },
+        { storage },
       ),
     ).rejects.toThrow("Receipt must be a PDF, PNG, or JPEG file.");
 
@@ -266,9 +267,7 @@ describe("logDisbursement", () => {
         create: vi.fn().mockResolvedValue(undefined),
       },
     };
-    const db = {
-      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
-    };
+    const db = createDb(tx);
 
     const result = await logDisbursement(
       "shop-1",
@@ -281,7 +280,7 @@ describe("logDisbursement", () => {
         paidAt: new Date("2026-04-08T00:00:00.000Z"),
         paymentMethod: "ACH",
       },
-      { db: db as any },
+      { db },
     );
 
     expect(tx.causeAllocation.updateMany).toHaveBeenCalledWith({
@@ -342,9 +341,7 @@ describe("logDisbursement", () => {
         create: vi.fn().mockResolvedValue(undefined),
       },
     };
-    const db = {
-      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
-    };
+    const db = createDb(tx);
 
     const result = await logDisbursement(
       "shop-1",
@@ -355,7 +352,7 @@ describe("logDisbursement", () => {
         paidAt: new Date("2026-04-08T00:00:00.000Z"),
         paymentMethod: "ACH",
       },
-      { db: db as any },
+      { db },
     );
 
     expect(tx.causeAllocation.updateMany).toHaveBeenCalledWith({
@@ -367,6 +364,77 @@ describe("logDisbursement", () => {
       },
     });
     expect(result.remaining.toString()).toBe("0");
+  });
+
+  it("floors allocated amounts to cents before creating applications", async () => {
+    const tx = {
+      reportingPeriod: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "period-1",
+          status: "CLOSED",
+          endDate: new Date("2026-04-01T00:00:00.000Z"),
+        }),
+      },
+      causeAllocation: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "allocation-1",
+            periodId: "period-1",
+            causeId: "cause-1",
+            causeName: "Cause One",
+            is501c3: false,
+            allocated: decimal("100.00"),
+            disbursed: decimal("0"),
+            period: {
+              startDate: new Date("2026-03-16T00:00:00.000Z"),
+              endDate: new Date("2026-04-01T00:00:00.000Z"),
+            },
+          },
+        ]),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      disbursement: {
+        create: vi.fn().mockResolvedValue({ id: "disbursement-3b" }),
+      },
+      disbursementApplication: {
+        createMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = createDb(tx);
+
+    await logDisbursement(
+      "shop-1",
+      {
+        periodId: "period-1",
+        causeId: "cause-1",
+        allocatedAmount: "12.9999",
+        paidAt: new Date("2026-04-08T00:00:00.000Z"),
+        paymentMethod: "ACH",
+      },
+      { db },
+    );
+
+    expect(tx.disbursement.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          amount: decimal("12.99"),
+          allocatedAmount: decimal("12.99"),
+        }),
+      }),
+    );
+    expect(tx.disbursementApplication.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          shopId: "shop-1",
+          disbursementId: "disbursement-3b",
+          causeAllocationId: "allocation-1",
+          amount: decimal("12.99"),
+        },
+      ],
+    });
   });
 
   it("applies allocated amounts FIFO across older outstanding periods", async () => {
@@ -419,9 +487,7 @@ describe("logDisbursement", () => {
         create: vi.fn().mockResolvedValue(undefined),
       },
     };
-    const db = {
-      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
-    };
+    const db = createDb(tx);
 
     const result = await logDisbursement(
       "shop-1",
@@ -432,7 +498,7 @@ describe("logDisbursement", () => {
         paidAt: new Date("2026-05-08T00:00:00.000Z"),
         paymentMethod: "ACH",
       },
-      { db: db as any },
+      { db },
     );
 
     expect(tx.disbursementApplication.createMany).toHaveBeenCalledWith({
