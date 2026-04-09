@@ -6,7 +6,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 **Project:** Count On Us  
 **Date:** April 9, 2026  
-**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, receipt storage, tax true-up, and export support implemented. Current focus is finishing the remaining reporting workflows, starting with rolling cause payables, cross-period disbursement application, and audit-log browsing.
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, receipt storage, tax true-up, export support, and audit log browsing implemented. Current focus is finishing the remaining analytical and reporting follow-up work.
 
 ---
 
@@ -14,7 +14,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application actively in progress and export support on the active branch
+- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application active and the remaining analytical/reporting follow-up work next
 - **Phase 3:** Complete
 
 ---
@@ -129,7 +129,7 @@ These are useful next items, but they are no longer blockers for closing Phase 3
   ADR direction is accepted and the first implementation tranche is in progress on the active branch.
 - [~] Export flows
   CSV and PDF reporting-period export support are implemented on the active branch and awaiting review/merge.
-- [ ] Audit log browsing UI
+- [x] Audit log browsing UI
 
 ---
 

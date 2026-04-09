@@ -50,6 +50,7 @@ export default function App() {
         <a href="/app/products">Products</a>
         <a href="/app/reporting">Reporting</a>
         <a href="/app/expenses">Expenses</a>
+        <a href="/app/audit-log">Audit Log</a>
         <a href="/app/provider-connections">Provider Connections</a>
         <a href="/app/order-history">Order History</a>
       </ui-nav-menu>

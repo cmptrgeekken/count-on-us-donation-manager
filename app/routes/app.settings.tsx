@@ -542,7 +542,14 @@ export default function Settings() {
         </s-section>
 
         <s-section heading="Audit Log">
-          <s-text>Browse your full audit history in a future update.</s-text>
+          <div style={{ display: "grid", gap: "0.75rem" }}>
+            <s-text>Browse financial change history, filter by event type, and inspect payload details.</s-text>
+            <div>
+              <a href="/app/audit-log">
+                <s-button>Open audit log</s-button>
+              </a>
+            </div>
+          </div>
         </s-section>
       </s-page>
     </>

@@ -7,7 +7,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 
 1. `#69` Standardize admin auth helper usage across app routes
 2. `#70` Standardize Decimal parsing for monetary form inputs
-3. Remaining issues to follow in priority order after the cleanup tranche
+3. `#52` Add audit log browsing UI
+4. Remaining issues to follow in priority order after the cleanup tranche
 
 ## Issue `#69` Review Notes
 
@@ -78,4 +79,41 @@ Each section is meant to give a compact review summary, automated/manual test fo
 
 ## Pending Questions
 
-- None yet for the cleanup tranche.
+- `#45` appears functionally complete in code and tests already. It may only need issue/status cleanup unless you want an additional merchant-facing charge-sync control surface.
+
+## Issue `#52` Review Notes
+
+### Summary
+
+- Add a merchant-facing audit log page under `/app/audit-log`.
+- Link it from Settings and the embedded admin nav.
+- Support reverse-chronological browsing, event-type filtering, date filtering, payload inspection, and pagination.
+
+### Files
+
+- `app/routes/app.audit-log.tsx`
+- `app/routes/app.settings.tsx`
+- `app/routes/app.tsx`
+- `app/routes/ui-fixtures.audit-log-bootstrap.tsx`
+- `app/utils/audit-log.ts`
+- `app/utils/audit-log.test.ts`
+- `tests\ui\audit-log-workflow.spec.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `audit-log.test.ts`
+  - normalizes event/date filters safely
+  - formats payloads and date boundaries consistently
+- full `npm test`
+  - regression coverage stays green with the audit helpers added
+
+#### Manual
+
+- Open Audit Log from Settings.
+- Confirm newest events appear first.
+- Filter by event type and verify rows narrow correctly.
+- Filter by date range and verify rows narrow correctly.
+- Open a payload block and confirm before/after details are readable.
+- Navigate to the next page when more than one page of logs exists.
