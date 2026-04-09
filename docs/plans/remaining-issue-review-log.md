@@ -14,7 +14,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 7. `#64` Add cart donation summary modal
 8. `#57` Add app proxy donation receipts page
 9. `#55` Add Thank You and Order Status donation extension
-10. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+10. `#56` Add post-purchase donation email
+11. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -415,3 +416,51 @@ Each section is meant to give a compact review summary, automated/manual test fo
 - Confirm revisiting through Order Status still shows the donation summary.
 - Confirm orders without donation products hide the extension entirely.
 - Confirm app-server failure leaves the Shopify surface usable and does not show a broken error block.
+
+## Issue `#56` Review Notes
+
+### Summary
+
+- Add a merchant setting to enable or disable post-purchase donation summary emails.
+- Add an email service and follow-up queue worker that send after successful snapshot creation, using the order `contact_email`.
+- Include per-cause amounts, donation links, and the public donation receipts URL in the delivered message.
+
+### Files
+
+- `prisma/schema.prisma`
+- `prisma/migrations/20260409093000_issue56_post_purchase_donation_email/migration.sql`
+- `app/routes/app.settings.tsx`
+- `app/routes/ui-fixtures.settings-email-bootstrap.tsx`
+- `app/services/postPurchaseEmail.server.ts`
+- `app/services/postPurchaseEmail.server.test.ts`
+- `app/jobs/processors.server.ts`
+- `app/jobs/processors.server.test.ts`
+- `tests/ui/settings-email-workflow.spec.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `postPurchaseEmail.server.test.ts`
+  - sends when enabled and a contact email is present
+  - skips when the merchant disables post-purchase email
+  - skips when `contact_email` is missing
+  - rethrows provider failures so the worker can retry
+- `processors.server.test.ts`
+  - successful snapshot creation queues the post-purchase email job
+  - post-purchase email failures are audit-logged and rethrown
+- full `npm test`
+  - regression coverage remains green with the email worker/service layered in
+- `settings-email-workflow.spec.ts`
+  - settings exposes the post-purchase email toggle and save flow
+
+#### Manual
+
+- In Settings, toggle the post-purchase donation email on and off and confirm the status message updates.
+- Place a donation order with a `contact_email` present.
+- Confirm the snapshot worker triggers an email job after snapshot creation.
+- Confirm the delivered email includes:
+  - per-cause donation amounts
+  - donation links where available
+  - a link to the public donation receipts page
+- Disable the setting and confirm no post-purchase email is sent for subsequent donation orders.

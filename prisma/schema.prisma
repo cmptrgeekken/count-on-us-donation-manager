@@ -45,6 +45,7 @@ model Shop {
   defaultLaborRate Decimal? @db.Decimal(10, 4)
   effectiveTaxRate Decimal? @db.Decimal(5, 4)
   taxDeductionMode String   @default("dont_deduct")
+  postPurchaseEmailEnabled Boolean @default(true)
   wizardStep       Int      @default(0)
   catalogSynced    Boolean  @default(false)
   createdAt        DateTime @default(now())

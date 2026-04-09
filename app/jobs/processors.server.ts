@@ -7,6 +7,7 @@ import { processOrderUpdate, processRefund } from "../services/adjustmentService
 import { runReconciliation } from "../services/reconciliationService.server";
 import { createReportingPeriodFromPayout } from "../services/reportingPeriodService.server";
 import { refreshTaxOffsetCacheForShop } from "../services/reportingService.server";
+import { sendPostPurchaseDonationEmail } from "../services/postPurchaseEmail.server";
 import { createSnapshot } from "../services/snapshotService.server";
 import { unauthenticated } from "../shopify.server";
 
@@ -14,6 +15,7 @@ const QUEUES = [
   "plan.detect.daily",
   "plan.detect",
   "orders.snapshot",
+  "orders.post-purchase-email",
   "orders.updated",
   "orders.refund",
   "reconciliation.daily",
@@ -58,7 +60,50 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       const job = jobs[0];
       if (!job) return;
       const { shopId, payload } = job.data;
-      await createSnapshot(shopId, payload as any, prisma);
+      const result = await createSnapshot(shopId, payload as any, prisma);
+
+      if (result.created && result.snapshotId) {
+        await boss.send("orders.post-purchase-email", {
+          shopId,
+          snapshotId: result.snapshotId,
+          contactEmail:
+            (payload as { contact_email?: string | null })?.contact_email ??
+            null,
+        });
+      }
+    },
+  );
+
+  await boss.work<{ shopId: string; snapshotId: string; contactEmail?: string | null }>(
+    "orders.post-purchase-email",
+    async (jobs) => {
+      const job = jobs[0];
+      if (!job) return;
+
+      const { shopId, snapshotId, contactEmail } = job.data;
+      try {
+        await sendPostPurchaseDonationEmail(
+          {
+            snapshotId,
+            contactEmail,
+          },
+          prisma,
+        );
+      } catch (error) {
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "OrderSnapshot",
+            entityId: snapshotId,
+            action: "POST_PURCHASE_EMAIL_FAILED",
+            actor: "system",
+            payload: {
+              message: error instanceof Error ? error.message : "Unknown post-purchase email failure",
+            },
+          },
+        });
+        throw error;
+      }
     },
   );
 

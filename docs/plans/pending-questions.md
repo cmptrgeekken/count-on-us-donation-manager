@@ -56,3 +56,11 @@ It is intentionally lightweight so decisions can be reviewed later without block
 
 - `#55` currently bases pending order estimates on Shopify Admin order line discounted totals before the authoritative snapshot exists.
 - We should confirm whether that is the desired customer-facing approximation, or whether we want tighter parity work later around discounts, shipping allocation, and any order-level adjustments that may cause the confirmed snapshot to differ slightly from the early estimate.
+
+### Post-purchase email provider depth and branding
+
+- `#56` selects a pragmatic transport abstraction with `log` and `resend` drivers so the flow is shippable without forcing a provider SDK install in development.
+- We should still decide:
+  - whether Resend is the long-term production default
+  - whether merchants need a configurable `from` address in-app
+  - how much store branding (logo/colors/name treatment) must be present before we consider the donation email production-complete

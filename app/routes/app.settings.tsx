@@ -63,6 +63,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       defaultLaborRate: true,
       effectiveTaxRate: true,
       taxDeductionMode: true,
+      postPurchaseEmailEnabled: true,
     },
   });
 
@@ -74,6 +75,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     defaultLaborRate: shop?.defaultLaborRate ? Number(shop.defaultLaborRate).toFixed(2) : "",
     effectiveTaxRate: shop?.effectiveTaxRate ? (Number(shop.effectiveTaxRate) * 100).toFixed(2) : "",
     taxDeductionMode: shop?.taxDeductionMode ?? "dont_deduct",
+    postPurchaseEmailEnabled: shop?.postPurchaseEmailEnabled ?? true,
   });
 };
 
@@ -247,6 +249,36 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return Response.json({ ok: true, message: "Tax settings updated." });
     }
 
+  if (intent === "update-email-settings") {
+    const postPurchaseEmailEnabled = formData.get("postPurchaseEmailEnabled") === "on";
+
+    await prisma.shop.update({
+      where: { shopId },
+      data: {
+        postPurchaseEmailEnabled,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "Shop",
+        action: "POST_PURCHASE_EMAIL_SETTINGS_UPDATED",
+        actor: "merchant",
+        payload: {
+          postPurchaseEmailEnabled,
+        },
+      },
+    });
+
+    return Response.json({
+      ok: true,
+      message: postPurchaseEmailEnabled
+        ? "Post-purchase donation email enabled."
+        : "Post-purchase donation email disabled.",
+    });
+  }
+
   if (intent === "refresh-shop-currency") {
     if (!admin) {
       return Response.json(
@@ -286,7 +318,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function Settings() {
-  const { planTier, paymentRate, planOverride, mistakeBuffer, defaultLaborRate, effectiveTaxRate, taxDeductionMode } = useLoaderData<typeof loader>();
+  const {
+    planTier,
+    paymentRate,
+    planOverride,
+    mistakeBuffer,
+    defaultLaborRate,
+    effectiveTaxRate,
+    taxDeductionMode,
+    postPurchaseEmailEnabled,
+  } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
   const { currency, locale, formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
@@ -296,6 +337,7 @@ export default function Settings() {
   const [laborRateInput, setLaborRateInput] = useState(defaultLaborRate ?? "");
   const [effectiveTaxRateInput, setEffectiveTaxRateInput] = useState(effectiveTaxRate ?? "");
   const [taxDeductionModeInput, setTaxDeductionModeInput] = useState(taxDeductionMode ?? "dont_deduct");
+  const [postPurchaseEmailEnabledInput, setPostPurchaseEmailEnabledInput] = useState(postPurchaseEmailEnabled ?? true);
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
@@ -538,7 +580,37 @@ export default function Settings() {
         </s-section>
 
         <s-section heading="Donation Email">
-          <s-text>This feature will be available in a future update.</s-text>
+          <fetcher.Form method="post">
+            <input type="hidden" name="intent" value="update-email-settings" />
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <label
+                htmlFor="post-purchase-email-enabled"
+                style={{ display: "flex", alignItems: "start", gap: "0.75rem", cursor: "pointer" }}
+              >
+                <input
+                  id="post-purchase-email-enabled"
+                  type="checkbox"
+                  name="postPurchaseEmailEnabled"
+                  checked={postPurchaseEmailEnabledInput}
+                  onChange={(event) => setPostPurchaseEmailEnabledInput(event.currentTarget.checked)}
+                  style={{ marginTop: "0.2rem" }}
+                />
+                <span style={{ display: "grid", gap: "0.25rem" }}>
+                  <strong>Send post-purchase donation summary emails</strong>
+                  <s-text>
+                    When enabled, customers receive a donation summary email after their order snapshot is created.
+                  </s-text>
+                </span>
+              </label>
+              <s-text>
+                The email uses the order&apos;s `contact_email` field, includes per-cause amounts and donation links, and points
+                customers to the public donation receipts page.
+              </s-text>
+              <div>
+                <s-button type="submit" disabled={isSubmitting}>Save email settings</s-button>
+              </div>
+            </div>
+          </fetcher.Form>
         </s-section>
 
         <s-section heading="Audit Log">

@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   refreshTaxOffsetCacheForShop: vi.fn(),
   syncShopifyCharges: vi.fn(),
   runAnalyticalRecalculation: vi.fn(),
+  sendPostPurchaseDonationEmail: vi.fn(),
+  createSnapshot: vi.fn(),
   adminFactory: vi.fn(),
 }));
 
@@ -48,8 +50,12 @@ vi.mock("../services/analyticalRecalculation.server", () => ({
   runAnalyticalRecalculation: mocks.runAnalyticalRecalculation,
 }));
 
+vi.mock("../services/postPurchaseEmail.server", () => ({
+  sendPostPurchaseDonationEmail: mocks.sendPostPurchaseDonationEmail,
+}));
+
 vi.mock("../services/snapshotService.server", () => ({
-  createSnapshot: vi.fn(),
+  createSnapshot: mocks.createSnapshot,
 }));
 
 vi.mock("../shopify.server", () => ({
@@ -111,6 +117,69 @@ describe("registerAllProcessors", () => {
       expect.objectContaining({
         singletonKey: "shop-2",
         singletonSeconds: 6 * 60 * 60,
+      }),
+    );
+  });
+
+  it("queues a post-purchase email after creating a new snapshot", async () => {
+    const boss = createBoss();
+    mocks.createSnapshot.mockResolvedValue({
+      created: true,
+      snapshotId: "snapshot-1",
+    });
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("orders.snapshot");
+    expect(worker).toBeTruthy();
+
+    await worker!([
+      {
+        data: {
+          shopId: "shop-1",
+          payload: {
+            admin_graphql_api_id: "gid://shopify/Order/1",
+            contact_email: "customer@example.com",
+          },
+        },
+      },
+    ]);
+
+    expect(boss.send).toHaveBeenCalledWith("orders.post-purchase-email", {
+      shopId: "shop-1",
+      snapshotId: "snapshot-1",
+      contactEmail: "customer@example.com",
+    });
+  });
+
+  it("logs and rethrows post-purchase email failures", async () => {
+    const boss = createBoss();
+    mocks.sendPostPurchaseDonationEmail.mockRejectedValue(new Error("provider down"));
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("orders.post-purchase-email");
+    expect(worker).toBeTruthy();
+
+    await expect(
+      worker!([
+        {
+          data: {
+            shopId: "shop-1",
+            snapshotId: "snapshot-1",
+            contactEmail: "customer@example.com",
+          },
+        },
+      ]),
+    ).rejects.toThrow("provider down");
+
+    expect(mocks.prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          shopId: "shop-1",
+          entityId: "snapshot-1",
+          action: "POST_PURCHASE_EMAIL_FAILED",
+        }),
       }),
     );
   });
