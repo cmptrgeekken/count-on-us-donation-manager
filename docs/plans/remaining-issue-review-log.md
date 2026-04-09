@@ -8,7 +8,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 1. `#69` Standardize admin auth helper usage across app routes
 2. `#70` Standardize Decimal parsing for monetary form inputs
 3. `#52` Add audit log browsing UI
-4. Remaining issues to follow in priority order after the cleanup tranche
+4. `#50` Add analytical recalculation delta view
+5. Remaining issues to follow in priority order after the cleanup tranche
 
 ## Issue `#69` Review Notes
 
@@ -117,3 +118,45 @@ Each section is meant to give a compact review summary, automated/manual test fo
 - Filter by date range and verify rows narrow correctly.
 - Open a payload block and confirm before/after details are readable.
 - Navigate to the next page when more than one page of logs exists.
+
+## Issue `#50` Review Notes
+
+### Summary
+
+- Add asynchronous analytical recalculation runs for reporting periods.
+- Persist run status/results separately from authoritative reporting data.
+- Show merchant-facing analytical-only deltas for period totals and cause allocations.
+
+### Files
+
+- `prisma/schema.prisma`
+- `prisma/migrations/20260409030000_issue50_analytical_recalculation_runs/migration.sql`
+- `app/services/analyticalRecalculation.server.ts`
+- `app/services/analyticalRecalculation.server.test.ts`
+- `app/jobs/processors.server.ts`
+- `app/jobs/processors.server.test.ts`
+- `app/routes/app.reporting.tsx`
+- `app/routes/ui-fixtures.reporting-bootstrap.tsx`
+- `tests/ui/reporting-workflow.spec.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `analyticalRecalculation.server.test.ts`
+  - queuing creates a run and audit event
+  - summary calculation produces period/cause deltas
+  - analytical recalculation does not mutate snapshots, allocations, or disbursements
+  - worker completion persists a completed summary
+- `processors.server.test.ts`
+  - reporting recalculation queue jobs invoke the analytical service
+- full `npm test`
+  - regression coverage remains green with the new reporting worker/service
+
+#### Manual
+
+- On Reporting, click `Run recalculation` for a period.
+- Confirm the page clearly labels the results as analytical-only.
+- While a run is pending, confirm the status banner indicates refresh/polling behavior.
+- After completion, confirm period deltas and per-cause deltas are visible.
+- Verify authoritative period figures elsewhere on the page do not change after the analytical run.

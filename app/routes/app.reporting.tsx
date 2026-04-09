@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useRouteError, useSearchParams } from "@remix-run/react";
+import { useFetcher, useLoaderData, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { prisma } from "../db.server";
+import { queueAnalyticalRecalculation } from "../services/analyticalRecalculation.server";
 import {
   ACCEPTED_RECEIPT_CONTENT_TYPES,
   DisbursementError,
@@ -133,6 +135,25 @@ type TaxTrueUpRow = {
   }>;
 };
 
+type AnalyticalRecalculationSummary = {
+  period: {
+    authoritativeNetContribution: string;
+    recalculatedNetContribution: string;
+    netContributionDelta: string;
+    authoritativeDonationPool: string;
+    recalculatedDonationPool: string;
+    donationPoolDelta: string;
+    shopifyCharges: string;
+  };
+  causes: Array<{
+    causeId: string;
+    causeName: string;
+    authoritativeAllocated: string;
+    recalculatedAllocated: string;
+    delta: string;
+  }>;
+};
+
 const disbursementSchema = z.object({
   periodId: z.string().trim().cuid("Reporting period id is invalid."),
   causeId: z.string().trim().cuid("Cause id is invalid."),
@@ -179,7 +200,38 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopId = session.shop;
   const url = new URL(request.url);
   const requestedPeriodId = url.searchParams.get("periodId") ?? "";
-  return Response.json(await buildReportingSummary(shopId, requestedPeriodId));
+  const reporting = await buildReportingSummary(shopId, requestedPeriodId);
+  const analyticalRecalculationRun = reporting.selectedPeriodId
+    ? await prisma.analyticalRecalculationRun.findFirst({
+        where: {
+          shopId,
+          periodId: reporting.selectedPeriodId,
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          status: true,
+          errorMessage: true,
+          createdAt: true,
+          startedAt: true,
+          completedAt: true,
+          summary: true,
+        },
+      })
+    : null;
+
+  return Response.json({
+    ...reporting,
+    analyticalRecalculationRun: analyticalRecalculationRun
+      ? {
+          ...analyticalRecalculationRun,
+          createdAt: analyticalRecalculationRun.createdAt.toISOString(),
+          startedAt: analyticalRecalculationRun.startedAt?.toISOString() ?? null,
+          completedAt: analyticalRecalculationRun.completedAt?.toISOString() ?? null,
+          summary: analyticalRecalculationRun.summary as AnalyticalRecalculationSummary | null,
+        }
+      : null,
+  });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -196,6 +248,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     await closeReportingPeriod(shopId, periodId);
     return Response.json({ ok: true, message: "Reporting period closed." });
+  }
+
+  if (intent === "run-analytical-recalculation") {
+    const periodId = formData.get("periodId")?.toString() ?? "";
+    if (!periodId) {
+      return Response.json({ ok: false, message: "Reporting period id is required." }, { status: 400 });
+    }
+
+    await queueAnalyticalRecalculation(shopId, periodId);
+    return Response.json({ ok: true, message: "Analytical recalculation queued." });
   }
 
   if (intent === "log-disbursement") {
@@ -387,11 +449,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function ReportingPage() {
-  const { periods, selectedPeriodId, summary } = useLoaderData<typeof loader>();
+  const { periods, selectedPeriodId, summary, analyticalRecalculationRun } = useLoaderData<typeof loader>();
   const closeFetcher = useFetcher<ReportingActionData>();
   const disbursementFetcher = useFetcher<ReportingActionData>();
   const trueUpFetcher = useFetcher<ReportingActionData>();
+  const recalculationFetcher = useFetcher<ReportingActionData>();
   const [searchParams] = useSearchParams();
+  const revalidator = useRevalidator();
   const { formatMoney, formatPct, locale } = useAppLocalization();
   const closeDialogRef = useRef<HTMLDialogElement>(null);
   const disbursementFormRef = useRef<HTMLFormElement>(null);
@@ -428,8 +492,24 @@ export default function ReportingPage() {
     return () => window.clearTimeout(timeout);
   }, [exportingFormat]);
 
+  useEffect(() => {
+    if (!analyticalRecalculationRun) return;
+    if (analyticalRecalculationRun.status !== "queued" && analyticalRecalculationRun.status !== "running") return;
+
+    const timeout = window.setTimeout(() => {
+      revalidator.revalidate();
+    }, 4000);
+
+    return () => window.clearTimeout(timeout);
+  }, [analyticalRecalculationRun, revalidator]);
+
   const selectedPeriod = summary?.period ?? null;
-  const statusMessage = closeFetcher.data?.message ?? disbursementFetcher.data?.message ?? trueUpFetcher.data?.message ?? "";
+  const statusMessage =
+    closeFetcher.data?.message ??
+    disbursementFetcher.data?.message ??
+    trueUpFetcher.data?.message ??
+    recalculationFetcher.data?.message ??
+    "";
   const disbursementStatusMessage =
     disbursementFetcher.data && !disbursementFetcher.data.ok ? disbursementFetcher.data.message : "";
   const trueUpStatusMessage = trueUpFetcher.data && !trueUpFetcher.data.ok ? trueUpFetcher.data.message : "";
@@ -516,6 +596,7 @@ export default function ReportingPage() {
   );
   const disbursements: DisbursementRow[] = summary?.disbursements ?? [];
   const taxTrueUps: TaxTrueUpRow[] = summary?.taxTrueUps ?? [];
+  const recalculationSummary = analyticalRecalculationRun?.summary ?? null;
   const disbursementOptions = disbursementCauseOptions.map<DisbursementOption>((allocation) => ({
     causeId: allocation.causeId,
     label: `${allocation.causeName} (${formatMoney(allocation.totalOutstanding)} outstanding)`,
@@ -844,6 +925,115 @@ export default function ReportingPage() {
                   )}
                 </s-table-body>
               </s-table>
+            </div>
+          </s-section>
+
+          <s-section heading="Analytical recalculation">
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <s-banner tone="info">
+                <s-text>
+                  Analytical only. This compares the current configuration to authoritative historical snapshot figures without mutating snapshots, allocations, disbursements, or closed periods.
+                </s-text>
+              </s-banner>
+
+              <recalculationFetcher.Form method="post">
+                <input type="hidden" name="intent" value="run-analytical-recalculation" />
+                <input type="hidden" name="periodId" value={selectedPeriod.id} />
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+                  <div style={{ display: "grid", gap: "0.25rem" }}>
+                    <strong>Latest run</strong>
+                    <s-text color="subdued">
+                      {analyticalRecalculationRun
+                        ? `${analyticalRecalculationRun.status} · requested ${formatDate(analyticalRecalculationRun.createdAt, locale)}`
+                        : "No analytical recalculation has been run for this period yet."}
+                    </s-text>
+                  </div>
+                  <s-button
+                    type="submit"
+                    disabled={
+                      recalculationFetcher.state !== "idle" ||
+                      analyticalRecalculationRun?.status === "queued" ||
+                      analyticalRecalculationRun?.status === "running"
+                    }
+                  >
+                    Run recalculation
+                  </s-button>
+                </div>
+              </recalculationFetcher.Form>
+
+              {analyticalRecalculationRun?.status === "failed" ? (
+                <s-banner tone="critical">
+                  <s-text>{analyticalRecalculationRun.errorMessage ?? "Analytical recalculation failed."}</s-text>
+                </s-banner>
+              ) : null}
+
+              {analyticalRecalculationRun?.status === "queued" || analyticalRecalculationRun?.status === "running" ? (
+                <s-banner tone="info">
+                  <s-text>Analytical recalculation is running. This page will refresh when the result is ready.</s-text>
+                </s-banner>
+              ) : null}
+
+              {recalculationSummary ? (
+                <>
+                  <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+                    <div>
+                      <strong>Authoritative net contribution</strong>
+                      <s-text color="subdued">{formatMoney(recalculationSummary.period.authoritativeNetContribution)}</s-text>
+                    </div>
+                    <div>
+                      <strong>Recalculated net contribution</strong>
+                      <s-text color="subdued">{formatMoney(recalculationSummary.period.recalculatedNetContribution)}</s-text>
+                    </div>
+                    <div>
+                      <strong>Net contribution delta</strong>
+                      <s-text color="subdued">{formatMoney(recalculationSummary.period.netContributionDelta)}</s-text>
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+                    <div>
+                      <strong>Authoritative donation pool</strong>
+                      <s-text color="subdued">{formatMoney(recalculationSummary.period.authoritativeDonationPool)}</s-text>
+                    </div>
+                    <div>
+                      <strong>Recalculated donation pool</strong>
+                      <s-text color="subdued">{formatMoney(recalculationSummary.period.recalculatedDonationPool)}</s-text>
+                    </div>
+                    <div>
+                      <strong>Donation pool delta</strong>
+                      <s-text color="subdued">{formatMoney(recalculationSummary.period.donationPoolDelta)}</s-text>
+                    </div>
+                  </div>
+
+                  <s-table>
+                    <s-table-header-row>
+                      <s-table-header listSlot="primary">Cause</s-table-header>
+                      <s-table-header listSlot="secondary">Authoritative allocated</s-table-header>
+                      <s-table-header listSlot="secondary">Recalculated allocated</s-table-header>
+                      <s-table-header listSlot="labeled" format="currency">Delta</s-table-header>
+                    </s-table-header-row>
+                    <s-table-body>
+                      {recalculationSummary.causes.length === 0 ? (
+                        <s-table-row>
+                          <s-table-cell>No cause deltas available.</s-table-cell>
+                          <s-table-cell></s-table-cell>
+                          <s-table-cell></s-table-cell>
+                          <s-table-cell></s-table-cell>
+                        </s-table-row>
+                      ) : (
+                        recalculationSummary.causes.map((cause: AnalyticalRecalculationSummary["causes"][number]) => (
+                          <s-table-row key={cause.causeId}>
+                            <s-table-cell>{cause.causeName}</s-table-cell>
+                            <s-table-cell>{formatMoney(cause.authoritativeAllocated)}</s-table-cell>
+                            <s-table-cell>{formatMoney(cause.recalculatedAllocated)}</s-table-cell>
+                            <s-table-cell>{formatMoney(cause.delta)}</s-table-cell>
+                          </s-table-row>
+                        ))
+                      )}
+                    </s-table-body>
+                  </s-table>
+                </>
+              ) : null}
             </div>
           </s-section>
 

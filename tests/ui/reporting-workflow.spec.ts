@@ -126,3 +126,22 @@ test("reporting dashboard export routes return csv and pdf downloads", async ({ 
   const pdfBuffer = await pdfResponse.body();
   expect(Buffer.from(pdfBuffer).subarray(0, 8).toString("utf8")).toContain("%PDF-1.4");
 });
+
+test("reporting dashboard shows analytical recalculation deltas as read-only analysis", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/reporting-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.closedReportingUrl);
+
+  await expect(page.getByRole("heading", { name: "Analytical recalculation" })).toBeVisible();
+  await expect(page.getByText("Analytical only.")).toBeVisible();
+  await expect(page.getByText("Authoritative net contribution")).toBeVisible();
+  await expect(page.getByText("Recalculated net contribution")).toBeVisible();
+  await expect(page.getByText("$46.00")).toBeVisible();
+  const deltaRow = page
+    .locator("s-table-row")
+    .filter({ hasText: "Playwright Cause" })
+    .filter({ hasText: "$6.00" });
+  await expect(deltaRow).toBeVisible();
+});

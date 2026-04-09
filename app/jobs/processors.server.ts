@@ -1,5 +1,6 @@
 import type { PgBoss } from "pg-boss";
 import { prisma } from "../db.server";
+import { runAnalyticalRecalculation } from "../services/analyticalRecalculation.server";
 import { syncShopifyCharges } from "../services/chargeSyncService.server";
 import { fullSync, incrementalSync } from "../services/catalogSync.server";
 import { processOrderUpdate, processRefund } from "../services/adjustmentService.server";
@@ -22,6 +23,7 @@ const QUEUES = [
   "reporting.period.open",
   "reporting.tax-offset.daily",
   "reporting.tax-offset.shop",
+  "reporting.recalculate",
   "shop.delete",
   "webhook.compliance",
   "catalog.sync",
@@ -213,6 +215,14 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       });
       throw error;
     }
+  });
+
+  await boss.work<{ shopId: string; runId: string }>("reporting.recalculate", async (jobs) => {
+    const job = jobs[0];
+    if (!job) return;
+
+    const { shopId, runId } = job.data;
+    await runAnalyticalRecalculation(shopId, runId, prisma);
   });
 
   await boss.work<{ shopId: string; deletionJobId: string }>(

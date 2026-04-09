@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   createReportingPeriodFromPayout: vi.fn(),
   refreshTaxOffsetCacheForShop: vi.fn(),
   syncShopifyCharges: vi.fn(),
+  runAnalyticalRecalculation: vi.fn(),
   adminFactory: vi.fn(),
 }));
 
@@ -41,6 +42,10 @@ vi.mock("../services/reportingPeriodService.server", () => ({
 
 vi.mock("../services/reportingService.server", () => ({
   refreshTaxOffsetCacheForShop: mocks.refreshTaxOffsetCacheForShop,
+}));
+
+vi.mock("../services/analyticalRecalculation.server", () => ({
+  runAnalyticalRecalculation: mocks.runAnalyticalRecalculation,
 }));
 
 vi.mock("../services/snapshotService.server", () => ({
@@ -252,6 +257,23 @@ describe("registerAllProcessors", () => {
           action: "SHOPIFY_CHARGES_SYNC_FAILED",
         }),
       }),
+    );
+  });
+
+  it("runs analytical recalculation jobs per shop and run id", async () => {
+    const boss = createBoss();
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("reporting.recalculate");
+    expect(worker).toBeTruthy();
+
+    await worker!([{ data: { shopId: "shop-1", runId: "run-1" } }]);
+
+    expect(mocks.runAnalyticalRecalculation).toHaveBeenCalledWith(
+      "shop-1",
+      "run-1",
+      mocks.prisma,
     );
   });
 });

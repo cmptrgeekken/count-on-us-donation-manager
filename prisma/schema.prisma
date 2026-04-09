@@ -438,10 +438,27 @@ model ReportingPeriod {
   taxTrueUps       TaxTrueUp[]
   appliedTrueUps   TaxTrueUp[]      @relation("AppliedTaxTrueUps")
   shopifyCharges   ShopifyChargeTransaction[]
+  recalculationRuns AnalyticalRecalculationRun[]
 
   @@unique([shopId, shopifyPayoutId])
   @@index([shopId, status])
   @@index([shopId, startDate, endDate])
+}
+
+model AnalyticalRecalculationRun {
+  id          String          @id @default(cuid())
+  shopId       String
+  periodId     String
+  period       ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  status       String          @default("queued")
+  summary      Json?
+  errorMessage String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime        @default(now())
+
+  @@index([shopId, periodId, createdAt])
+  @@index([periodId])
 }
 
 model CauseAllocation {
