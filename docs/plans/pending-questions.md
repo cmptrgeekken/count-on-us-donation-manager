@@ -99,3 +99,9 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - privacy policy URL is still undefined in submission docs
   - DPA request path is still undefined in submission docs
 - We should decide whether each of those becomes its own tracked blocker issue or is resolved directly in the Phase 6 branch before wider submission review.
+
+### Final review gating
+
+- `#63` now has a review template, but the final meeting still depends on one remaining missing artifact:
+  - the full PRD QA workbook for `#60`
+- We should decide whether to treat `#60` as a separate tracked deliverable before any go/no-go meeting is scheduled, or whether the PRD checklist will be worked directly into the review packet.

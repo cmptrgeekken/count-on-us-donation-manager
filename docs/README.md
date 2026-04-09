@@ -12,6 +12,8 @@ This folder is organized by purpose rather than by a global numbering scheme.
   Working listing copy, screenshot plan, and submission disclosures draft.
 - [App Store Technical Audit](app-store-technical-audit.md)
   Submission-readiness checklist with repo evidence and manual verification gaps.
+- [Final Pre-Submission Review](final-pre-submission-review.md)
+  Go/no-go template for the last submission readiness review.
 
 ## Product And Planning
 

@@ -19,7 +19,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 12. `#61` Prepare demo store for App Store review
 13. `#62` Prepare App Store listing assets and copy
 14. `#59` Run App Store pre-submission technical audit
-15. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+15. `#63` Complete final pre-submission review
+16. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -618,3 +619,30 @@ Each section is meant to give a compact review summary, automated/manual test fo
   - missing `compliance_topics`
   - missing privacy policy URL
   - missing DPA request path
+
+## Issue `#63` Review Notes
+
+### Summary
+
+- Add the final go/no-go review template so the last submission decision is structured instead of improvised.
+- Point the review at the audit, demo-store, listing, and pending-question artifacts already being assembled on this branch.
+
+### Files
+
+- `docs/final-pre-submission-review.md`
+
+### Test Cases For Review
+
+#### Automated
+
+- No automated coverage added for this docs-only review template.
+- Full `npm test`, `npx tsc --noEmit`, and `npm run lint` should remain green after the docs update.
+
+#### Manual
+
+- Fill in the final review once the technical audit, QA workbook, demo store, and listing artifacts are all ready.
+- Record:
+  - participants
+  - blockers
+  - residual risks
+  - final `Go` / `No-go` decision
