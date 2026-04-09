@@ -100,21 +100,58 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
 };
 
 describe("reporting exports", () => {
-  it("builds csv output with key reporting sections", () => {
+  it("builds csv output as a single tabular dataset", () => {
     const csv = buildReportingPeriodCsv(summary);
+    const [headerLine, ...rowLines] = csv.split("\n");
+    const headers = headerLine.split(",");
 
-    expect(csv).toContain("Track 1");
-    expect(csv).toContain("Outstanding cause payables");
+    expect(headers).toEqual([
+      "section",
+      "recordType",
+      "periodId",
+      "periodStartDate",
+      "periodEndDate",
+      "status",
+      "causeId",
+      "causeName",
+      "is501c3",
+      "description",
+      "paidAt",
+      "filedAt",
+      "processedAt",
+      "paymentMethod",
+      "referenceId",
+      "shopifyPayoutId",
+      "metric",
+      "value",
+      "allocatedAmount",
+      "disbursedAmount",
+      "remainingAmount",
+      "currentOutstanding",
+      "priorOutstanding",
+      "totalOutstanding",
+      "extraContributionAmount",
+      "feesCoveredAmount",
+      "delta",
+      "notes",
+      "applicationPeriods",
+      "redistributions",
+    ]);
+    expect(rowLines.every((line) => line.split(",").length >= headers.length)).toBe(true);
+    expect(csv).toContain("track1,metric");
+    expect(csv).toContain("payables,causePayable");
     expect(csv).toContain("Playwright Cause");
     expect(csv).toContain("fixture-ach-001");
     expect(csv).toContain("2026-01-31..2026-02-14=20.00");
   });
 
-  it("builds a pdf file payload", () => {
+  it("builds a pdf file payload with a safe top margin", () => {
     const pdf = buildReportingPeriodPdf(summary);
+    const pdfText = Buffer.from(pdf).toString("utf8");
 
     expect(Buffer.from(pdf).subarray(0, 8).toString("utf8")).toContain("%PDF-1.4");
-    expect(Buffer.from(pdf).toString("utf8")).toContain("Reporting period:");
-    expect(Buffer.from(pdf).toString("utf8")).toContain("Outstanding cause payables");
+    expect(pdfText).toContain("Reporting period:");
+    expect(pdfText).toContain("Outstanding cause payables");
+    expect(pdfText).toContain("50 756 Td");
   });
 });

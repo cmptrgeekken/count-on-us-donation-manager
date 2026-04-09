@@ -398,6 +398,7 @@ export default function ReportingPage() {
   const trueUpFormRef = useRef<HTMLFormElement>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<"csv" | "pdf" | null>(null);
+  const [exportError, setExportError] = useState("");
 
   useEffect(() => {
     const dialog = closeDialogRef.current;
@@ -455,6 +456,43 @@ export default function ReportingPage() {
     fd.append("periodId", selectedPeriod.id);
     closeFetcher.submit(fd, { method: "post" });
     setCloseDialogOpen(false);
+  }
+
+  async function exportPeriod(format: "csv" | "pdf") {
+    if (!selectedPeriod) return;
+    setExportError("");
+    setExportingFormat(format);
+    try {
+      const params = new URLSearchParams(searchParams);
+      params.set("periodId", selectedPeriod.id);
+      params.set("format", format);
+
+      const response = await fetch(`/app/reporting-export?${params.toString()}`, {
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Unable to export ${format.toUpperCase()}.`);
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] ?? `reporting-period.${format}`;
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : `Unable to export ${format.toUpperCase()}.`);
+    } finally {
+      setExportingFormat(null);
+    }
   }
 
   const allocationRows: AllocationRow[] = summary
@@ -614,6 +652,11 @@ export default function ReportingPage() {
             <s-text>{trueUpFetcher.data.message}</s-text>
           </s-banner>
         )}
+        {exportError ? (
+          <s-banner tone="critical">
+            <s-text>{exportError}</s-text>
+          </s-banner>
+        ) : null}
 
         <s-section>
           <div style={{ display: "grid", gap: "0.5rem" }}>
@@ -647,30 +690,24 @@ export default function ReportingPage() {
             ) : null}
             {selectedPeriod ? (
               <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <form method="get" action="/app/reporting-export" target="_blank">
-                  <input type="hidden" name="periodId" value={selectedPeriod.id} />
-                  <input type="hidden" name="format" value="csv" />
-                  <button
-                    type="submit"
-                    aria-label="Export reporting period as CSV"
-                    onClick={() => setExportingFormat("csv")}
-                    style={disbursementSubmitStyle}
-                  >
-                    {exportingFormat === "csv" ? "Exporting CSV..." : "Export CSV"}
-                  </button>
-                </form>
-                <form method="get" action="/app/reporting-export" target="_blank">
-                  <input type="hidden" name="periodId" value={selectedPeriod.id} />
-                  <input type="hidden" name="format" value="pdf" />
-                  <button
-                    type="submit"
-                    aria-label="Export reporting period as PDF"
-                    onClick={() => setExportingFormat("pdf")}
-                    style={disbursementSubmitStyle}
-                  >
-                    {exportingFormat === "pdf" ? "Exporting PDF..." : "Export PDF"}
-                  </button>
-                </form>
+                <button
+                  type="button"
+                  aria-label="Export reporting period as CSV"
+                  onClick={() => void exportPeriod("csv")}
+                  disabled={exportingFormat !== null}
+                  style={disbursementSubmitStyle}
+                >
+                  {exportingFormat === "csv" ? "Exporting CSV..." : "Export CSV"}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Export reporting period as PDF"
+                  onClick={() => void exportPeriod("pdf")}
+                  disabled={exportingFormat !== null}
+                  style={disbursementSubmitStyle}
+                >
+                  {exportingFormat === "pdf" ? "Exporting PDF..." : "Export PDF"}
+                </button>
               </div>
             ) : null}
           </div>

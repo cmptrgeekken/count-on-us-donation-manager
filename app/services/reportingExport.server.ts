@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { Prisma } from "@prisma/client";
 import type { ReportingSummaryResult } from "./reportingSummary.server";
 
 function csvEscape(value: string) {
@@ -8,94 +9,256 @@ function csvEscape(value: string) {
   return value;
 }
 
+type CsvRow = Record<string, string>;
+
 function formatDate(iso: string | null | undefined) {
   if (!iso) return "";
   return iso.slice(0, 10);
 }
 
-function pushSection(lines: string[], title: string, headers: string[], rows: string[][]) {
-  lines.push(title);
-  lines.push(headers.map(csvEscape).join(","));
+function toCsv(rows: CsvRow[], headers: string[]) {
+  const lines = [headers.map(csvEscape).join(",")];
   for (const row of rows) {
-    lines.push(row.map((value) => csvEscape(value ?? "")).join(","));
+    lines.push(headers.map((header) => csvEscape(row[header] ?? "")).join(","));
   }
-  lines.push("");
+  return lines.join("\n");
 }
 
 export function buildReportingPeriodCsv(summary: NonNullable<ReportingSummaryResult["summary"]>) {
-  const lines: string[] = [];
+  const headers = [
+    "section",
+    "recordType",
+    "periodId",
+    "periodStartDate",
+    "periodEndDate",
+    "status",
+    "causeId",
+    "causeName",
+    "is501c3",
+    "description",
+    "paidAt",
+    "filedAt",
+    "processedAt",
+    "paymentMethod",
+    "referenceId",
+    "shopifyPayoutId",
+    "metric",
+    "value",
+    "allocatedAmount",
+    "disbursedAmount",
+    "remainingAmount",
+    "currentOutstanding",
+    "priorOutstanding",
+    "totalOutstanding",
+    "extraContributionAmount",
+    "feesCoveredAmount",
+    "delta",
+    "notes",
+    "applicationPeriods",
+    "redistributions",
+  ];
 
-  pushSection(lines, "Period", ["Field", "Value"], [
-    ["Status", summary.period.status],
-    ["Start date", formatDate(summary.period.startDate)],
-    ["End date", formatDate(summary.period.endDate)],
-    ["Payout id", summary.period.shopifyPayoutId ?? ""],
-    ["Closed at", summary.period.closedAt ?? ""],
-  ]);
+  const basePeriod = {
+    periodId: summary.period.id,
+    periodStartDate: formatDate(summary.period.startDate),
+    periodEndDate: formatDate(summary.period.endDate),
+    status: summary.period.status,
+    shopifyPayoutId: summary.period.shopifyPayoutId ?? "",
+  };
 
-  pushSection(lines, "Track 1", ["Field", "Value"], [
-    ["Total net contribution", summary.track1.totalNetContribution],
-    ["Shopify charges", summary.track1.shopifyCharges],
-    ["Donation pool", summary.track1.donationPool],
-    ["Surplus carry-forward", summary.track1.taxTrueUpSurplusApplied],
-    ["Shortfall carry-forward", summary.track1.taxTrueUpShortfallApplied],
-  ]);
+  const rows: CsvRow[] = [
+    {
+      ...basePeriod,
+      section: "period",
+      recordType: "period",
+      metric: "closedAt",
+      value: formatDate(summary.period.closedAt),
+    },
+    {
+      ...basePeriod,
+      section: "track1",
+      recordType: "metric",
+      metric: "totalNetContribution",
+      value: summary.track1.totalNetContribution,
+    },
+    {
+      ...basePeriod,
+      section: "track1",
+      recordType: "metric",
+      metric: "shopifyCharges",
+      value: summary.track1.shopifyCharges,
+    },
+    {
+      ...basePeriod,
+      section: "track1",
+      recordType: "metric",
+      metric: "donationPool",
+      value: summary.track1.donationPool,
+    },
+    {
+      ...basePeriod,
+      section: "track1",
+      recordType: "metric",
+      metric: "surplusCarryForward",
+      value: summary.track1.taxTrueUpSurplusApplied,
+    },
+    {
+      ...basePeriod,
+      section: "track1",
+      recordType: "metric",
+      metric: "shortfallCarryForward",
+      value: summary.track1.taxTrueUpShortfallApplied,
+    },
+    ...summary.track1.allocations.map<CsvRow>((allocation) => ({
+      ...basePeriod,
+      section: "allocations",
+      recordType: "allocation",
+      causeId: allocation.causeId,
+      causeName: allocation.causeName,
+      is501c3: allocation.is501c3 ? "Yes" : "No",
+      allocatedAmount: allocation.allocated,
+      disbursedAmount: allocation.disbursed,
+      remainingAmount: new Prisma.Decimal(allocation.allocated)
+        .sub(new Prisma.Decimal(allocation.disbursed))
+        .toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR)
+        .toString(),
+    })),
+    ...summary.causePayables.flatMap<CsvRow>((payable) => [
+      {
+        ...basePeriod,
+        section: "payables",
+        recordType: "causePayable",
+        causeId: payable.causeId,
+        causeName: payable.causeName,
+        is501c3: payable.is501c3 ? "Yes" : "No",
+        currentOutstanding: payable.currentOutstanding,
+        priorOutstanding: payable.priorOutstanding,
+        totalOutstanding: payable.totalOutstanding,
+        notes: payable.overdue ? "Overdue" : "",
+      },
+      ...payable.periods.map((period) => ({
+        ...basePeriod,
+        section: "payables",
+        recordType: "payablePeriod",
+        causeId: payable.causeId,
+        causeName: payable.causeName,
+        periodId: period.periodId,
+        periodStartDate: formatDate(period.periodStartDate),
+        periodEndDate: formatDate(period.periodEndDate),
+        value: period.amount,
+      })),
+    ]),
+    ...summary.charges.map<CsvRow>((charge) => ({
+      ...basePeriod,
+      section: "charges",
+      recordType: "charge",
+      description: charge.description,
+      processedAt: formatDate(charge.processedAt),
+      value: charge.amount,
+    })),
+    ...summary.disbursements.map<CsvRow>((disbursement) => ({
+      ...basePeriod,
+      section: "disbursements",
+      recordType: "disbursement",
+      causeId: disbursement.causeId,
+      causeName: disbursement.causeName,
+      paidAt: formatDate(disbursement.paidAt),
+      paymentMethod: disbursement.paymentMethod,
+      referenceId: disbursement.referenceId ?? "",
+      value: disbursement.amount,
+      allocatedAmount: disbursement.allocatedAmount,
+      extraContributionAmount: disbursement.extraContributionAmount,
+      feesCoveredAmount: disbursement.feesCoveredAmount,
+      applicationPeriods: disbursement.applications
+        .map((application) => `${formatDate(application.periodStartDate)}..${formatDate(application.periodEndDate)}=${application.amount}`)
+        .join(" | "),
+    })),
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "deductionPool",
+      value: summary.track2.deductionPool,
+    },
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "taxableExposure",
+      value: summary.track2.taxableExposure,
+    },
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "widgetTaxSuppressed",
+      value: summary.track2.widgetTaxSuppressed ? "Yes" : "No",
+    },
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "taxableBase",
+      value: summary.track2.taxableBase,
+    },
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "taxableWeight",
+      value: summary.track2.taxableWeight,
+    },
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "estimatedTaxReserve",
+      value: summary.track2.estimatedTaxReserve,
+    },
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "effectiveTaxRate",
+      value: summary.track2.effectiveTaxRate ?? "",
+    },
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "taxDeductionMode",
+      value: summary.track2.taxDeductionMode,
+    },
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "businessExpenseTotal",
+      value: summary.track2.businessExpenseTotal,
+    },
+    {
+      ...basePeriod,
+      section: "track2",
+      recordType: "metric",
+      metric: "allocation501c3Total",
+      value: summary.track2.allocation501c3Total,
+    },
+    ...summary.taxTrueUps.map<CsvRow>((trueUp) => ({
+      ...basePeriod,
+      section: "taxTrueUps",
+      recordType: "taxTrueUp",
+      filedAt: formatDate(trueUp.filedAt),
+      value: trueUp.actualTax,
+      allocatedAmount: trueUp.estimatedTax,
+      delta: trueUp.delta,
+      notes: trueUp.redistributionNotes ?? "",
+      redistributions: trueUp.redistributions
+        .map((redistribution) => `${redistribution.causeName}=${redistribution.amount}`)
+        .join(" | "),
+    })),
+  ];
 
-  pushSection(lines, "Cause allocations", ["Cause", "501c3", "Allocated", "Disbursed"], summary.track1.allocations.map((allocation) => [
-    allocation.causeName,
-    allocation.is501c3 ? "Yes" : "No",
-    allocation.allocated,
-    allocation.disbursed,
-  ]));
-
-  pushSection(lines, "Outstanding cause payables", ["Cause", "Current outstanding", "Prior outstanding", "Total outstanding", "Overdue"], summary.causePayables.map((payable) => [
-    payable.causeName,
-    payable.currentOutstanding,
-    payable.priorOutstanding,
-    payable.totalOutstanding,
-    payable.overdue ? "Yes" : "No",
-  ]));
-
-  pushSection(lines, "Shopify charges", ["Description", "Amount", "Processed at"], summary.charges.map((charge) => [
-    charge.description,
-    charge.amount,
-    charge.processedAt ?? "",
-  ]));
-
-  pushSection(lines, "Disbursements", ["Cause", "Paid at", "Allocated", "Extra", "Fees", "Total", "Method", "Reference", "Applications"], summary.disbursements.map((disbursement) => [
-    disbursement.causeName,
-    formatDate(disbursement.paidAt),
-    disbursement.allocatedAmount,
-    disbursement.extraContributionAmount,
-    disbursement.feesCoveredAmount,
-    disbursement.amount,
-    disbursement.paymentMethod,
-    disbursement.referenceId ?? "",
-    disbursement.applications.map((application) => `${formatDate(application.periodStartDate)}..${formatDate(application.periodEndDate)}=${application.amount}`).join(" | "),
-  ]));
-
-  pushSection(lines, "Track 2", ["Field", "Value"], [
-    ["Deduction pool", summary.track2.deductionPool],
-    ["Taxable exposure", summary.track2.taxableExposure],
-    ["Widget tax suppressed", summary.track2.widgetTaxSuppressed ? "Yes" : "No"],
-    ["Taxable base", summary.track2.taxableBase],
-    ["Taxable weight", summary.track2.taxableWeight],
-    ["Estimated tax reserve", summary.track2.estimatedTaxReserve],
-    ["Effective tax rate", summary.track2.effectiveTaxRate ?? ""],
-    ["Tax deduction mode", summary.track2.taxDeductionMode],
-    ["Business expenses", summary.track2.businessExpenseTotal],
-    ["501c3 allocations", summary.track2.allocation501c3Total],
-  ]);
-
-  pushSection(lines, "Tax true-ups", ["Filed at", "Estimated", "Actual", "Delta", "Notes"], summary.taxTrueUps.map((trueUp) => [
-    formatDate(trueUp.filedAt),
-    trueUp.estimatedTax,
-    trueUp.actualTax,
-    trueUp.delta,
-    trueUp.redistributionNotes ?? "",
-  ]));
-
-  return lines.join("\n");
+  return toCsv(rows, headers);
 }
 
 function escapePdfText(value: string) {
@@ -104,7 +267,7 @@ function escapePdfText(value: string) {
 
 function buildSimplePdf(lines: string[]) {
   const objects: string[] = [];
-  const pageLines = 44;
+  const pageLines = 48;
   const pages: string[][] = [];
   for (let index = 0; index < lines.length; index += pageLines) {
     pages.push(lines.slice(index, index + pageLines));
@@ -116,7 +279,7 @@ function buildSimplePdf(lines: string[]) {
   objects.push("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
 
   for (const page of pages) {
-    const contentLines = ["BT", "/F1 10 Tf", "50 792 Td", "14 TL"];
+    const contentLines = ["BT", "/F1 10 Tf", "50 756 Td", "14 TL"];
     page.forEach((line, index) => {
       if (index === 0) {
         contentLines.push(`(${escapePdfText(line)}) Tj`);
