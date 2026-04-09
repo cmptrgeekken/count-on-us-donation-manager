@@ -117,7 +117,7 @@ test("reporting dashboard export routes return csv and pdf downloads", async ({ 
   expect(csvResponse.ok()).toBeTruthy();
   expect(csvResponse.headers()["content-type"]).toContain("text/csv");
   expect(csvResponse.headers()["content-disposition"]).toContain(".csv");
-  expect(await csvResponse.text()).toContain("Outstanding cause payables");
+  expect(await csvResponse.text()).toContain("section,recordType,periodId");
 
   const pdfResponse = await request.get(`/app/reporting-export?__playwrightShop=${encodeURIComponent(bootstrap.shopId)}&periodId=${encodeURIComponent(bootstrap.closedPeriodId)}&format=pdf`);
   expect(pdfResponse.ok()).toBeTruthy();
@@ -125,4 +125,24 @@ test("reporting dashboard export routes return csv and pdf downloads", async ({ 
   expect(pdfResponse.headers()["content-disposition"]).toContain(".pdf");
   const pdfBuffer = await pdfResponse.body();
   expect(Buffer.from(pdfBuffer).subarray(0, 8).toString("utf8")).toContain("%PDF-1.4");
+});
+
+test("reporting dashboard shows analytical recalculation deltas as read-only analysis", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/reporting-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.closedReportingUrl);
+
+  const analysisSection = page.locator("s-section").filter({ hasText: "Analytical recalculation" });
+  await expect(page.getByRole("heading", { name: "Analytical recalculation" })).toBeVisible();
+  await expect(analysisSection.getByText("Analytical only.")).toBeVisible();
+  await expect(analysisSection.getByText("Authoritative net contribution")).toBeVisible();
+  await expect(analysisSection.getByText("Recalculated net contribution")).toBeVisible();
+  await expect(analysisSection.getByText("$46.00").first()).toBeVisible();
+  const deltaRow = page
+    .locator("s-table-row")
+    .filter({ hasText: "Playwright Cause" })
+    .filter({ hasText: "$6.00" });
+  await expect(deltaRow).toBeVisible();
 });

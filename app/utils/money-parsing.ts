@@ -106,3 +106,9 @@ export function parsePercentInputToRate(value: string | null | undefined, field:
     .div(new Prisma.Decimal(100))
     .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
 }
+
+export function parseOptionalPercentInputToRate(value: string | null | undefined, field: string) {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return null;
+  return parsePercentInputToRate(trimmed, field);
+}

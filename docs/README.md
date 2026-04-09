@@ -8,6 +8,14 @@ This folder is organized by purpose rather than by a global numbering scheme.
   Collaboration rules, transparency tenet, persona model, and the main reference list.
 - [Current Implementation Status](current-implementation-status.md)
   Practical snapshot of what is implemented right now.
+- [App Store Listing Draft](app-store-listing-draft.md)
+  Working listing copy, screenshot plan, and submission disclosures draft.
+- [App Store Technical Audit](app-store-technical-audit.md)
+  Submission-readiness checklist with repo evidence and manual verification gaps.
+- [Final Pre-Submission Review](final-pre-submission-review.md)
+  Go/no-go template for the last submission readiness review.
+- [PRD QA Workbook](prd-qa-workbook.md)
+  Execution workbook for the full PRD QA checklist before submission.
 
 ## Product And Planning
 

@@ -1,0 +1,15 @@
+api_version = "2026-01"
+uid = "21629f1d-d8b1-c8e7-d3a3-3fefde7e636582e98eeb"
+
+[[extensions]]
+type = "ui_extension"
+name = "Count On Us Post-Purchase Donation"
+handle = "count-on-us-post-purchase"
+
+[[extensions.targeting]]
+target = "purchase.thank-you.block.render"
+module = "./src/ThankYou.jsx"
+
+[[extensions.targeting]]
+target = "customer-account.order-status.block.render"
+module = "./src/OrderStatus.jsx"

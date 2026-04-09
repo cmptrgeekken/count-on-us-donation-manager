@@ -58,5 +58,14 @@ module.exports = {
     "react/react-in-jsx-scope": "off",
     "react/prop-types": "off",
     "import/no-unresolved": "error",
+    "no-restricted-syntax": [
+      "error",
+      {
+        selector:
+          "JSXOpeningElement[name.name='a'] > JSXAttribute[name.name='href'] > Literal[value=/^\\/app\\//]",
+        message:
+          "Use Remix <Link to=\"/app/...\"> for embedded-app internal navigation instead of <a href=\"/app/...\">.",
+      },
+    ],
   },
 };

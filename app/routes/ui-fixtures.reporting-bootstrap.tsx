@@ -40,6 +40,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await prisma.causeAllocation.deleteMany({ where: { shopId } });
   await prisma.shopifyChargeTransaction.deleteMany({ where: { shopId } });
   await prisma.disbursement.deleteMany({ where: { shopId } });
+  await prisma.analyticalRecalculationRun.deleteMany({ where: { shopId } });
   await prisma.taxTrueUp.deleteMany({ where: { shopId } });
   await prisma.reportingPeriod.deleteMany({ where: { shopId } });
   await prisma.businessExpense.deleteMany({ where: { shopId } });
@@ -201,6 +202,36 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       mistakeBufferAmount: new Prisma.Decimal("0.00"),
       totalCost: new Prisma.Decimal("10.00"),
       netContribution: new Prisma.Decimal("40.00"),
+    },
+  });
+
+  await prisma.analyticalRecalculationRun.create({
+    data: {
+      shopId,
+      periodId: closedPeriod.id,
+      status: "completed",
+      startedAt: new Date("2026-04-08T10:00:00.000Z"),
+      completedAt: new Date("2026-04-08T10:00:30.000Z"),
+      summary: {
+        period: {
+          authoritativeNetContribution: "40.00",
+          recalculatedNetContribution: "46.00",
+          netContributionDelta: "6.00",
+          authoritativeDonationPool: "40.00",
+          recalculatedDonationPool: "46.00",
+          donationPoolDelta: "6.00",
+          shopifyCharges: "0.00",
+        },
+        causes: [
+          {
+            causeId: cause.id,
+            causeName: cause.name,
+            authoritativeAllocated: "40.00",
+            recalculatedAllocated: "46.00",
+            delta: "6.00",
+          },
+        ],
+      },
     },
   });
 

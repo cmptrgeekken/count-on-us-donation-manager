@@ -1,14 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
-import { prisma } from "../db.server";
+import { prisma, type TransactionCapableDbClient } from "../db.server";
 import { listOutstandingCauseAllocations } from "./causePayables.server";
 import {
   buildDisbursementReceiptKey,
   createReceiptStorage,
   type ReceiptStorage,
 } from "./receiptStorage.server";
-
-type DbClient = typeof prisma;
 
 const ZERO = new Prisma.Decimal(0);
 export const MAX_RECEIPT_BYTES = 10 * 1024 * 1024;
@@ -63,26 +61,48 @@ function toDecimal(value: Prisma.Decimal | string | number) {
   return value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
 }
 
+function floorCurrency(value: Prisma.Decimal) {
+  return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
+}
+
 function normalizeReceiptFilename(filename: string) {
   const trimmed = filename.trim();
   return trimmed || "receipt";
 }
 
+type LogDisbursementResult = {
+  disbursement: {
+    id: string;
+    amount: Prisma.Decimal;
+    allocatedAmount: Prisma.Decimal;
+    extraContributionAmount: Prisma.Decimal;
+    feesCoveredAmount: Prisma.Decimal;
+    periodId: string;
+    causeId: string;
+    paidAt: Date;
+    paymentMethod: string;
+    referenceId: string | null;
+    receiptFileKey: string | null;
+  };
+  causeAllocationId: string | null;
+  remaining: Prisma.Decimal;
+};
+
 export async function logDisbursement(
   shopId: string,
   input: LogDisbursementInput,
   options?: {
-    db?: DbClient;
+    db?: TransactionCapableDbClient;
     storage?: ReceiptStorage;
     actor?: string;
   },
-) {
+): Promise<LogDisbursementResult> {
   const db = options?.db ?? prisma;
   const storage = options?.storage ?? createReceiptStorage();
   const actor = options?.actor ?? "merchant";
-  const allocatedAmount = toDecimal(input.allocatedAmount);
-  const extraContributionAmount = toDecimal(input.extraContributionAmount ?? 0);
-  const feesCoveredAmount = toDecimal(input.feesCoveredAmount ?? 0);
+  const allocatedAmount = floorCurrency(toDecimal(input.allocatedAmount));
+  const extraContributionAmount = floorCurrency(toDecimal(input.extraContributionAmount ?? 0));
+  const feesCoveredAmount = floorCurrency(toDecimal(input.feesCoveredAmount ?? 0));
   const amount = allocatedAmount.add(extraContributionAmount).add(feesCoveredAmount);
 
   if (allocatedAmount.lessThan(ZERO) || extraContributionAmount.lessThan(ZERO) || feesCoveredAmount.lessThan(ZERO)) {
@@ -113,11 +133,13 @@ export async function logDisbursement(
       throw new DisbursementError(disbursementErrorCodes.RECEIPT_INVALID_TYPE, "Receipt must be a PDF, PNG, or JPEG file.");
     }
 
-    await storage.put({
-      key: receiptFileKey!,
-      body: receipt.body,
-      contentType: receipt.contentType || "application/octet-stream",
-    });
+    if (receiptFileKey) {
+      await storage.put({
+        key: receiptFileKey,
+        body: receipt.body,
+        contentType: receipt.contentType || "application/octet-stream",
+      });
+    }
   }
 
   try {
@@ -148,7 +170,7 @@ export async function logDisbursement(
           throughPeriodEndDate: period.endDate,
           causeId: input.causeId,
         },
-        tx as DbClient,
+        tx,
       );
 
       if (outstandingAllocations.length === 0) {
@@ -169,7 +191,7 @@ export async function logDisbursement(
         periodId: string;
         amount: Prisma.Decimal;
       }> = [];
-      let unapplied = allocatedAmount;
+      let unapplied = floorCurrency(allocatedAmount);
 
       for (const allocation of outstandingAllocations) {
         if (unapplied.lessThanOrEqualTo(ZERO)) {
@@ -217,19 +239,21 @@ export async function logDisbursement(
           })),
         });
 
-        for (const application of applications) {
-          await tx.causeAllocation.updateMany({
-            where: {
-              id: application.causeAllocationId,
-              shopId,
-            },
-            data: {
-              disbursed: {
-                increment: application.amount,
+        await Promise.all(
+          applications.map((application) =>
+            tx.causeAllocation.updateMany({
+              where: {
+                id: application.causeAllocationId,
+                shopId,
               },
-            },
-          });
-        }
+              data: {
+                disbursed: {
+                  increment: application.amount,
+                },
+              },
+            }),
+          ),
+        );
       }
 
       await tx.auditLog.create({
@@ -242,17 +266,15 @@ export async function logDisbursement(
           payload: {
             periodId: input.periodId,
             causeId: input.causeId,
-            causeName: outstandingAllocations[0]?.causeName ?? "Cause",
             amount: amount.toString(),
             allocatedAmount: allocatedAmount.toString(),
             extraContributionAmount: extraContributionAmount.toString(),
             feesCoveredAmount: feesCoveredAmount.toString(),
             applications: applications.map((application) => ({
+              causeAllocationId: application.causeAllocationId,
               periodId: application.periodId,
               amount: application.amount.toString(),
             })),
-            paidAt: input.paidAt.toISOString(),
-            paymentMethod: input.paymentMethod.trim(),
             hasReceipt: Boolean(receiptFileKey),
           },
         },

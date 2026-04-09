@@ -39,12 +39,14 @@ model Shop {
   shopifyDomain    String   @unique
   planTier         String?
   paymentRate      Decimal? @db.Decimal(5, 4)
+  managedMarketsEnableDate DateTime?
   planOverride     Boolean  @default(false)
   currency         String   @default("USD")
   mistakeBuffer    Decimal? @db.Decimal(5, 4)
   defaultLaborRate Decimal? @db.Decimal(10, 4)
   effectiveTaxRate Decimal? @db.Decimal(5, 4)
   taxDeductionMode String   @default("dont_deduct")
+  postPurchaseEmailEnabled Boolean @default(true)
   wizardStep       Int      @default(0)
   catalogSynced    Boolean  @default(false)
   createdAt        DateTime @default(now())
@@ -438,10 +440,27 @@ model ReportingPeriod {
   taxTrueUps       TaxTrueUp[]
   appliedTrueUps   TaxTrueUp[]      @relation("AppliedTaxTrueUps")
   shopifyCharges   ShopifyChargeTransaction[]
+  recalculationRuns AnalyticalRecalculationRun[]
 
   @@unique([shopId, shopifyPayoutId])
   @@index([shopId, status])
   @@index([shopId, startDate, endDate])
+}
+
+model AnalyticalRecalculationRun {
+  id          String          @id @default(cuid())
+  shopId       String
+  periodId     String
+  period       ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  status       String          @default("queued")
+  summary      Json?
+  errorMessage String?
+  startedAt    DateTime?
+  completedAt  DateTime?
+  createdAt    DateTime        @default(now())
+
+  @@index([shopId, periodId, createdAt])
+  @@index([periodId])
 }
 
 model CauseAllocation {

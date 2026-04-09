@@ -47,6 +47,10 @@ function computeAdjustedAllocationAmount({
 
 export type ReportingSummaryResult = Awaited<ReturnType<typeof buildReportingSummary>>;
 
+function floorCurrency(value: Prisma.Decimal) {
+  return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
+}
+
 export async function buildReportingSummary(shopId: string, requestedPeriodId?: string | null, db = prisma) {
   const periods = await db.reportingPeriod.findMany({
     where: { shopId },
@@ -414,7 +418,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       periods: [],
     };
 
-    if (allocation.periodId === selectedPeriod.id) {
+    if (allocation.periodId === selectedPeriod.id && selectedPeriod.status === "CLOSED") {
       existing.currentOutstanding = existing.currentOutstanding.add(allocation.remaining);
     } else {
       existing.priorOutstanding = existing.priorOutstanding.add(allocation.remaining);
@@ -440,7 +444,12 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         periods: [],
       };
 
-      existing.currentOutstanding = existing.currentOutstanding.add(new Prisma.Decimal(allocation.allocated));
+      const netOutstanding = floorCurrency(
+        new Prisma.Decimal(allocation.allocated).sub(new Prisma.Decimal(allocation.disbursed ?? ZERO)),
+      );
+      existing.currentOutstanding = existing.currentOutstanding.add(
+        netOutstanding.greaterThan(ZERO) ? netOutstanding : ZERO,
+      );
       causePayablesMap.set(allocation.causeId, existing);
     }
   }

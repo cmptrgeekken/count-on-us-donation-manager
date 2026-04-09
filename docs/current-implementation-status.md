@@ -6,7 +6,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 **Project:** Count On Us  
 **Date:** April 9, 2026  
-**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, receipt storage, tax true-up, and export support implemented. Current focus is finishing the remaining reporting workflows, starting with rolling cause payables, cross-period disbursement application, and audit-log browsing.
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, receipt storage, tax true-up, export support, audit log browsing, and analytical recalculation groundwork implemented. Current focus is finishing the remaining reporting follow-up work while the storefront widget, Theme App Extension, cart donation summary, public receipts, post-purchase donation, post-purchase email, setup wizard, demo-store prep, listing-draft, technical-audit, QA-workbook, and final-review-template slices are active on the branch.
 
 ---
 
@@ -14,7 +14,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application actively in progress and export support on the active branch
+- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application active, analytical recalculation implemented on the active branch, and the storefront widget, post-purchase, cart summary, public receipts, email, setup wizard, demo-store prep, listing-draft, technical-audit, QA-workbook, and final-review-template slices now underway
 - **Phase 3:** Complete
 
 ---
@@ -129,29 +129,43 @@ These are useful next items, but they are no longer blockers for closing Phase 3
   ADR direction is accepted and the first implementation tranche is in progress on the active branch.
 - [~] Export flows
   CSV and PDF reporting-period export support are implemented on the active branch and awaiting review/merge.
-- [ ] Audit log browsing UI
+- [~] Analytical recalculation delta view
+  Asynchronous analytical recalculation runs and reporting deltas are implemented on the active branch and awaiting review/merge.
+- [x] Audit log browsing UI
 
 ---
 
 ## Phase 5 Checklist
 
-- [ ] Storefront widget endpoint
-- [ ] Theme app extension
-- [ ] Cart donation summary
-- [ ] Thank You / Order Status extension
-- [ ] Post-purchase donation email
-- [ ] App Proxy donation receipts page
-- [ ] Full setup wizard
+- [~] Storefront widget endpoint
+  Display-safe widget payloads, threshold-based delivery mode, app-proxy auth, and per-shop rate limiting are implemented on the active branch and awaiting review/merge.
+- [~] Theme app extension
+  A first product-page Theme App Extension app block scaffold is implemented on the active branch and awaiting review/merge.
+- [~] Cart donation summary
+  A cart-page donation summary modal block is implemented on the active branch and awaiting review/merge.
+- [~] Thank You / Order Status extension
+  Checkout-authenticated donation summary endpoint and extension scaffold are implemented on the active branch and awaiting review/merge.
+- [~] Post-purchase donation email
+  Merchant toggle, email service, and snapshot-triggered worker are implemented on the active branch and awaiting review/merge.
+- [~] App Proxy donation receipts page
+  A public app-proxy receipts page is implemented on the active branch and awaiting review/merge.
+- [~] Full setup wizard
+  First-run dashboard wizard and persistent checklist are implemented on the active branch and awaiting review/merge.
 
 ---
 
 ## Phase 6 Checklist
 
-- [ ] App Store preparation and submission hardening
-- [ ] Full QA pass against the PRD checklist
-- [ ] Demo store setup
-- [ ] Listing assets and copy
-- [ ] Final pre-submission review
+- [~] App Store preparation and submission hardening
+  Technical audit worksheet is implemented on the active branch; repo-backed blockers and manual verification gaps are now documented.
+- [~] Full QA pass against the PRD checklist
+  A dedicated workbook based on PRD §18 is implemented on the active branch and awaiting execution/review.
+- [~] Demo store setup
+  Review-store seed preset and prep checklist are implemented on the active branch and awaiting review/merge.
+- [~] Listing assets and copy
+  Draft listing copy and screenshot plan are implemented on the active branch and awaiting review/merge.
+- [~] Final pre-submission review
+  Review template is implemented on the active branch and awaiting review/merge.
 
 ---
 

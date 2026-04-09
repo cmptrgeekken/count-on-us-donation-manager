@@ -1,0 +1,10 @@
+{
+  "toggle": "See how we calculate this",
+  "loading": "Loading donation estimate...",
+  "causes": "Causes",
+  "cost_breakdown": "Cost breakdown",
+  "shopify_fees": "Shopify fees",
+  "tax_reserve": "Estimated tax reserve",
+  "tax_hidden": "Estimated tax reserve is currently suppressed.",
+  "no_data": "Donation estimate unavailable right now."
+}

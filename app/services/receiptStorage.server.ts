@@ -256,7 +256,7 @@ export function buildDisbursementReceiptKey(input: {
   return [
     input.shopId.replace(/[^a-zA-Z0-9._-]/g, "-"),
     "disbursements",
-    input.periodId,
+    input.periodId.replace(/[^a-zA-Z0-9._-]/g, "-"),
     input.disbursementId,
     safeFilename,
   ].join("/");

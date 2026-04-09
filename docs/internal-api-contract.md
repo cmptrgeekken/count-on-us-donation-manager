@@ -1524,7 +1524,7 @@ The extension polls on `202` (up to 30 seconds at 3-second intervals). On `200`,
 
 The App Proxy serves the public-facing donation receipts page at `/apps/donation-receipts`. All requests pass through Shopify's proxy and include HMAC-signed query parameters.
 
-### `GET /apps/donation-receipts`
+### `GET /apps/count-on-us/donation-receipts`
 
 **Auth:** Public (App Proxy HMAC-SHA256 — `signature` query param, verified server-side)
 
@@ -1637,6 +1637,6 @@ The widget payload shows only: labor cost total, per-material line cost (not pur
 | All admin endpoints | 300 requests/minute | Per shop |
 | `GET /api/widget/products/:id` | 60 requests/minute | Per shop |
 | `GET /api/orders/:id/donation` | 10 requests/minute | Per order ID |
-| `GET /apps/donation-receipts` | 30 requests/minute | Per IP |
+| `GET /apps/count-on-us/donation-receipts` | 30 requests/minute | Per IP |
 
 All rate-limited responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `Retry-After` headers.
