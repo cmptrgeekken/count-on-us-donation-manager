@@ -9,7 +9,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 2. `#70` Standardize Decimal parsing for monetary form inputs
 3. `#52` Add audit log browsing UI
 4. `#50` Add analytical recalculation delta view
-5. Remaining issues to follow in priority order after the cleanup tranche
+5. `#53` Build storefront widget data endpoint and display-safe projection
+6. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -81,6 +82,7 @@ Each section is meant to give a compact review summary, automated/manual test fo
 ## Pending Questions
 
 - `#45` appears functionally complete in code and tests already. It may only need issue/status cleanup unless you want an additional merchant-facing charge-sync control surface.
+- `#53` currently returns donation and tax figures in shop currency, and Managed Markets fee data is still placeholder-only. We should confirm whether customer-currency conversion and storefront-aware fee applicability belong in the endpoint itself or in the Theme App Extension tranche.
 
 ## Issue `#52` Review Notes
 
@@ -160,3 +162,50 @@ Each section is meant to give a compact review summary, automated/manual test fo
 - While a run is pending, confirm the status banner indicates refresh/polling behavior.
 - After completion, confirm period deltas and per-cause deltas are visible.
 - Verify authoritative period figures elsewhere on the page do not change after the analytical run.
+
+## Issue `#53` Review Notes
+
+### Summary
+
+- Add the first public storefront widget data endpoint at `/api/widget/products/:productId`.
+- Reuse `CostEngine` preview mode to build display-safe per-variant payloads.
+- Enforce threshold-based delivery mode (`preload` vs `lazy`) from variant line counts.
+- Add public app-proxy auth plus per-shop rate limiting.
+
+### Files
+
+- `app/routes/api.widget.products.$productId.tsx`
+- `app/routes/api.widget.products.$productId.test.ts`
+- `app/services/widgetData.server.ts`
+- `app/services/widgetData.server.test.ts`
+- `app/utils/public-auth.server.ts`
+- `app/utils/rate-limit.server.ts`
+- `app/utils/rate-limit.server.test.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `widgetData.server.test.ts`
+  - low-line products return `preload`
+  - high-line products return `lazy`
+  - payload excludes `netContribution`, purchase prices, and other admin-only fields
+  - tax suppression follows `TaxOffsetCache`
+- `api.widget.products.$productId.test.ts`
+  - success path returns widget payloads
+  - rate-limited requests return `429`
+  - missing products return `404`
+- `rate-limit.server.test.ts`
+  - requests within the window are allowed
+  - over-limit requests are blocked with retry metadata
+  - usage resets after the window expires
+- full `npm test`
+  - regression coverage remains green with the new public widget surface added
+
+#### Manual
+
+- Hit `/api/widget/products/:productId` through the eventual app-proxy path for a product with active causes.
+- Confirm the response includes `deliveryMode`, per-variant display lines, cause donation estimates, and tax reserve visibility data.
+- Confirm the payload does not include `netContribution`, `purchasePrice`, `perUnitCost`, `laborRate`, or other admin-only fields.
+- Confirm a small product resolves to `preload` and a heavily configured product resolves to `lazy`.
+- Confirm products without active causes return `visible: false`.

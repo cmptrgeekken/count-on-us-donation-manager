@@ -14,7 +14,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application active, analytical recalculation implemented on the active branch, and the remaining reporting follow-up work next
+- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application active, analytical recalculation implemented on the active branch, and the first storefront widget endpoint groundwork now underway
 - **Phase 3:** Complete
 
 ---
@@ -137,7 +137,8 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 
 ## Phase 5 Checklist
 
-- [ ] Storefront widget endpoint
+- [~] Storefront widget endpoint
+  Display-safe widget payloads, threshold-based delivery mode, app-proxy auth, and per-shop rate limiting are implemented on the active branch and awaiting review/merge.
 - [ ] Theme app extension
 - [ ] Cart donation summary
 - [ ] Thank You / Order Status extension

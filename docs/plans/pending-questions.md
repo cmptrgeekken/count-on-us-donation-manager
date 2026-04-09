@@ -20,3 +20,11 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - curated links and presets for a small country set
   - a country-to-guidance mapping driven by shop locale/country
   - or a broader settings architecture that can grow into localized tax help later
+
+### Storefront widget localization and fee detail depth
+
+- The `#53` widget endpoint currently returns donation and tax estimate values in shop currency.
+- Managed Markets fee data is currently a placeholder and not yet storefront-aware.
+- The follow-up decision is whether:
+  - customer-currency donation conversion and Managed Markets applicability should be completed in the endpoint itself
+  - or whether those should land with the Theme App Extension work that consumes the endpoint
