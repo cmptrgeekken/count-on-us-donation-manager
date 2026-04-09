@@ -68,6 +68,7 @@ test("reporting dashboard can log a disbursement with a receipt", async ({ page,
     .locator("s-table-row")
     .filter({ hasText: "Playwright Cause" })
     .filter({ hasText: "ACH" });
+  await expect(disbursementRow).toContainText("Feb 1, 2026");
   await expect(disbursementRow).toContainText("$20.00");
   await expect(disbursementRow).toContainText("$5.00");
   await expect(disbursementRow).toContainText("$2.00");
@@ -75,8 +76,13 @@ test("reporting dashboard can log a disbursement with a receipt", async ({ page,
   await expect(disbursementRow.getByRole("link", { name: "View receipt" })).toBeVisible();
 
   const allocationRow = page.locator("s-table-row").filter({ hasText: "Playwright Cause" }).first();
-  await expect(allocationRow).toContainText("$20.00");
-  await expect(allocationRow).toContainText("$34.00");
+  await expect(allocationRow).toContainText("$0.00");
+  await expect(allocationRow).toContainText("$54.00");
+
+  const payableRow = page.locator("s-table-row").filter({ hasText: "Needs attention" }).filter({ hasText: "Playwright Cause" }).first();
+  await expect(payableRow).toContainText("$54.00");
+  await expect(payableRow).toContainText("$20.00");
+  await expect(payableRow).toContainText("$74.00");
 });
 
 test("reporting dashboard can record a surplus tax true-up", async ({ page, request }) => {

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.server";
+import { listOutstandingCauseAllocations } from "./causePayables.server";
 import {
   buildDisbursementReceiptKey,
   createReceiptStorage,
@@ -24,7 +25,7 @@ export const disbursementErrorCodes = {
   RECEIPT_INVALID_TYPE: "RECEIPT_INVALID_TYPE",
   PERIOD_NOT_FOUND: "PERIOD_NOT_FOUND",
   PERIOD_NOT_CLOSED: "PERIOD_NOT_CLOSED",
-  ALLOCATION_NOT_FOUND: "ALLOCATION_NOT_FOUND",
+  PAYABLE_NOT_FOUND: "PAYABLE_NOT_FOUND",
   ALLOCATED_EXCEEDS_REMAINING: "ALLOCATED_EXCEEDS_REMAINING",
 } as const;
 
@@ -60,10 +61,6 @@ export type LogDisbursementInput = {
 
 function toDecimal(value: Prisma.Decimal | string | number) {
   return value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
-}
-
-function floorCurrency(value: Prisma.Decimal) {
-  return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
 }
 
 function normalizeReceiptFilename(filename: string) {
@@ -133,6 +130,7 @@ export async function logDisbursement(
         select: {
           id: true,
           status: true,
+          endDate: true,
         },
       });
 
@@ -144,29 +142,52 @@ export async function logDisbursement(
         throw new DisbursementError(disbursementErrorCodes.PERIOD_NOT_CLOSED, "Disbursements can only be logged for closed reporting periods.");
       }
 
-      const allocation = await tx.causeAllocation.findFirst({
-        where: {
-          shopId,
-          periodId: input.periodId,
+      const outstandingAllocations = await listOutstandingCauseAllocations(
+        shopId,
+        {
+          throughPeriodEndDate: period.endDate,
           causeId: input.causeId,
         },
-        select: {
-          id: true,
-          causeId: true,
-          causeName: true,
-          allocated: true,
-          disbursed: true,
-        },
-      });
+        tx as DbClient,
+      );
 
-      if (!allocation) {
-        throw new DisbursementError(disbursementErrorCodes.ALLOCATION_NOT_FOUND, "Cause allocation not found for this reporting period.");
+      if (outstandingAllocations.length === 0) {
+        throw new DisbursementError(disbursementErrorCodes.PAYABLE_NOT_FOUND, "No outstanding payable was found for this cause.");
       }
 
-      const remaining = allocation.allocated.sub(allocation.disbursed);
-      const spendableRemaining = floorCurrency(remaining);
+      const spendableRemaining = outstandingAllocations.reduce(
+        (sum, allocation) => sum.add(allocation.remaining),
+        ZERO,
+      );
       if (allocatedAmount.greaterThan(spendableRemaining)) {
         throw new DisbursementError(disbursementErrorCodes.ALLOCATED_EXCEEDS_REMAINING, "Allocated amount cannot exceed the remaining allocation.");
+      }
+
+      const applications: Array<{
+        causeAllocationId: string;
+        causeName: string;
+        periodId: string;
+        amount: Prisma.Decimal;
+      }> = [];
+      let unapplied = allocatedAmount;
+
+      for (const allocation of outstandingAllocations) {
+        if (unapplied.lessThanOrEqualTo(ZERO)) {
+          break;
+        }
+
+        const appliedAmount = Prisma.Decimal.min(unapplied, allocation.remaining);
+        if (appliedAmount.lessThanOrEqualTo(ZERO)) {
+          continue;
+        }
+
+        applications.push({
+          causeAllocationId: allocation.id,
+          causeName: allocation.causeName,
+          periodId: allocation.periodId,
+          amount: appliedAmount,
+        });
+        unapplied = unapplied.sub(appliedAmount);
       }
 
       const disbursement = await tx.disbursement.create({
@@ -186,17 +207,30 @@ export async function logDisbursement(
         },
       });
 
-      await tx.causeAllocation.updateMany({
-        where: {
-          id: allocation.id,
-          shopId,
-        },
-        data: {
-          disbursed: {
-            increment: allocatedAmount,
-          },
-        },
-      });
+      if (applications.length > 0) {
+        await tx.disbursementApplication.createMany({
+          data: applications.map((application) => ({
+            shopId,
+            disbursementId: disbursement.id,
+            causeAllocationId: application.causeAllocationId,
+            amount: application.amount,
+          })),
+        });
+
+        for (const application of applications) {
+          await tx.causeAllocation.updateMany({
+            where: {
+              id: application.causeAllocationId,
+              shopId,
+            },
+            data: {
+              disbursed: {
+                increment: application.amount,
+              },
+            },
+          });
+        }
+      }
 
       await tx.auditLog.create({
         data: {
@@ -208,11 +242,15 @@ export async function logDisbursement(
           payload: {
             periodId: input.periodId,
             causeId: input.causeId,
-            causeName: allocation.causeName,
+            causeName: outstandingAllocations[0]?.causeName ?? "Cause",
             amount: amount.toString(),
             allocatedAmount: allocatedAmount.toString(),
             extraContributionAmount: extraContributionAmount.toString(),
             feesCoveredAmount: feesCoveredAmount.toString(),
+            applications: applications.map((application) => ({
+              periodId: application.periodId,
+              amount: application.amount.toString(),
+            })),
             paidAt: input.paidAt.toISOString(),
             paymentMethod: input.paymentMethod.trim(),
             hasReceipt: Boolean(receiptFileKey),
@@ -222,7 +260,7 @@ export async function logDisbursement(
 
       return {
         disbursement,
-        causeAllocationId: allocation.id,
+        causeAllocationId: applications[0]?.causeAllocationId ?? null,
         remaining: spendableRemaining.sub(allocatedAmount),
       };
     });
