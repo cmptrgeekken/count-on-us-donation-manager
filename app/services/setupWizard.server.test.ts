@@ -10,6 +10,7 @@ describe("resolveSetupWizardProgress", () => {
       signals: {
         causeCount: 0,
         paymentRateConfigured: true,
+        managedMarketsEnableDateConfigured: false,
         libraryCount: 0,
         templateCount: 0,
         configuredVariantCount: 0,
@@ -30,6 +31,7 @@ describe("resolveSetupWizardProgress", () => {
       signals: {
         causeCount: 0,
         paymentRateConfigured: true,
+        managedMarketsEnableDateConfigured: false,
         libraryCount: 0,
         templateCount: 0,
         configuredVariantCount: 0,
@@ -55,6 +57,7 @@ describe("resolveSetupWizardProgress", () => {
       signals: {
         causeCount: 1,
         paymentRateConfigured: true,
+        managedMarketsEnableDateConfigured: true,
         libraryCount: 1,
         templateCount: 1,
         configuredVariantCount: 1,
@@ -79,6 +82,7 @@ describe("resolveSetupWizardProgress", () => {
       signals: {
         causeCount: 0,
         paymentRateConfigured: false,
+        managedMarketsEnableDateConfigured: false,
         libraryCount: 0,
         templateCount: 0,
         configuredVariantCount: 0,

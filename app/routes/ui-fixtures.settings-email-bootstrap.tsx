@@ -13,12 +13,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       shopifyDomain: shopId,
       currency: "USD",
       postPurchaseEmailEnabled: false,
+      managedMarketsEnableDate: null,
     },
     create: {
       shopId,
       shopifyDomain: shopId,
       currency: "USD",
       postPurchaseEmailEnabled: false,
+      managedMarketsEnableDate: null,
     },
   });
 

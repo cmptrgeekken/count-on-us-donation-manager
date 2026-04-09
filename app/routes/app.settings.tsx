@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "../db.server";
@@ -48,6 +48,31 @@ const TAX_RATE_PRESETS = [
   },
 ] as const;
 
+function formatDateInput(value: Date | null | undefined) {
+  return value ? value.toISOString().slice(0, 10) : "";
+}
+
+function parseOptionalDateInput(value: string | undefined, label: string) {
+  const raw = value?.trim() ?? "";
+  if (!raw) return null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    throw new Response(`${label} must be a valid date.`, { status: 400 });
+  }
+
+  const [year, month, day] = raw.split("-").map((part) => Number(part));
+  const normalized = new Date(Date.UTC(year, month - 1, day));
+  if (
+    Number.isNaN(normalized.getTime()) ||
+    normalized.getUTCFullYear() !== year ||
+    normalized.getUTCMonth() !== month - 1 ||
+    normalized.getUTCDate() !== day
+  ) {
+    throw new Response(`${label} must be a valid date.`, { status: 400 });
+  }
+
+  return normalized;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -59,6 +84,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       paymentRate: true,
       planOverride: true,
       currency: true,
+      managedMarketsEnableDate: true,
       mistakeBuffer: true,
       defaultLaborRate: true,
       effectiveTaxRate: true,
@@ -71,6 +97,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     planTier: shop?.planTier ?? "Unknown",
     paymentRate: shop?.paymentRate ? (Number(shop.paymentRate) * 100).toFixed(2) : null,
     planOverride: shop?.planOverride ?? false,
+    managedMarketsEnableDate: formatDateInput(shop?.managedMarketsEnableDate),
     mistakeBuffer: shop?.mistakeBuffer ? (Number(shop.mistakeBuffer) * 100).toFixed(2) : "",
     defaultLaborRate: shop?.defaultLaborRate ? Number(shop.defaultLaborRate).toFixed(2) : "",
     effectiveTaxRate: shop?.effectiveTaxRate ? (Number(shop.effectiveTaxRate) * 100).toFixed(2) : "",
@@ -151,7 +178,44 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return Response.json({ ok: true, message: "Payment rate updated." });
   }
 
-    if (intent === "update-cost-defaults") {
+  if (intent === "update-managed-markets-date") {
+    let managedMarketsEnableDate: Date | null;
+    try {
+      managedMarketsEnableDate = parseOptionalDateInput(
+        formData.get("managedMarketsEnableDate")?.toString(),
+        "Managed Markets enable date",
+      );
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
+    }
+
+    await prisma.shop.update({
+      where: { shopId },
+      data: { managedMarketsEnableDate },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "Shop",
+        action: "MANAGED_MARKETS_ENABLE_DATE_UPDATED",
+        actor: "merchant",
+        payload: { managedMarketsEnableDate: managedMarketsEnableDate?.toISOString() ?? null },
+      },
+    });
+
+    return Response.json({
+      ok: true,
+      message: managedMarketsEnableDate
+        ? "Managed Markets enable date updated."
+        : "Managed Markets enable date cleared.",
+    });
+  }
+
+  if (intent === "update-cost-defaults") {
     let mistakeBuffer: Prisma.Decimal;
     let defaultLaborRate: Prisma.Decimal | null;
     try {
@@ -191,8 +255,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-      return Response.json({ ok: true, message: "Cost defaults updated." });
-    }
+    return Response.json({ ok: true, message: "Cost defaults updated." });
+  }
 
     if (intent === "update-tax-settings") {
       let effectiveTaxRate: Prisma.Decimal | null;
@@ -322,6 +386,7 @@ export default function Settings() {
     planTier,
     paymentRate,
     planOverride,
+    managedMarketsEnableDate,
     mistakeBuffer,
     defaultLaborRate,
     effectiveTaxRate,
@@ -333,6 +398,7 @@ export default function Settings() {
 
   const statusRef = useRef<HTMLDivElement>(null);
   const [rateInput, setRateInput] = useState(paymentRate ?? "");
+  const [managedMarketsEnableDateInput, setManagedMarketsEnableDateInput] = useState(managedMarketsEnableDate ?? "");
   const [bufferInput, setBufferInput] = useState(mistakeBuffer ?? "");
   const [laborRateInput, setLaborRateInput] = useState(defaultLaborRate ?? "");
   const [effectiveTaxRateInput, setEffectiveTaxRateInput] = useState(effectiveTaxRate ?? "");
@@ -409,10 +475,43 @@ export default function Settings() {
                 {planOverride ? "Remove override and resume auto-detection" : "Set a manual rate override"}
               </s-button>
             </fetcher.Form>
+
+            <fetcher.Form method="post">
+              <input type="hidden" name="intent" value="update-managed-markets-date" />
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="managed-markets-enable-date">Managed Markets enable date</label>
+                  <input
+                    id="managed-markets-enable-date"
+                    name="managedMarketsEnableDate"
+                    type="date"
+                    value={managedMarketsEnableDateInput}
+                    onChange={(event) => setManagedMarketsEnableDateInput(event.currentTarget.value)}
+                    style={{
+                      width: "100%",
+                      boxSizing: "border-box",
+                      padding: "0.75rem",
+                      borderRadius: "0.75rem",
+                      border: "1px solid var(--p-color-border, #c9cccf)",
+                      background: "var(--p-color-bg-surface, #fff)",
+                      color: "var(--p-color-text, #303030)",
+                      font: "inherit",
+                    }}
+                  />
+                </div>
+                <s-text>
+                  Use the date Managed Markets went live for your shop so international fee assumptions line up with the
+                  correct period. Leave blank if Managed Markets has never been enabled.
+                </s-text>
+                <div>
+                  <s-button type="submit" disabled={isSubmitting}>Save Managed Markets date</s-button>
+                </div>
+              </div>
+            </fetcher.Form>
           </div>
         </s-section>
 
-          <s-section heading="Cost Defaults">
+        <s-section heading="Cost Defaults">
           <fetcher.Form method="post">
             <input type="hidden" name="intent" value="update-cost-defaults" />
             <div style={{ display: "grid", gap: "0.75rem" }}>
@@ -447,108 +546,102 @@ export default function Settings() {
               </div>
             </div>
           </fetcher.Form>
-          </s-section>
+        </s-section>
 
-          <s-section heading="Tax Estimation">
-            <fetcher.Form method="post">
-              <input type="hidden" name="intent" value="update-tax-settings" />
-              <div style={{ display: "grid", gap: "0.75rem" }}>
-                <s-text-field
-                  label="Effective tax rate (%)"
-                  name="effectiveTaxRate"
-                  value={effectiveTaxRateInput}
-                  onChange={(event) => setEffectiveTaxRateInput((event.currentTarget as HTMLInputElement).value)}
-                  onBlur={(event) => setEffectiveTaxRateInput(normalizeFixedDecimalInput((event.currentTarget as HTMLInputElement).value))}
-                  type="number"
-                  min={0}
-                  max={100}
-                  step={0.01}
-                />
+        <s-section heading="Tax Estimation">
+          <fetcher.Form method="post">
+            <input type="hidden" name="intent" value="update-tax-settings" />
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <s-text-field
+                label="Effective tax rate (%)"
+                name="effectiveTaxRate"
+                value={effectiveTaxRateInput}
+                onChange={(event) => setEffectiveTaxRateInput((event.currentTarget as HTMLInputElement).value)}
+                onBlur={(event) =>
+                  setEffectiveTaxRateInput(normalizeFixedDecimalInput((event.currentTarget as HTMLInputElement).value))
+                }
+                type="number"
+                min={0}
+                max={100}
+                step={0.01}
+              />
+              <s-text>
+                Example: 25 = {formatPct(0.25)}. This is used for estimated reserve reporting only, not tax filing.
+              </s-text>
+              <div style={{ display: "grid", gap: "0.5rem" }}>
+                <strong>Planning presets</strong>
                 <s-text>
-                  Example: 25 = {formatPct(0.25)}. This is used for estimated reserve reporting only, not tax filing.
+                  These are rough starting points for planning only. They are not tax advice, and your real blended rate may differ.
                 </s-text>
                 <div style={{ display: "grid", gap: "0.5rem" }}>
-                  <strong>Planning presets</strong>
-                  <s-text>
-                    These are rough starting points for planning only. They are not tax advice, and your real blended rate may differ.
-                  </s-text>
-                  <div style={{ display: "grid", gap: "0.5rem" }}>
-                    {TAX_RATE_PRESETS.map((preset) => (
-                      <div
-                        key={preset.value}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          gap: "0.75rem",
-                          flexWrap: "wrap",
-                          padding: "0.6rem 0.75rem",
-                          border: "1px solid var(--p-color-border, #d2d5d8)",
-                          borderRadius: "0.75rem",
-                          background: "var(--p-color-bg-surface-secondary, #f6f6f7)",
-                        }}
-                      >
-                        <div style={{ display: "grid", gap: "0.2rem" }}>
-                          <strong>{preset.label}</strong>
-                          <s-text>{preset.description}</s-text>
-                        </div>
-                        <s-button
-                          type="button"
-                          variant="secondary"
-                          onClick={() => setEffectiveTaxRateInput(preset.value)}
-                        >
-                          Use {preset.label}
-                        </s-button>
-                      </div>
-                    ))}
-                  </div>
-                  <s-text>
-                    If you are unsure, start conservative and confirm the rate with your accountant or tax preparer.
-                  </s-text>
-                  <s-text>
-                    U.S. merchants can use the{" "}
-                    <a
-                      href="https://apps.irs.gov/app/tax-withholding-estimator"
-                      target="_blank"
-                      rel="noreferrer"
+                  {TAX_RATE_PRESETS.map((preset) => (
+                    <div
+                      key={preset.value}
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "0.75rem",
+                        flexWrap: "wrap",
+                        padding: "0.6rem 0.75rem",
+                        border: "1px solid var(--p-color-border, #d2d5d8)",
+                        borderRadius: "0.75rem",
+                        background: "var(--p-color-bg-surface-secondary, #f6f6f7)",
+                      }}
                     >
-                      IRS Tax Withholding Estimator
-                    </a>{" "}
-                    as an initial reference point before setting a blended reserve rate here.
-                  </s-text>
-                </div>
-                <div style={{ display: "grid", gap: "0.35rem" }}>
-                  <label htmlFor="tax-deduction-mode">Tax deduction mode</label>
-                  <select
-                    id="tax-deduction-mode"
-                    name="taxDeductionMode"
-                    value={taxDeductionModeInput}
-                    onChange={(event) => setTaxDeductionModeInput(event.currentTarget.value)}
-                    style={{
-                      width: "100%",
-                      boxSizing: "border-box",
-                      padding: "0.75rem",
-                      borderRadius: "0.75rem",
-                      border: "1px solid var(--p-color-border, #c9cccf)",
-                      background: "var(--p-color-bg-surface, #fff)",
-                      color: "var(--p-color-text, #303030)",
-                      font: "inherit",
-                    }}
-                  >
-                    <option value="dont_deduct">Don&apos;t deduct</option>
-                    <option value="non_501c3_only">Deduct from non-501(c)3 causes only</option>
-                    <option value="all_causes">Deduct from all causes</option>
-                  </select>
+                      <div style={{ display: "grid", gap: "0.2rem" }}>
+                        <strong>{preset.label}</strong>
+                        <s-text>{preset.description}</s-text>
+                      </div>
+                      <s-button type="button" variant="secondary" onClick={() => setEffectiveTaxRateInput(preset.value)}>
+                        Use {preset.label}
+                      </s-button>
+                    </div>
+                  ))}
                 </div>
                 <s-text>
-                  Choose which causes should absorb the estimated tax reserve in reporting.
+                  If you are unsure, start conservative and confirm the rate with your accountant or tax preparer.
                 </s-text>
-                <div>
-                  <s-button type="submit" disabled={isSubmitting}>Save tax settings</s-button>
-                </div>
+                <s-text>
+                  U.S. merchants can use the{" "}
+                  <a href="https://apps.irs.gov/app/tax-withholding-estimator" target="_blank" rel="noreferrer">
+                    IRS Tax Withholding Estimator
+                  </a>{" "}
+                  as an initial reference point before setting a blended reserve rate here.
+                </s-text>
               </div>
-            </fetcher.Form>
-          </s-section>
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor="tax-deduction-mode">Tax deduction mode</label>
+                <select
+                  id="tax-deduction-mode"
+                  name="taxDeductionMode"
+                  value={taxDeductionModeInput}
+                  onChange={(event) => setTaxDeductionModeInput(event.currentTarget.value)}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "0.75rem",
+                    borderRadius: "0.75rem",
+                    border: "1px solid var(--p-color-border, #c9cccf)",
+                    background: "var(--p-color-bg-surface, #fff)",
+                    color: "var(--p-color-text, #303030)",
+                    font: "inherit",
+                  }}
+                >
+                  <option value="dont_deduct">Don&apos;t deduct</option>
+                  <option value="non_501c3_only">Deduct from non-501(c)3 causes only</option>
+                  <option value="all_causes">Deduct from all causes</option>
+                </select>
+              </div>
+              <s-text>
+                Choose which causes should absorb the estimated tax reserve in reporting.
+              </s-text>
+              <div>
+                <s-button type="submit" disabled={isSubmitting}>Save tax settings</s-button>
+              </div>
+            </div>
+          </fetcher.Form>
+        </s-section>
 
         <s-section heading="Localization">
           <div style={{ display: "grid", gap: "1rem" }}>
@@ -617,9 +710,9 @@ export default function Settings() {
           <div style={{ display: "grid", gap: "0.75rem" }}>
             <s-text>Browse financial change history, filter by event type, and inspect payload details.</s-text>
             <div>
-              <a href="/app/audit-log">
+              <Link to="/app/audit-log">
                 <s-button>Open audit log</s-button>
-              </a>
+              </Link>
             </div>
           </div>
         </s-section>

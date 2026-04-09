@@ -138,7 +138,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const [css, script] = await Promise.all([
     readFile(path.join(ASSET_ROOT, "assets", "donation-widget.css"), "utf8"),
-    readFile(path.join(ASSET_ROOT, "assets", "donation-widget.js"), "utf8"),
+    readFile(path.join(ASSET_ROOT, "assets", "cart-donation-summary.js"), "utf8"),
   ]);
 
   return Response.json({

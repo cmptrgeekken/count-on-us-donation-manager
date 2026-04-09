@@ -81,6 +81,7 @@ export default function Dashboard() {
 
   const prevSyncedRef = useRef(catalogSynced);
   const liveRef = useRef<HTMLDivElement>(null);
+  const isInternalAppHref = (href: string) => href.startsWith("/app/");
 
   useEffect(() => {
     if (!prevSyncedRef.current && catalogSynced && liveRef.current) {
@@ -145,13 +146,19 @@ export default function Dashboard() {
               </div>
 
               <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <a
-                  href={setupWizard.currentStepView.href}
-                  target={setupWizard.currentStepView.external ? "_blank" : undefined}
-                  rel={setupWizard.currentStepView.external ? "noreferrer" : undefined}
-                >
-                  <s-button variant="primary">{setupWizard.currentStepView.actionLabel}</s-button>
-                </a>
+                {setupWizard.currentStepView.external || !isInternalAppHref(setupWizard.currentStepView.href) ? (
+                  <a
+                    href={setupWizard.currentStepView.href}
+                    target={setupWizard.currentStepView.external ? "_blank" : undefined}
+                    rel={setupWizard.currentStepView.external ? "noreferrer" : undefined}
+                  >
+                    <s-button variant="primary">{setupWizard.currentStepView.actionLabel}</s-button>
+                  </a>
+                ) : (
+                  <Link to={setupWizard.currentStepView.href}>
+                    <s-button variant="primary">{setupWizard.currentStepView.actionLabel}</s-button>
+                  </Link>
+                )}
 
                 {setupWizard.currentStepView.manualCompletion ? (
                   <Form method="post">
@@ -245,13 +252,19 @@ export default function Dashboard() {
                       </div>
 
                       <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                        <a
-                          href={step.href}
-                          target={step.external ? "_blank" : undefined}
-                          rel={step.external ? "noreferrer" : undefined}
-                        >
-                          <s-button variant="secondary">{step.actionLabel}</s-button>
-                        </a>
+                        {step.external || !isInternalAppHref(step.href) ? (
+                          <a
+                            href={step.href}
+                            target={step.external ? "_blank" : undefined}
+                            rel={step.external ? "noreferrer" : undefined}
+                          >
+                            <s-button variant="secondary">{step.actionLabel}</s-button>
+                          </a>
+                        ) : (
+                          <Link to={step.href}>
+                            <s-button variant="secondary">{step.actionLabel}</s-button>
+                          </Link>
+                        )}
 
                         {step.manualCompletion ? (
                           <Form method="post">

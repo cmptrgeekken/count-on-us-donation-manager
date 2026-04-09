@@ -39,6 +39,7 @@ model Shop {
   shopifyDomain    String   @unique
   planTier         String?
   paymentRate      Decimal? @db.Decimal(5, 4)
+  managedMarketsEnableDate DateTime?
   planOverride     Boolean  @default(false)
   currency         String   @default("USD")
   mistakeBuffer    Decimal? @db.Decimal(5, 4)

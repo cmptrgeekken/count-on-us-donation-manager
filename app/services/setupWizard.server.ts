@@ -36,10 +36,10 @@ export const setupWizardSteps = [
     key: "managed-markets-date",
     title: "Review Managed Markets enable date",
     description:
-      "Managed Markets setup is still tracked manually. Review your international fee assumptions in Settings and mark this step complete when handled.",
+      "Enter the date you enabled Managed Markets in Settings so international fee assumptions start from the correct point in time.",
     href: "/app/settings",
     actionLabel: "Open Settings",
-    manualCompletion: true,
+    manualCompletion: false,
   },
   {
     index: 3,
@@ -111,6 +111,7 @@ export type SetupWizardStepView = SetupWizardStepDefinition & {
 type SetupWizardSignals = {
   causeCount: number;
   paymentRateConfigured: boolean;
+  managedMarketsEnableDateConfigured: boolean;
   libraryCount: number;
   templateCount: number;
   configuredVariantCount: number;
@@ -134,7 +135,7 @@ export function resolveSetupWizardProgress(input: {
   const completionByStep = new Map<number, boolean>([
     [0, input.signals.causeCount > 0],
     [1, input.signals.paymentRateConfigured],
-    [2, false],
+    [2, input.signals.managedMarketsEnableDateConfigured],
     [3, input.signals.libraryCount > 0],
     [4, input.signals.templateCount > 0],
     [5, input.signals.configuredVariantCount > 0],
@@ -197,6 +198,7 @@ export async function getSetupWizardProgress(shopId: string, db = prisma) {
         shopifyDomain: true,
         catalogSynced: true,
         paymentRate: true,
+        managedMarketsEnableDate: true,
       },
     }),
     db.wizardState.findUnique({
@@ -221,6 +223,7 @@ export async function getSetupWizardProgress(shopId: string, db = prisma) {
     signals: {
       causeCount,
       paymentRateConfigured: shop?.paymentRate !== null && shop?.paymentRate !== undefined,
+      managedMarketsEnableDateConfigured: shop?.managedMarketsEnableDate !== null && shop?.managedMarketsEnableDate !== undefined,
       libraryCount: materialCount + equipmentCount,
       templateCount,
       configuredVariantCount,
