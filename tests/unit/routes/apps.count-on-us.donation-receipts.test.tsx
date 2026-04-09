@@ -5,16 +5,16 @@ const { authenticatePublicAppProxyRequest, buildDonationReceiptsPage } = vi.hois
   buildDonationReceiptsPage: vi.fn(),
 }));
 
-vi.mock("../utils/public-auth.server", () => ({
+vi.mock("../../../app/utils/public-auth.server", () => ({
   authenticatePublicAppProxyRequest,
 }));
 
-vi.mock("../services/donationReceiptsPage.server", () => ({
+vi.mock("../../../app/services/donationReceiptsPage.server", () => ({
   buildDonationReceiptsPage,
 }));
 
-import { loader } from "./apps.count-on-us.donation-receipts";
-import { resetRateLimitBuckets } from "../utils/rate-limit.server";
+import { loader } from "../../../app/routes/apps.count-on-us.donation-receipts";
+import { resetRateLimitBuckets } from "../../../app/utils/rate-limit.server";
 
 describe("apps.count-on-us.donation-receipts loader", () => {
   beforeEach(() => {

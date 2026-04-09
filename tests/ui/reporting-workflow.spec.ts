@@ -117,7 +117,7 @@ test("reporting dashboard export routes return csv and pdf downloads", async ({ 
   expect(csvResponse.ok()).toBeTruthy();
   expect(csvResponse.headers()["content-type"]).toContain("text/csv");
   expect(csvResponse.headers()["content-disposition"]).toContain(".csv");
-  expect(await csvResponse.text()).toContain("Outstanding cause payables");
+  expect(await csvResponse.text()).toContain("section,recordType,periodId");
 
   const pdfResponse = await request.get(`/app/reporting-export?__playwrightShop=${encodeURIComponent(bootstrap.shopId)}&periodId=${encodeURIComponent(bootstrap.closedPeriodId)}&format=pdf`);
   expect(pdfResponse.ok()).toBeTruthy();
@@ -134,11 +134,12 @@ test("reporting dashboard shows analytical recalculation deltas as read-only ana
   const bootstrap = await bootstrapResponse.json();
   await page.goto(bootstrap.closedReportingUrl);
 
+  const analysisSection = page.locator("s-section").filter({ hasText: "Analytical recalculation" });
   await expect(page.getByRole("heading", { name: "Analytical recalculation" })).toBeVisible();
-  await expect(page.getByText("Analytical only.")).toBeVisible();
-  await expect(page.getByText("Authoritative net contribution")).toBeVisible();
-  await expect(page.getByText("Recalculated net contribution")).toBeVisible();
-  await expect(page.getByText("$46.00")).toBeVisible();
+  await expect(analysisSection.getByText("Analytical only.")).toBeVisible();
+  await expect(analysisSection.getByText("Authoritative net contribution")).toBeVisible();
+  await expect(analysisSection.getByText("Recalculated net contribution")).toBeVisible();
+  await expect(analysisSection.getByText("$46.00").first()).toBeVisible();
   const deltaRow = page
     .locator("s-table-row")
     .filter({ hasText: "Playwright Cause" })

@@ -10,7 +10,8 @@ test("donation receipts page shows closed periods and receipt links", async ({ p
 
   await expect(page.getByRole("heading", { name: "Donation receipts" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Mar 1, 2026 - Mar 31, 2026" })).toBeVisible();
-  await expect(page.getByText("Receipt Fixture Cause")).toBeVisible();
-  await expect(page.getByText("$42.00")).toBeVisible();
+  const periodSection = page.locator("section").filter({ hasText: "Receipt Fixture Cause" }).first();
+  await expect(periodSection.getByText("Receipt Fixture Cause: $42.00")).toBeVisible();
+  await expect(periodSection.getByRole("cell", { name: "$42.00" })).toBeVisible();
   await expect(page.getByRole("link", { name: "View receipt" })).toBeVisible();
 });

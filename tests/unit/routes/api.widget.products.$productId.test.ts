@@ -17,21 +17,21 @@ const prisma = {
   },
 };
 
-vi.mock("../utils/public-auth.server", () => ({
+vi.mock("../../../app/utils/public-auth.server", () => ({
   authenticatePublicAppProxyRequest,
 }));
 
-vi.mock("../services/widgetData.server", () => ({
+vi.mock("../../../app/services/widgetData.server", () => ({
   buildWidgetProductMetadata,
   buildWidgetProductPayload,
   WIDGET_RATE_LIMIT_PER_MINUTE,
 }));
 
-vi.mock("../utils/rate-limit.server", () => ({
+vi.mock("../../../app/utils/rate-limit.server", () => ({
   checkRateLimit,
 }));
 
-vi.mock("../db.server", () => ({
+vi.mock("../../../app/db.server", () => ({
   prisma,
 }));
 
@@ -66,7 +66,7 @@ describe("api.widget.products.$productId loader", () => {
       variants: [],
     });
 
-    const { loader } = await import("./api.widget.products.$productId");
+    const { loader } = await import("../../../app/routes/api.widget.products.$productId");
     const response = await loader({
       request: new Request("http://localhost/api/widget/products/gid%3A%2F%2Fshopify%2FProduct%2F1"),
       params: { productId: "gid://shopify/Product/1" },
@@ -106,7 +106,7 @@ describe("api.widget.products.$productId loader", () => {
       }),
     });
 
-    const { loader } = await import("./api.widget.products.$productId");
+    const { loader } = await import("../../../app/routes/api.widget.products.$productId");
     const response = await loader({
       request: new Request("http://localhost/api/widget/products/gid%3A%2F%2Fshopify%2FProduct%2F1"),
       params: { productId: "gid://shopify/Product/1" },
@@ -135,7 +135,7 @@ describe("api.widget.products.$productId loader", () => {
     });
     buildWidgetProductPayload.mockResolvedValue(null);
 
-    const { loader } = await import("./api.widget.products.$productId");
+    const { loader } = await import("../../../app/routes/api.widget.products.$productId");
     const response = await loader({
       request: new Request("http://localhost/api/widget/products/gid%3A%2F%2Fshopify%2FProduct%2F1"),
       params: { productId: "gid://shopify/Product/1" },
@@ -169,7 +169,7 @@ describe("api.widget.products.$productId loader", () => {
       totalLineItemCount: 240,
     });
 
-    const { loader } = await import("./api.widget.products.$productId");
+    const { loader } = await import("../../../app/routes/api.widget.products.$productId");
     const response = await loader({
       request: new Request("http://localhost/api/widget/products/gid%3A%2F%2Fshopify%2FProduct%2F1?metadataOnly=1"),
       params: { productId: "gid://shopify/Product/1" },

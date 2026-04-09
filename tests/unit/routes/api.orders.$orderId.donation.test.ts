@@ -14,24 +14,24 @@ const {
   unauthenticatedAdmin: vi.fn(),
 }));
 
-vi.mock("../utils/checkout-auth.server", () => ({
+vi.mock("../../../app/utils/checkout-auth.server", () => ({
   authenticateCheckoutRequest,
 }));
 
-vi.mock("../services/postPurchaseDonation.server", () => ({
+vi.mock("../../../app/services/postPurchaseDonation.server", () => ({
   buildConfirmedOrderDonationSummary,
   fetchOrderForPostPurchaseEstimate,
   buildPendingOrderDonationSummary,
 }));
 
-vi.mock("../shopify.server", () => ({
+vi.mock("../../../app/shopify.server", () => ({
   unauthenticated: {
     admin: unauthenticatedAdmin,
   },
 }));
 
-import { loader } from "./api.orders.$orderId.donation";
-import { resetRateLimitBuckets } from "../utils/rate-limit.server";
+import { loader } from "../../../app/routes/api.orders.$orderId.donation";
+import { resetRateLimitBuckets } from "../../../app/utils/rate-limit.server";
 
 describe("api.orders.$orderId.donation loader", () => {
   beforeEach(() => {

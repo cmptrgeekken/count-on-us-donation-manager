@@ -1,12 +1,8 @@
-import type { LoaderFunctionArgs } from "@remix-run/node";
 import { prisma } from "../db.server";
-import { authenticateAdminRequest } from "../utils/admin-auth.server";
 
 const FIXTURE_SHOP = "fixture-audit-log.myshopify.com";
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticateAdminRequest(request);
-
+export const loader = async () => {
   await prisma.shop.upsert({
     where: { shopId: FIXTURE_SHOP },
     update: {},

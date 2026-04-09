@@ -194,7 +194,12 @@ export default function CartDonationSummaryFixtureRoute() {
             Mode: <strong>{mode}</strong>
           </p>
 
-          <div className="count-on-us-widget" data-count-on-us-cart-summary data-proxy-base="/apps/count-on-us">
+          <div
+            className="count-on-us-widget"
+            data-count-on-us-cart-summary
+            data-proxy-base="/apps/count-on-us"
+            data-count-on-us-cart-lines-json={encodeURIComponent(JSON.stringify(fixture.lines))}
+          >
             <div className="count-on-us-widget__header">
               <h3 className="count-on-us-widget__heading">See your donation impact</h3>
               <p className="count-on-us-widget__description">
@@ -225,6 +230,13 @@ export default function CartDonationSummaryFixtureRoute() {
 
         <script dangerouslySetInnerHTML={{ __html: fetchShim }} />
         <script dangerouslySetInnerHTML={{ __html: script }} />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `
+              document.dispatchEvent(new Event("DOMContentLoaded", { bubbles: true }));
+            `,
+          }}
+        />
       </body>
     </html>
   );

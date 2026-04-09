@@ -34,10 +34,12 @@ function formatDateRange(startDate: string, endDate: string) {
     month: "short",
     day: "numeric",
     year: "numeric",
+    timeZone: "UTC",
   })} - ${new Date(endDate).toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
+    timeZone: "UTC",
   })}`;
 }
 
@@ -46,6 +48,7 @@ function formatDate(value: string) {
     month: "short",
     day: "numeric",
     year: "numeric",
+    timeZone: "UTC",
   });
 }
 

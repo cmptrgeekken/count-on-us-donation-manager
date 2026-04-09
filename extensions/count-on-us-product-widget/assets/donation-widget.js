@@ -353,6 +353,10 @@
     });
   }
 
+  function boot(root) {
+    initWidgets(root);
+  }
+
   function aggregateCartCauseTotals(lines, payloads) {
     const payloadMap = new Map(payloads.map((payload) => [payload.productId, payload]));
     const totals = new Map();
@@ -415,14 +419,20 @@
     }
   }
 
-  async function setupCartSummary(container) {
-    if (!container || container.dataset.cartSummaryReady === "true") return;
-    container.dataset.cartSummaryReady = "true";
-
-    const trigger = container.querySelector("[data-count-on-us-cart-trigger]");
+  function parseCartSummaryLines(container) {
     const linesScript = container.querySelector("[data-count-on-us-cart-lines]");
-    if (!trigger || !linesScript) return;
+    const encodedLines = container.dataset.countOnUsCartLinesJson || "";
 
+    try {
+      const rawLines = linesScript?.textContent || (encodedLines ? decodeURIComponent(encodedLines) : "[]");
+      return JSON.parse(rawLines || "[]");
+    } catch (error) {
+      console.error("[Count On Us Cart Summary] Invalid cart lines payload:", error);
+      return [];
+    }
+  }
+
+  function createCartSummaryController(trigger) {
     let modal = null;
     let lastFocusedElement = null;
 
@@ -483,91 +493,102 @@
       closeButton.focus();
     }
 
-    trigger.addEventListener("click", async () => {
-      let lines = [];
-      try {
-        lines = JSON.parse(linesScript.textContent || "[]");
-      } catch (error) {
-        console.error("[Count On Us Cart Summary] Invalid cart lines payload:", error);
-      }
+    return { closeModal, openModal };
+  }
 
-      if (!lines.length) {
+  const cartSummaryControllers = new WeakMap();
+
+  function getCartSummaryController(trigger) {
+    let controller = cartSummaryControllers.get(trigger);
+    if (!controller) {
+      controller = createCartSummaryController(trigger);
+      cartSummaryControllers.set(trigger, controller);
+    }
+    return controller;
+  }
+
+  async function handleCartSummaryTrigger(container, trigger) {
+    const { openModal } = getCartSummaryController(trigger);
+    const lines = parseCartSummaryLines(container);
+
+    if (!lines.length) {
+      openModal(`<p class="count-on-us-widget__status">No donation products in this cart yet.</p>`);
+      return;
+    }
+
+    openModal(`<p class="count-on-us-widget__status">Loading donation summary...</p>`);
+
+    try {
+      const uniqueProducts = Array.from(new Set(lines.map((line) => line.productId)));
+      const proxyBase = container.dataset.proxyBase || "/apps/count-on-us";
+      const payloads = await Promise.all(
+        uniqueProducts.map(async (productId) => {
+          const json = await fetchJson(`${proxyBase}/products/${encodeURIComponent(productId)}`);
+          return json.data;
+        }),
+      );
+
+      const summary = aggregateCartCauseTotals(lines, payloads);
+
+      if (!summary.hasDonationProducts || !summary.totals.length) {
         openModal(`<p class="count-on-us-widget__status">No donation products in this cart yet.</p>`);
         return;
       }
 
-      openModal(`<p class="count-on-us-widget__status">Loading donation summary...</p>`);
+      openModal(`
+        <section class="count-on-us-widget__section">
+          <h4 class="count-on-us-widget__section-title">Causes</h4>
+          <div class="count-on-us-widget__list">
+            ${summary.totals
+              .map((cause) => {
+                const donationLink = safeExternalUrl(cause.donationLink);
 
-      try {
-        const uniqueProducts = Array.from(new Set(lines.map((line) => line.productId)));
-        const proxyBase = container.dataset.proxyBase || "/apps/count-on-us";
-        const payloads = await Promise.all(
-          uniqueProducts.map(async (productId) => {
-            const json = await fetchJson(`${proxyBase}/products/${encodeURIComponent(productId)}`);
-            return json.data;
-          }),
-        );
-
-        const summary = aggregateCartCauseTotals(lines, payloads);
-
-        if (!summary.hasDonationProducts || !summary.totals.length) {
-          openModal(`<p class="count-on-us-widget__status">No donation products in this cart yet.</p>`);
-          return;
-        }
-
-        openModal(`
-          <section class="count-on-us-widget__section">
-            <h4 class="count-on-us-widget__section-title">Causes</h4>
-            <div class="count-on-us-widget__list">
-              ${summary.totals
-                .map((cause) => {
-                  const donationLink = safeExternalUrl(cause.donationLink);
-
-                  return `
-                    <article class="count-on-us-widget__cause">
-                      <div class="count-on-us-widget__cause-line">
-                        <strong>${escapeHtml(cause.name)}</strong>
-                        <strong>${formatMoney(parseMoney(cause.amount), cause.donationCurrencyCode)}</strong>
-                      </div>
-                      ${
-                        donationLink
-                          ? `<div class="count-on-us-widget__cause-line"><span class="count-on-us-widget__subdued">Estimated across your cart</span><a href="${donationLink}" target="_blank" rel="noreferrer" class="count-on-us-widget__subdued">Donate direct</a></div>`
-                          : `<div class="count-on-us-widget__cause-line"><span class="count-on-us-widget__subdued">Estimated across your cart</span></div>`
-                      }
-                    </article>
-                  `;
-                })
-                .join("")}
-            </div>
-          </section>
-        `);
-      } catch (error) {
-        console.error("[Count On Us Cart Summary] Failed to load summary:", error);
-        openModal(`<p class="count-on-us-widget__status count-on-us-widget__status--error">Donation summary unavailable right now.</p>`);
-      }
-    });
+                return `
+                  <article class="count-on-us-widget__cause">
+                    <div class="count-on-us-widget__cause-line">
+                      <strong>${escapeHtml(cause.name)}</strong>
+                      <strong>${formatMoney(parseMoney(cause.amount), cause.donationCurrencyCode)}</strong>
+                    </div>
+                    ${
+                      donationLink
+                        ? `<div class="count-on-us-widget__cause-line"><span class="count-on-us-widget__subdued">Estimated across your cart</span><a href="${donationLink}" target="_blank" rel="noreferrer" class="count-on-us-widget__subdued">Donate direct</a></div>`
+                        : `<div class="count-on-us-widget__cause-line"><span class="count-on-us-widget__subdued">Estimated across your cart</span></div>`
+                    }
+                  </article>
+                `;
+              })
+              .join("")}
+          </div>
+        </section>
+      `);
+    } catch (error) {
+      console.error("[Count On Us Cart Summary] Failed to load summary:", error);
+      openModal(`<p class="count-on-us-widget__status count-on-us-widget__status--error">Donation summary unavailable right now.</p>`);
+    }
   }
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => {
-      initWidgets(document);
-      document.querySelectorAll("[data-count-on-us-cart-summary]").forEach((container) => {
-        void setupCartSummary(container);
-      });
-    });
+    document.addEventListener("DOMContentLoaded", () => boot(document), { once: true });
+    window.addEventListener("load", () => boot(document), { once: true });
+    window.setTimeout(() => boot(document), 0);
   } else {
-    initWidgets(document);
-    document.querySelectorAll("[data-count-on-us-cart-summary]").forEach((container) => {
-      void setupCartSummary(container);
-    });
+    boot(document);
   }
+
+  document.addEventListener("click", (event) => {
+    const trigger = event.target instanceof Element ? event.target.closest("[data-count-on-us-cart-trigger]") : null;
+    if (!(trigger instanceof HTMLElement)) return;
+
+    const container = trigger.closest("[data-count-on-us-cart-summary]");
+    if (!(container instanceof HTMLElement)) return;
+
+    event.preventDefault();
+    void handleCartSummaryTrigger(container, trigger);
+  });
 
   document.addEventListener("shopify:section:load", (event) => {
     if (event.target instanceof HTMLElement) {
-      initWidgets(event.target);
-      event.target.querySelectorAll("[data-count-on-us-cart-summary]").forEach((container) => {
-        void setupCartSummary(container);
-      });
+      boot(event.target);
     }
   });
 })();

@@ -23,7 +23,8 @@ test("setup wizard supports skip, resume, and manual completion flows", async ({
   await page.getByRole("button", { name: "Skip for now" }).click();
   await expect(page.getByText("Step 3 of 9: Review Managed Markets enable date")).toBeVisible();
 
-  await page.getByRole("button", { name: "Mark complete" }).click();
+  const currentStep = page.locator("s-section").filter({ hasText: "Step 3 of 9: Review Managed Markets enable date" }).first();
+  await currentStep.getByRole("button", { name: "Mark complete" }).click();
 
   await expect(page.getByText("Step 4 of 9: Set up material and equipment libraries")).toBeVisible();
 });
