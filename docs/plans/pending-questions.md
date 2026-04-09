@@ -103,5 +103,8 @@ It is intentionally lightweight so decisions can be reviewed later without block
 ### Final review gating
 
 - `#63` now has a review template, but the final meeting still depends on one remaining missing artifact:
-  - the full PRD QA workbook for `#60`
-- We should decide whether to treat `#60` as a separate tracked deliverable before any go/no-go meeting is scheduled, or whether the PRD checklist will be worked directly into the review packet.
+  - execution of the full PRD QA workbook for `#60`
+- We should decide who owns running the workbook end to end and how failures will be recorded:
+  - inline in the workbook
+  - as linked blocking issues
+  - or both

@@ -20,7 +20,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 13. `#62` Prepare App Store listing assets and copy
 14. `#59` Run App Store pre-submission technical audit
 15. `#63` Complete final pre-submission review
-16. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+16. `#60` Run full PRD QA checklist before submission
+17. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -646,3 +647,31 @@ Each section is meant to give a compact review summary, automated/manual test fo
   - blockers
   - residual risks
   - final `Go` / `No-go` decision
+
+## Issue `#60` Review Notes
+
+### Summary
+
+- Add a single QA workbook that mirrors PRD §18 so the final submission pass has one canonical execution document.
+- Keep every checklist item visible instead of summarizing away important edge cases.
+
+### Files
+
+- `docs/prd-qa-workbook.md`
+
+### Test Cases For Review
+
+#### Automated
+
+- No automated coverage added for this docs-only QA workbook.
+- Full `npm test`, `npx tsc --noEmit`, and `npm run lint` should remain green after the docs update.
+
+#### Manual
+
+- Execute every row in `docs/prd-qa-workbook.md`.
+- Mark each item as:
+  - passed
+  - pending
+  - not applicable
+- Record concise evidence notes per section.
+- Convert any failures into blocking issues before submission review.

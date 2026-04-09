@@ -14,6 +14,8 @@ This folder is organized by purpose rather than by a global numbering scheme.
   Submission-readiness checklist with repo evidence and manual verification gaps.
 - [Final Pre-Submission Review](final-pre-submission-review.md)
   Go/no-go template for the last submission readiness review.
+- [PRD QA Workbook](prd-qa-workbook.md)
+  Execution workbook for the full PRD QA checklist before submission.
 
 ## Product And Planning
 
