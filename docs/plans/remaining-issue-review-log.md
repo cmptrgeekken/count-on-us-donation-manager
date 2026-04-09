@@ -13,7 +13,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 6. `#54` Build product page Theme App Extension donation widget
 7. `#64` Add cart donation summary modal
 8. `#57` Add app proxy donation receipts page
-9. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+9. `#55` Add Thank You and Order Status donation extension
+10. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -359,3 +360,58 @@ Each section is meant to give a compact review summary, automated/manual test fo
 - Confirm receipts with uploads get a working refreshed link on page load.
 - Confirm shops with no disbursements show the empty state instead of a broken table.
 - Confirm keyboard users can skip directly to the main receipts content.
+
+## Issue `#55` Review Notes
+
+### Summary
+
+- Add a checkout-authenticated order donation summary endpoint at `GET /api/orders/:orderId/donation`.
+- Return `confirmed` data from snapshots when available, or `pending` estimated amounts while waiting for snapshot creation.
+- Add a first Checkout UI Extension scaffold for Thank You and Order Status surfaces, plus a local preview harness to review the expected pending/confirmed/timeout/hidden states.
+
+### Files
+
+- `app/routes/api.orders.$orderId.donation.tsx`
+- `app/routes/api.orders.$orderId.donation.test.ts`
+- `app/services/postPurchaseDonation.server.ts`
+- `app/services/postPurchaseDonation.server.test.ts`
+- `app/utils/checkout-auth.server.ts`
+- `app/utils/checkout-auth.server.test.ts`
+- `app/routes/ui-fixtures.post-purchase-donation-preview.tsx`
+- `tests/ui/post-purchase-donation-preview.spec.ts`
+- `extensions/count-on-us-post-purchase/shopify.extension.toml`
+- `extensions/count-on-us-post-purchase/package.json`
+- `extensions/count-on-us-post-purchase/src/Extension.jsx`
+
+### Test Cases For Review
+
+#### Automated
+
+- `postPurchaseDonation.server.test.ts`
+  - confirmed snapshot allocations aggregate by cause
+  - Shopify Admin order data maps into estimate-ready payloads
+  - pending estimates aggregate per-cause amounts from live order data
+- `api.orders.$orderId.donation.test.ts`
+  - confirmed responses return `200`
+  - pending responses return `202`
+  - no-donation orders return `404`
+  - repeated polling is rate-limited per order
+- `checkout-auth.server.test.ts`
+  - local preview bypass works only in non-production local mode
+  - checkout session token shop normalization works for extension requests
+- full `npm test`
+  - regression coverage remains green with the post-purchase endpoint and helper added
+- `post-purchase-donation-preview.spec.ts`
+  - estimated state transitions to confirmed
+  - timeout copy remains when confirmation never arrives
+  - hidden/no-data mode renders no donation panel
+
+#### Manual
+
+- Add the post-purchase extension to a Thank You / Order Status surface in Shopify.
+- Place an order containing donation products.
+- Confirm the Thank You page shows estimated amounts immediately when the snapshot is still pending.
+- Confirm the extension replaces the estimate with confirmed values once the snapshot exists.
+- Confirm revisiting through Order Status still shows the donation summary.
+- Confirm orders without donation products hide the extension entirely.
+- Confirm app-server failure leaves the Shopify surface usable and does not show a broken error block.

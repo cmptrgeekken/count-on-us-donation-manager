@@ -51,3 +51,8 @@ It is intentionally lightweight so decisions can be reviewed later without block
 - `#57` uses the current app proxy base path, so the public receipts page lives at `/apps/count-on-us/donation-receipts`.
 - Older product/docs language still sometimes implies a shorter `/apps/donation-receipts` path.
 - We should decide whether the current proxy base is the long-term canonical storefront URL, or whether we want a broader app-proxy path cleanup later and accept the migration/install constraints that come with it.
+
+### Post-purchase estimate parity for discounted orders
+
+- `#55` currently bases pending order estimates on Shopify Admin order line discounted totals before the authoritative snapshot exists.
+- We should confirm whether that is the desired customer-facing approximation, or whether we want tighter parity work later around discounts, shipping allocation, and any order-level adjustments that may cause the confirmed snapshot to differ slightly from the early estimate.
