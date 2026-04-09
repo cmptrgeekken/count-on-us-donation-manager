@@ -11,6 +11,7 @@ import {
   logDisbursement,
   MAX_RECEIPT_BYTES,
 } from "../services/disbursementService.server";
+import { listOutstandingCauseAllocations } from "../services/causePayables.server";
 import { closeReportingPeriod } from "../services/reportingPeriodService.server";
 import { createReceiptStorage } from "../services/receiptStorage.server";
 import {
@@ -82,6 +83,12 @@ type DisbursementRow = {
   paymentMethod: string;
   referenceId: string | null;
   receiptUrl: string | null;
+  applications: Array<{
+    periodId: string;
+    periodStartDate: string;
+    periodEndDate: string;
+    amount: string;
+  }>;
 };
 
 type ReportingActionData = {
@@ -93,7 +100,27 @@ type ReportingActionData = {
 type DisbursementOption = {
   causeId: string;
   label: string;
-  remaining: string;
+  currentOutstanding: string;
+  priorOutstanding: string;
+  totalOutstanding: string;
+};
+
+type CausePayablePeriodRow = {
+  periodId: string;
+  periodStartDate: string;
+  periodEndDate: string;
+  amount: string;
+};
+
+type CausePayableRow = {
+  causeId: string;
+  causeName: string;
+  is501c3: boolean;
+  currentOutstanding: string;
+  priorOutstanding: string;
+  totalOutstanding: string;
+  overdue: boolean;
+  periods: CausePayablePeriodRow[];
 };
 
 type TaxTrueUpRow = {
@@ -230,7 +257,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const selectedPeriod = periods.find((period) => period.id === requestedPeriodId) ?? periods[0];
 
-  const [shop, snapshotLines, closedAllocations, expensesSummary, chargesSummary, charges, disbursements, taxTrueUps, carryForwardTrueUps, activeCauses] =
+  const [shop, snapshotLines, closedAllocations, expensesSummary, chargesSummary, charges, disbursements, taxTrueUps, carryForwardTrueUps, activeCauses, outstandingAllocations] =
     await Promise.all([
       prisma.shop.findUnique({
         where: { shopId },
@@ -341,6 +368,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
               name: true,
             },
           },
+          applications: {
+            select: {
+              amount: true,
+              causeAllocation: {
+                select: {
+                  periodId: true,
+                  period: {
+                    select: {
+                      startDate: true,
+                      endDate: true,
+                    },
+                  },
+                },
+              },
+            },
+            orderBy: {
+              causeAllocation: {
+                period: {
+                  endDate: "asc",
+                },
+              },
+            },
+          },
         },
       }),
       prisma.taxTrueUp.findMany({
@@ -395,6 +445,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           name: true,
         },
       }),
+      listOutstandingCauseAllocations(
+        shopId,
+        {
+          throughPeriodEndDate: selectedPeriod.endDate,
+        },
+        prisma,
+      ),
     ]);
 
   const allocationMap = new Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>();
@@ -506,8 +563,81 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             expiresInSeconds: 60 * 60,
           })
         : null,
+      applications: disbursement.applications.map((application) => ({
+        periodId: application.causeAllocation.periodId,
+        periodStartDate: application.causeAllocation.period.startDate.toISOString(),
+        periodEndDate: application.causeAllocation.period.endDate.toISOString(),
+        amount: application.amount.toString(),
+      })),
     })),
   );
+
+  const causePayablesMap = new Map<
+    string,
+    {
+      causeId: string;
+      causeName: string;
+      is501c3: boolean;
+      currentOutstanding: Prisma.Decimal;
+      priorOutstanding: Prisma.Decimal;
+      periods: CausePayablePeriodRow[];
+    }
+  >();
+
+  for (const allocation of outstandingAllocations) {
+    const existing = causePayablesMap.get(allocation.causeId) ?? {
+      causeId: allocation.causeId,
+      causeName: allocation.causeName,
+      is501c3: allocation.is501c3,
+      currentOutstanding: ZERO,
+      priorOutstanding: ZERO,
+      periods: [],
+    };
+
+    if (allocation.periodId === selectedPeriod.id) {
+      existing.currentOutstanding = existing.currentOutstanding.add(allocation.remaining);
+    } else {
+      existing.priorOutstanding = existing.priorOutstanding.add(allocation.remaining);
+    }
+
+    existing.periods.push({
+      periodId: allocation.periodId,
+      periodStartDate: allocation.periodStartDate.toISOString(),
+      periodEndDate: allocation.periodEndDate.toISOString(),
+      amount: allocation.remaining.toString(),
+    });
+    causePayablesMap.set(allocation.causeId, existing);
+  }
+
+  if (selectedPeriod.status === "OPEN") {
+    for (const allocation of allocationRows) {
+      const existing = causePayablesMap.get(allocation.causeId) ?? {
+        causeId: allocation.causeId,
+        causeName: allocation.causeName,
+        is501c3: allocation.is501c3,
+        currentOutstanding: ZERO,
+        priorOutstanding: ZERO,
+        periods: [],
+      };
+
+      existing.currentOutstanding = existing.currentOutstanding.add(new Prisma.Decimal(allocation.allocated));
+      causePayablesMap.set(allocation.causeId, existing);
+    }
+  }
+
+  const causePayables = Array.from(causePayablesMap.values()).map<CausePayableRow>((payable) => {
+    const totalOutstanding = payable.currentOutstanding.add(payable.priorOutstanding);
+    return {
+      causeId: payable.causeId,
+      causeName: payable.causeName,
+      is501c3: payable.is501c3,
+      currentOutstanding: payable.currentOutstanding.toString(),
+      priorOutstanding: payable.priorOutstanding.toString(),
+      totalOutstanding: totalOutstanding.toString(),
+      overdue: payable.priorOutstanding.greaterThan(ZERO),
+      periods: payable.periods,
+    };
+  });
 
   return Response.json({
     periods: periods.map<PeriodRow>((period) => ({
@@ -562,6 +692,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         processedAt: charge.processedAt?.toISOString() ?? null,
       })),
       disbursements: disbursementRows,
+      causePayables,
       taxTrueUps: taxTrueUps.map<TaxTrueUpRow>((trueUp) => ({
         id: trueUp.id,
         estimatedTax: trueUp.estimatedTax.toString(),
@@ -694,7 +825,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 ? { receipt: [message] }
                 : error.code === disbursementErrorCodes.PERIOD_NOT_CLOSED || error.code === disbursementErrorCodes.PERIOD_NOT_FOUND
                   ? { periodId: [message] }
-                  : error.code === disbursementErrorCodes.ALLOCATION_NOT_FOUND
+                : error.code === disbursementErrorCodes.PAYABLE_NOT_FOUND
                     ? { causeId: [message] }
                     : undefined
           : undefined;
@@ -877,15 +1008,18 @@ export default function ReportingPage() {
         };
       })
     : [];
-  const disbursementCauseOptions = allocationRows.filter((allocation) =>
-    new Prisma.Decimal(allocation.remaining).greaterThan(0),
+  const causePayables: CausePayableRow[] = summary?.causePayables ?? [];
+  const disbursementCauseOptions = causePayables.filter((allocation) =>
+    new Prisma.Decimal(allocation.totalOutstanding).greaterThan(0),
   );
   const disbursements: DisbursementRow[] = summary?.disbursements ?? [];
   const taxTrueUps: TaxTrueUpRow[] = summary?.taxTrueUps ?? [];
   const disbursementOptions = disbursementCauseOptions.map<DisbursementOption>((allocation) => ({
     causeId: allocation.causeId,
-    label: `${allocation.causeName} (${formatMoney(allocation.remaining)} remaining)`,
-    remaining: allocation.remaining,
+    label: `${allocation.causeName} (${formatMoney(allocation.totalOutstanding)} outstanding)`,
+    currentOutstanding: allocation.currentOutstanding,
+    priorOutstanding: allocation.priorOutstanding,
+    totalOutstanding: allocation.totalOutstanding,
   }));
   const [selectedDisbursementCauseId, setSelectedDisbursementCauseId] = useState(
     disbursementOptions[0]?.causeId ?? "",
@@ -920,8 +1054,8 @@ export default function ReportingPage() {
     disbursementOptions.find((option) => option.causeId === selectedDisbursementCauseId) ??
     disbursementOptions[0] ??
     null;
-  const selectedRemainingAmount = floorCurrency(selectedDisbursementOption?.remaining ?? "0");
-  const selectedRemainingAmountInputMax = selectedRemainingAmount;
+  const selectedTotalOutstandingAmount = floorCurrency(selectedDisbursementOption?.totalOutstanding ?? "0");
+  const selectedRemainingAmountInputMax = selectedTotalOutstandingAmount;
   const disbursementTwoColumnGridStyle: CSSProperties = {
     display: "grid",
     gap: "0.9rem",
@@ -1130,16 +1264,70 @@ export default function ReportingPage() {
             </s-table>
           </s-section>
 
+          <s-section heading="Outstanding cause payables">
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <s-text color="subdued">
+                This view rolls prior unpaid cause balances into the current period so overdue obligations are easy to spot and settle.
+              </s-text>
+              {causePayables.some((payable) => payable.overdue) ? (
+                <s-banner tone="warning">
+                  <s-text>Prior-period outstanding balances are still unpaid and should be disbursed as soon as possible.</s-text>
+                </s-banner>
+              ) : null}
+              <s-table>
+                <s-table-header-row>
+                  <s-table-header listSlot="primary">Cause</s-table-header>
+                  <s-table-header listSlot="inline">Overdue</s-table-header>
+                  <s-table-header listSlot="secondary">Current period</s-table-header>
+                  <s-table-header listSlot="secondary">Prior periods</s-table-header>
+                  <s-table-header listSlot="secondary">Outstanding by period</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Total outstanding</s-table-header>
+                </s-table-header-row>
+                <s-table-body>
+                  {causePayables.length === 0 ? (
+                    <s-table-row>
+                      <s-table-cell>No outstanding cause payables yet.</s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                    </s-table-row>
+                  ) : (
+                    causePayables.map((payable) => (
+                      <s-table-row key={payable.causeId}>
+                        <s-table-cell>{payable.causeName}</s-table-cell>
+                        <s-table-cell>{payable.overdue ? "Needs attention" : "Current only"}</s-table-cell>
+                        <s-table-cell>{formatMoney(payable.currentOutstanding)}</s-table-cell>
+                        <s-table-cell>{formatMoney(payable.priorOutstanding)}</s-table-cell>
+                        <s-table-cell>
+                          <div style={{ display: "grid", gap: "0.2rem" }}>
+                            {payable.periods.map((period) => (
+                              <span key={`${payable.causeId}-${period.periodId}`}>
+                                {formatDateRange(period.periodStartDate, period.periodEndDate, locale)}: {formatMoney(period.amount)}
+                              </span>
+                            ))}
+                          </div>
+                        </s-table-cell>
+                        <s-table-cell>{formatMoney(payable.totalOutstanding)}</s-table-cell>
+                      </s-table-row>
+                    ))
+                  )}
+                </s-table-body>
+              </s-table>
+            </div>
+          </s-section>
+
           {selectedPeriod?.status === "CLOSED" ? (
             <>
               <s-section heading="Log disbursement">
                 <div style={{ display: "grid", gap: "0.75rem" }}>
                   <s-text color="subdued">
-                    Record funds paid out to a Cause for this closed period. Remaining balances update immediately.
+                    Record funds paid out to a Cause for this closed period. Allocated amounts auto-apply to the oldest outstanding closed balances first.
                   </s-text>
                   {disbursementCauseOptions.length === 0 ? (
                     <s-banner tone="info">
-                      <s-text>All available allocations for this period have already been fully disbursed.</s-text>
+                      <s-text>All closed-period cause payables through this reporting period have already been fully disbursed.</s-text>
                     </s-banner>
                   ) : (
                     <disbursementFetcher.Form
@@ -1180,9 +1368,17 @@ export default function ReportingPage() {
                           ))}
                         </select>
                         {selectedDisbursementOption ? (
-                          <s-text color="subdued">
-                            Current remaining balance: {formatMoney(selectedDisbursementOption.remaining)}
-                          </s-text>
+                          <div style={{ display: "grid", gap: "0.2rem" }}>
+                            <s-text color="subdued">
+                              Current period outstanding: {formatMoney(selectedDisbursementOption.currentOutstanding)}
+                            </s-text>
+                            <s-text color="subdued">
+                              Prior-period outstanding: {formatMoney(selectedDisbursementOption.priorOutstanding)}
+                            </s-text>
+                            <s-text color="subdued">
+                              Total outstanding eligible for auto-application: {formatMoney(selectedDisbursementOption.totalOutstanding)}
+                            </s-text>
+                          </div>
                         ) : null}
                         {disbursementFetcher.data?.fieldErrors?.causeId?.map((message) => (
                           <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
@@ -1202,7 +1398,7 @@ export default function ReportingPage() {
                             style={disbursementFieldStyle}
                           />
                           <s-text color="subdued" style={disbursementHelpTextStyle}>
-                            Counts against this period&apos;s remaining allocation. Max {formatMoney(selectedRemainingAmount)}.
+                            Auto-applies FIFO against closed outstanding balances through this period. Max {formatMoney(selectedTotalOutstandingAmount)}.
                           </s-text>
                           {disbursementFetcher.data?.fieldErrors?.allocatedAmount?.map((message) => (
                             <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
@@ -1326,6 +1522,7 @@ export default function ReportingPage() {
                   <s-table-header-row>
                     <s-table-header listSlot="primary">Cause</s-table-header>
                     <s-table-header listSlot="secondary">Paid</s-table-header>
+                    <s-table-header listSlot="secondary">Applied to</s-table-header>
                     <s-table-header listSlot="secondary">Allocated</s-table-header>
                     <s-table-header listSlot="secondary">Extra</s-table-header>
                     <s-table-header listSlot="secondary">Fees</s-table-header>
@@ -1346,12 +1543,24 @@ export default function ReportingPage() {
                         <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
                       </s-table-row>
                     ) : (
                       disbursements.map((disbursement) => (
                         <s-table-row key={disbursement.id}>
                           <s-table-cell>{disbursement.causeName}</s-table-cell>
                           <s-table-cell>{formatDate(disbursement.paidAt, locale)}</s-table-cell>
+                          <s-table-cell>
+                            {disbursement.applications.length > 0 ? (
+                              <div style={{ display: "grid", gap: "0.2rem" }}>
+                                {disbursement.applications.map((application) => (
+                                  <span key={`${disbursement.id}-${application.periodId}`}>
+                                    {formatDateRange(application.periodStartDate, application.periodEndDate, locale)}: {formatMoney(application.amount)}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : "None"}
+                          </s-table-cell>
                           <s-table-cell>{formatMoney(disbursement.allocatedAmount)}</s-table-cell>
                           <s-table-cell>{formatMoney(disbursement.extraContributionAmount)}</s-table-cell>
                           <s-table-cell>{formatMoney(disbursement.feesCoveredAmount)}</s-table-cell>

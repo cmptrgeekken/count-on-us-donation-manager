@@ -456,6 +456,7 @@ model CauseAllocation {
   allocated     Decimal         @db.Decimal(10, 4)
   disbursed     Decimal         @default(0) @db.Decimal(10, 2)
   createdAt     DateTime        @default(now())
+  applications  DisbursementApplication[]
 
   @@unique([periodId, causeId])
   @@index([shopId])
@@ -477,9 +478,25 @@ model Disbursement {
   referenceId             String?
   receiptFileKey          String?
   createdAt               DateTime        @default(now())
+  applications            DisbursementApplication[]
 
   @@index([shopId])
   @@index([periodId, causeId])
+}
+
+model DisbursementApplication {
+  id               String         @id @default(cuid())
+  shopId           String
+  disbursementId   String
+  disbursement     Disbursement   @relation(fields: [disbursementId], references: [id], onDelete: Cascade)
+  causeAllocationId String
+  causeAllocation  CauseAllocation @relation(fields: [causeAllocationId], references: [id], onDelete: Cascade)
+  amount           Decimal        @db.Decimal(10, 2)
+  createdAt        DateTime       @default(now())
+
+  @@unique([disbursementId, causeAllocationId])
+  @@index([shopId])
+  @@index([causeAllocationId])
 }
 
 model TaxTrueUp {

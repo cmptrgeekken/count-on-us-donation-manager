@@ -14,20 +14,35 @@ describe("logDisbursement", () => {
   it("creates a disbursement, increments disbursed totals, and stores the receipt", async () => {
     const tx = {
       reportingPeriod: {
-        findFirst: vi.fn().mockResolvedValue({ id: "period-1", status: "CLOSED" }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: "period-1",
+          status: "CLOSED",
+          endDate: new Date("2026-04-01T00:00:00.000Z"),
+        }),
       },
       causeAllocation: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: "allocation-1",
-          causeId: "cause-1",
-          causeName: "Cause One",
-          allocated: decimal("100.00"),
-          disbursed: decimal("25.00"),
-        }),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "allocation-1",
+            periodId: "period-0",
+            causeId: "cause-1",
+            causeName: "Cause One",
+            is501c3: false,
+            allocated: decimal("100.00"),
+            disbursed: decimal("25.00"),
+            period: {
+              startDate: new Date("2026-03-01T00:00:00.000Z"),
+              endDate: new Date("2026-03-15T00:00:00.000Z"),
+            },
+          },
+        ]),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       disbursement: {
         create: vi.fn().mockResolvedValue({ id: "disbursement-1" }),
+      },
+      disbursementApplication: {
+        createMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       auditLog: {
         create: vi.fn().mockResolvedValue(undefined),
@@ -84,6 +99,16 @@ describe("logDisbursement", () => {
         }),
       }),
     );
+    expect(tx.disbursementApplication.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          shopId: "shop-1",
+          disbursementId: "disbursement-1",
+          causeAllocationId: "allocation-1",
+          amount: decimal("40.00"),
+        },
+      ],
+    });
     expect(tx.causeAllocation.updateMany).toHaveBeenCalledWith({
       where: { id: "allocation-1", shopId: "shop-1" },
       data: {
@@ -98,16 +123,28 @@ describe("logDisbursement", () => {
   it("rejects disbursements larger than the remaining allocation", async () => {
     const tx = {
       reportingPeriod: {
-        findFirst: vi.fn().mockResolvedValue({ id: "period-1", status: "CLOSED" }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: "period-1",
+          status: "CLOSED",
+          endDate: new Date("2026-04-01T00:00:00.000Z"),
+        }),
       },
       causeAllocation: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: "allocation-1",
-          causeId: "cause-1",
-          causeName: "Cause One",
-          allocated: decimal("100.00"),
-          disbursed: decimal("95.00"),
-        }),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "allocation-1",
+            periodId: "period-1",
+            causeId: "cause-1",
+            causeName: "Cause One",
+            is501c3: false,
+            allocated: decimal("100.00"),
+            disbursed: decimal("95.00"),
+            period: {
+              startDate: new Date("2026-03-16T00:00:00.000Z"),
+              endDate: new Date("2026-04-01T00:00:00.000Z"),
+            },
+          },
+        ]),
       },
     };
     const db = {
@@ -195,20 +232,35 @@ describe("logDisbursement", () => {
   it("allows extra contribution and fees without affecting remaining allocation", async () => {
     const tx = {
       reportingPeriod: {
-        findFirst: vi.fn().mockResolvedValue({ id: "period-1", status: "CLOSED" }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: "period-1",
+          status: "CLOSED",
+          endDate: new Date("2026-04-01T00:00:00.000Z"),
+        }),
       },
       causeAllocation: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: "allocation-1",
-          causeId: "cause-1",
-          causeName: "Cause One",
-          allocated: decimal("100.00"),
-          disbursed: decimal("95.00"),
-        }),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "allocation-1",
+            periodId: "period-1",
+            causeId: "cause-1",
+            causeName: "Cause One",
+            is501c3: false,
+            allocated: decimal("100.00"),
+            disbursed: decimal("95.00"),
+            period: {
+              startDate: new Date("2026-03-16T00:00:00.000Z"),
+              endDate: new Date("2026-04-01T00:00:00.000Z"),
+            },
+          },
+        ]),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       disbursement: {
         create: vi.fn().mockResolvedValue({ id: "disbursement-2" }),
+      },
+      disbursementApplication: {
+        createMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       auditLog: {
         create: vi.fn().mockResolvedValue(undefined),
@@ -256,20 +308,35 @@ describe("logDisbursement", () => {
   it("allows allocated amounts up to the remaining balance floored to cents", async () => {
     const tx = {
       reportingPeriod: {
-        findFirst: vi.fn().mockResolvedValue({ id: "period-1", status: "CLOSED" }),
+        findFirst: vi.fn().mockResolvedValue({
+          id: "period-1",
+          status: "CLOSED",
+          endDate: new Date("2026-04-01T00:00:00.000Z"),
+        }),
       },
       causeAllocation: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: "allocation-1",
-          causeId: "cause-1",
-          causeName: "Cause One",
-          allocated: decimal("200.00"),
-          disbursed: decimal("76.043"),
-        }),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "allocation-1",
+            periodId: "period-1",
+            causeId: "cause-1",
+            causeName: "Cause One",
+            is501c3: false,
+            allocated: decimal("200.00"),
+            disbursed: decimal("76.043"),
+            period: {
+              startDate: new Date("2026-03-16T00:00:00.000Z"),
+              endDate: new Date("2026-04-01T00:00:00.000Z"),
+            },
+          },
+        ]),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       disbursement: {
         create: vi.fn().mockResolvedValue({ id: "disbursement-3" }),
+      },
+      disbursementApplication: {
+        createMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       auditLog: {
         create: vi.fn().mockResolvedValue(undefined),
@@ -300,5 +367,106 @@ describe("logDisbursement", () => {
       },
     });
     expect(result.remaining.toString()).toBe("0");
+  });
+
+  it("applies allocated amounts FIFO across older outstanding periods", async () => {
+    const tx = {
+      reportingPeriod: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "period-2",
+          status: "CLOSED",
+          endDate: new Date("2026-04-30T00:00:00.000Z"),
+        }),
+      },
+      causeAllocation: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "allocation-older",
+            periodId: "period-1",
+            causeId: "cause-1",
+            causeName: "Cause One",
+            is501c3: false,
+            allocated: decimal("50.00"),
+            disbursed: decimal("40.00"),
+            period: {
+              startDate: new Date("2026-03-01T00:00:00.000Z"),
+              endDate: new Date("2026-03-31T00:00:00.000Z"),
+            },
+          },
+          {
+            id: "allocation-current",
+            periodId: "period-2",
+            causeId: "cause-1",
+            causeName: "Cause One",
+            is501c3: false,
+            allocated: decimal("60.00"),
+            disbursed: decimal("15.00"),
+            period: {
+              startDate: new Date("2026-04-01T00:00:00.000Z"),
+              endDate: new Date("2026-04-30T00:00:00.000Z"),
+            },
+          },
+        ]),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      disbursement: {
+        create: vi.fn().mockResolvedValue({ id: "disbursement-4" }),
+      },
+      disbursementApplication: {
+        createMany: vi.fn().mockResolvedValue({ count: 2 }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+    const db = {
+      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
+    };
+
+    const result = await logDisbursement(
+      "shop-1",
+      {
+        periodId: "period-2",
+        causeId: "cause-1",
+        allocatedAmount: "30.00",
+        paidAt: new Date("2026-05-08T00:00:00.000Z"),
+        paymentMethod: "ACH",
+      },
+      { db: db as any },
+    );
+
+    expect(tx.disbursementApplication.createMany).toHaveBeenCalledWith({
+      data: [
+        {
+          shopId: "shop-1",
+          disbursementId: "disbursement-4",
+          causeAllocationId: "allocation-older",
+          amount: decimal("10.00"),
+        },
+        {
+          shopId: "shop-1",
+          disbursementId: "disbursement-4",
+          causeAllocationId: "allocation-current",
+          amount: decimal("20.00"),
+        },
+      ],
+    });
+    expect(tx.causeAllocation.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: "allocation-older", shopId: "shop-1" },
+      data: {
+        disbursed: {
+          increment: decimal("10.00"),
+        },
+      },
+    });
+    expect(tx.causeAllocation.updateMany).toHaveBeenNthCalledWith(2, {
+      where: { id: "allocation-current", shopId: "shop-1" },
+      data: {
+        disbursed: {
+          increment: decimal("20.00"),
+        },
+      },
+    });
+    expect(result.remaining.toString()).toBe("25");
   });
 });
