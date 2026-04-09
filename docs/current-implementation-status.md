@@ -5,8 +5,8 @@ Use this document as the practical snapshot of what is implemented in the repo t
 This file is intentionally lightweight and operational. It should summarize reality, not restate full product requirements or phase specs.
 
 **Project:** Count On Us  
-**Date:** April 6, 2026  
-**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Current focus should shift from Phase 3 implementation to post-Phase-3 stabilization and planning for the next major product slice.
+**Date:** April 8, 2026  
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, and receipt storage merged. Current focus is finishing the remaining reporting workflows, starting with tax true-up and export support.
 
 ---
 
@@ -14,7 +14,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Post-Phase-3 stabilization and next-phase planning
+- **Current focus:** Phase 4 reporting completion, with tax true-up actively in progress
 - **Phase 3:** Complete
 
 ---
@@ -117,13 +117,15 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 
 ## Phase 4 Checklist
 
-- [ ] Reporting periods
-- [ ] Cause allocation materialization
-- [ ] Shopify charge sync
-- [ ] Reporting dashboard
-- [~] Disbursements
-  Active branch work includes receipt upload plus split disbursement tracking for allocated amount, extra contribution, and fees covered.
-- [ ] Tax true-up
+- [x] Reporting periods
+- [x] Cause allocation materialization
+- [~] Shopify charge sync
+  Daily charge import and reporting integration are in place; the issue remains open for remaining completion/hardening work.
+- [x] Reporting dashboard
+- [x] Disbursements
+  Includes receipt upload plus split disbursement tracking for allocated amount, extra contribution, and fees covered.
+- [~] Tax true-up
+  Tax settings, period reserve calculation, and the true-up workflow are implemented on the active branch and awaiting review/merge.
 - [ ] Export flows
 - [ ] Audit log browsing UI
 
