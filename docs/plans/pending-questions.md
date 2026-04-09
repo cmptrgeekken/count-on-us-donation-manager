@@ -75,3 +75,10 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - real saved Settings state for Managed Markets
   - actual provider connection state
   - Theme App Extension/theme-placement detection, if Shopify makes that feasible
+
+### Demo-store review scope
+
+- `#61` adds a repeatable seed preset plus a manual finish checklist, but a few reviewer-path decisions still need an explicit call:
+  - Which dev store is the canonical review store?
+  - Is POD provider review in scope for App Store reviewers or intentionally excluded?
+  - Which theme should be treated as the primary reviewer theme once the widget is enabled?

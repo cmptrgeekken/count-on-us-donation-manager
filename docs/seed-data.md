@@ -8,17 +8,28 @@ This project includes a deterministic seed script for generating realistic dev d
 npm run seed:dev -- --shop=your-dev-store.myshopify.com --reset
 ```
 
+For a compact App Store review-ready dataset, use the demo preset:
+
+```bash
+npm run seed:demo -- --shop=your-dev-store.myshopify.com --reset
+```
+
 ## Defaults
 
 - `--months`: 6
 - `--orders-min`: 20
 - `--orders-max`: 30
 - `--end-date`: start of the current UTC month
+- `--preset`: omitted by default
 
 ## Override examples
 
 ```bash
 npm run seed:dev -- --shop=your-dev-store.myshopify.com --months=9 --orders-min=15 --orders-max=40 --end-date=2026-04-01 --reset
+```
+
+```bash
+npm run seed:dev -- --shop=your-dev-store.myshopify.com --preset=demo-store --reset --end-date=2026-04-01
 ```
 
 ## Determinism
@@ -45,6 +56,8 @@ Other seeded rows use a `Seed:` prefix in their name/description fields.
 
 - The catalog sync does not delete local products/variants, so seeded data will persist until removed.
 - Use `--reset` to clear all data for a shop before reseeding.
+- The `demo-store` preset also marks setup wizard steps complete so the review store lands in a more finished state.
+- See [demo-store-review-prep.md](./demo-store-review-prep.md) for the manual finish checklist after seeding a reviewer store.
 
 ## Reporting cache smoke test
 

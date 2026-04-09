@@ -1,33 +1,34 @@
 import { Prisma, PrismaClient } from "@prisma/client";
 import { faker } from "@faker-js/faker";
+import { applySeedPreset, DEFAULT_SEED_OPTIONS } from "./seed-options.mjs";
 
 const prisma = new PrismaClient();
 const SEED_MARKER = "Seed:";
-const DEFAULT_MONTHS = 6;
-const DEFAULT_ORDERS_MIN = 20;
-const DEFAULT_ORDERS_MAX = 30;
 
 function parseArgs() {
   const args = process.argv.slice(2);
   const result = {
     shopId: null,
     reset: false,
-    months: DEFAULT_MONTHS,
-    ordersMin: DEFAULT_ORDERS_MIN,
-    ordersMax: DEFAULT_ORDERS_MAX,
+    months: DEFAULT_SEED_OPTIONS.months,
+    ordersMin: DEFAULT_SEED_OPTIONS.ordersMin,
+    ordersMax: DEFAULT_SEED_OPTIONS.ordersMax,
+    completeSetup: DEFAULT_SEED_OPTIONS.completeSetup,
+    preset: null,
     endDate: null,
   };
 
   for (const arg of args) {
     if (arg === "--reset") result.reset = true;
     if (arg.startsWith("--shop=")) result.shopId = arg.slice("--shop=".length).trim();
+    if (arg.startsWith("--preset=")) result.preset = arg.slice("--preset=".length).trim();
     if (arg.startsWith("--months=")) result.months = Number(arg.slice("--months=".length));
     if (arg.startsWith("--orders-min=")) result.ordersMin = Number(arg.slice("--orders-min=".length));
     if (arg.startsWith("--orders-max=")) result.ordersMax = Number(arg.slice("--orders-max=".length));
     if (arg.startsWith("--end-date=")) result.endDate = arg.slice("--end-date=".length).trim();
   }
 
-  return result;
+  return applySeedPreset(result, result.preset);
 }
 
 function decimal(value) {
@@ -272,6 +273,8 @@ async function seed(shopId, options) {
       mistakeBuffer: decimal("0.05"),
       defaultLaborRate: decimal("24.00"),
       catalogSynced: true,
+      postPurchaseEmailEnabled: true,
+      wizardStep: options.completeSetup ? 8 : 0,
     },
     create: {
       shopId,
@@ -280,6 +283,23 @@ async function seed(shopId, options) {
       mistakeBuffer: decimal("0.05"),
       defaultLaborRate: decimal("24.00"),
       catalogSynced: true,
+      postPurchaseEmailEnabled: true,
+      wizardStep: options.completeSetup ? 8 : 0,
+    },
+  });
+
+  await prisma.wizardState.upsert({
+    where: { shopId },
+    update: {
+      currentStep: options.completeSetup ? 8 : 0,
+      completedSteps: options.completeSetup ? [0, 1, 2, 3, 4, 5, 6, 7, 8] : [],
+      skippedSteps: [],
+    },
+    create: {
+      shopId,
+      currentStep: options.completeSetup ? 8 : 0,
+      completedSteps: options.completeSetup ? [0, 1, 2, 3, 4, 5, 6, 7, 8] : [],
+      skippedSteps: [],
     },
   });
 
@@ -783,7 +803,7 @@ async function seed(shopId, options) {
   }
 
   console.log(
-    `Seeded dev data for ${shopId} (${options.months} months ending ${endDate.toISOString().slice(0, 10)}).`,
+    `Seeded ${options.preset ?? "dev"} data for ${shopId} (${options.months} months ending ${endDate.toISOString().slice(0, 10)}).`,
   );
 }
 

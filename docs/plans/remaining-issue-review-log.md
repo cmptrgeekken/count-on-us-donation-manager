@@ -16,7 +16,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 9. `#55` Add Thank You and Order Status donation extension
 10. `#56` Add post-purchase donation email
 11. `#58` Build first-run setup wizard and persistent setup checklist
-12. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+12. `#61` Prepare demo store for App Store review
+13. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -509,3 +510,46 @@ Each section is meant to give a compact review summary, automated/manual test fo
 - Use `Resume step` on a skipped checklist item and confirm it becomes the active wizard step again.
 - Use `Mark complete` on manual steps such as Managed Markets review, Provider Connections, and storefront widget enablement.
 - Confirm the Theme Editor link opens Shopify theme editing in a new tab.
+
+## Issue `#61` Review Notes
+
+### Summary
+
+- Add a review-focused seed preset so the demo store can be rebuilt from source control instead of manual configuration alone.
+- Mark setup as complete in the seeded state so review stores land in a near-finished configuration.
+- Document the remaining manual reviewer prep steps that cannot be inferred automatically yet.
+
+### Files
+
+- `scripts/seed-dev.mjs`
+- `scripts/seed-options.mjs`
+- `scripts/seed-options.test.mjs`
+- `package.json`
+- `docs/seed-data.md`
+- `docs/demo-store-review-prep.md`
+
+### Test Cases For Review
+
+#### Automated
+
+- `seed-options.test.mjs`
+  - demo-store preset applies the compact review defaults
+  - unknown presets fail loudly
+- full `npm test`
+  - regression coverage remains green after the new seed preset helper is added
+
+#### Manual
+
+- Run `npm run seed:demo -- --shop=your-dev-store.myshopify.com --reset`.
+- Confirm the seeded shop contains:
+  - at least one `501(c)(3)` cause
+  - at least one configured product/variant
+  - closed reporting periods with disbursements
+  - tax true-up history
+  - post-purchase email enabled
+  - setup wizard hidden because the seed marks setup complete
+- Follow the finish checklist in `docs/demo-store-review-prep.md`:
+  - enable the storefront widget
+  - verify cart / post-purchase surfaces if they are in review scope
+  - add a representative disbursement receipt
+  - decide whether POD review is included
