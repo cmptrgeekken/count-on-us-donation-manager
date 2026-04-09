@@ -24,3 +24,8 @@ redirect_urls = [
   "https://shopify.mnbecks.com/auth/callback",
   "https://shopify.mnbecks.com/auth/shopify/callback",
 ]
+
+[app_proxy]
+url = "/api/widget"
+subpath = "count-on-us"
+prefix = "apps"

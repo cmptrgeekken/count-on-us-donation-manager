@@ -10,7 +10,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 3. `#52` Add audit log browsing UI
 4. `#50` Add analytical recalculation delta view
 5. `#53` Build storefront widget data endpoint and display-safe projection
-6. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+6. `#54` Build product page Theme App Extension donation widget
+7. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -83,6 +84,7 @@ Each section is meant to give a compact review summary, automated/manual test fo
 
 - `#45` appears functionally complete in code and tests already. It may only need issue/status cleanup unless you want an additional merchant-facing charge-sync control surface.
 - `#53` currently returns donation and tax figures in shop currency, and Managed Markets fee data is still placeholder-only. We should confirm whether customer-currency conversion and storefront-aware fee applicability belong in the endpoint itself or in the Theme App Extension tranche.
+- `#54` uses a pragmatic storefront preload strategy: metadata fetch first, then eager payload fetch for low-line products. We should confirm whether that is acceptable long-term, or whether we still want to revisit the original ADR language around true page-render preloading inside Theme App Extensions.
 
 ## Issue `#52` Review Notes
 
@@ -209,3 +211,60 @@ Each section is meant to give a compact review summary, automated/manual test fo
 - Confirm the payload does not include `netContribution`, `purchasePrice`, `perUnitCost`, `laborRate`, or other admin-only fields.
 - Confirm a small product resolves to `preload` and a heavily configured product resolves to `lazy`.
 - Confirm products without active causes return `visible: false`.
+
+## Issue `#54` Review Notes
+
+### Summary
+
+- Add the first Theme App Extension app block for the product page donation widget.
+- Use app-proxy-backed metadata lookup to choose eager preload vs first-open lazy fetch.
+- Render causes, cost breakdown, Shopify fee guidance, and estimated tax reserve in a customer-facing block.
+- Update the widget in place when variant or quantity changes, while keeping shipping lines fixed per shipment.
+
+### Files
+
+- `extensions/count-on-us-product-widget/shopify.extension.toml`
+- `extensions/count-on-us-product-widget/package.json`
+- `extensions/count-on-us-product-widget/blocks/donation-widget.liquid`
+- `extensions/count-on-us-product-widget/assets/donation-widget.js`
+- `extensions/count-on-us-product-widget/assets/donation-widget.css`
+- `extensions/count-on-us-product-widget/locales/en.default.json`
+- `extensions/count-on-us-product-widget/locales/en.default.schema.json`
+- `shopify.app.toml`
+- `shopify.app.phase3.toml`
+- `app/routes/api.widget.products.$productId.tsx`
+- `app/routes/api.widget.products.$productId.test.ts`
+- `app/services/widgetData.server.ts`
+- `app/services/widgetData.server.test.ts`
+- `app/utils/widget-display.ts`
+- `app/utils/widget-display.test.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `widgetData.server.test.ts`
+  - donation estimates now reflect production costs, Shopify payment fees, and tax reserve
+  - metadata-only responses support preload vs lazy selection
+- `api.widget.products.$productId.test.ts`
+  - metadata-only mode returns lightweight product visibility/delivery data
+- `widget-display.test.ts`
+  - quantity scaling multiplies labor, materials, equipment, donation, and tax amounts
+  - shipping lines remain fixed per shipment
+  - selected-variant lookup falls back safely
+- full `npm test`
+  - regression coverage remains green with the extension-support changes layered on top
+
+#### Manual
+
+- Add the `Donation widget` app block to a product template in the theme editor.
+- Confirm products without active causes hide the block entirely.
+- Confirm the toggle opens and closes with `aria-expanded` updates.
+- Confirm the widget shows:
+  - causes
+  - cost breakdown
+  - Shopify fee guidance
+  - estimated tax reserve
+- Change variants and confirm the widget updates in place.
+- Change quantity and confirm labor/material/equipment/donation/tax values scale while shipping lines stay fixed.
+- Confirm low-line products feel loaded immediately after page load, while high-line products wait until first open.

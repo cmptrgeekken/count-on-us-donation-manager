@@ -1,0 +1,59 @@
+<div
+  class="count-on-us-widget"
+  data-count-on-us-widget
+  data-product-id="{{ product.admin_graphql_api_id }}"
+  data-selected-variant-id="{{ product.selected_or_first_available_variant.admin_graphql_api_id }}"
+  data-selected-quantity="1"
+  data-proxy-base="/apps/count-on-us"
+>
+  <div class="count-on-us-widget__header">
+    <h3 class="count-on-us-widget__heading">{{ block.settings.heading | escape }}</h3>
+    <p class="count-on-us-widget__description">{{ block.settings.description | escape }}</p>
+  </div>
+
+  <button
+    type="button"
+    class="count-on-us-widget__toggle"
+    data-count-on-us-toggle
+    aria-expanded="false"
+    aria-controls="count-on-us-widget-panel-{{ block.id }}"
+  >
+    <span>{{ 'toggle' | t }}</span>
+    <span aria-hidden="true">+</span>
+  </button>
+
+  <div
+    id="count-on-us-widget-panel-{{ block.id }}"
+    class="count-on-us-widget__panel"
+    data-count-on-us-panel
+    hidden
+  ></div>
+
+  <div class="count-on-us-widget__visually-hidden" aria-live="polite" data-count-on-us-live></div>
+</div>
+
+{% schema %}
+{
+  "name": "Donation widget",
+  "target": "section",
+  "enabled_on": {
+    "templates": ["product"]
+  },
+  "stylesheet": "donation-widget.css",
+  "javascript": "donation-widget.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "See your donation impact"
+    },
+    {
+      "type": "textarea",
+      "id": "description",
+      "label": "Description",
+      "default": "Preview the cost breakdown, estimated donation by cause, and estimated tax reserve for this product."
+    }
+  ]
+}
+{% endschema %}

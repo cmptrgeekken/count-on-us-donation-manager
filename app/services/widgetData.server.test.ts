@@ -9,7 +9,7 @@ vi.mock("./costEngine.server", () => ({
   resolveCosts,
 }));
 
-import { buildWidgetProductPayload } from "./widgetData.server";
+import { buildWidgetProductMetadata, buildWidgetProductPayload } from "./widgetData.server";
 
 const decimal = (value: string) => new Prisma.Decimal(value);
 
@@ -79,24 +79,13 @@ describe("buildWidgetProductPayload", () => {
         findMany: vi.fn().mockResolvedValue([
           {
             causeId: "cause-1",
-            percentage: decimal("60"),
+            percentage: decimal("100"),
             cause: {
               id: "cause-1",
               name: "Neighborhood Arts",
               is501c3: false,
               iconUrl: "https://example.com/icon.png",
               donationLink: "https://example.com/donate",
-            },
-          },
-          {
-            causeId: "cause-2",
-            percentage: decimal("40"),
-            cause: {
-              id: "cause-2",
-              name: "Community Library",
-              is501c3: true,
-              iconUrl: null,
-              donationLink: null,
             },
           },
         ]),
@@ -116,11 +105,7 @@ describe("buildWidgetProductPayload", () => {
       },
     };
 
-    const result = await buildWidgetProductPayload(
-      "shop-1",
-      "gid://shopify/Product/1",
-      db as never,
-    );
+    const result = await buildWidgetProductPayload("shop-1", "gid://shopify/Product/1", db as never);
 
     expect(result).toMatchObject({
       productId: "gid://shopify/Product/1",
@@ -144,7 +129,7 @@ describe("buildWidgetProductPayload", () => {
           taxReserve: {
             suppressed: false,
             estimatedRate: "25.00",
-            estimatedAmount: "2.49",
+            estimatedAmount: "3.94",
           },
         },
       ],
@@ -175,19 +160,10 @@ describe("buildWidgetProductPayload", () => {
         causeId: "cause-1",
         name: "Neighborhood Arts",
         iconUrl: "https://example.com/icon.png",
-        donationPercentage: "60.00",
-        estimatedDonationAmount: "9.98",
+        donationPercentage: "100.00",
+        estimatedDonationAmount: "11.81",
         donationCurrencyCode: "USD",
         donationLink: "https://example.com/donate",
-      },
-      {
-        causeId: "cause-2",
-        name: "Community Library",
-        iconUrl: null,
-        donationPercentage: "40.00",
-        estimatedDonationAmount: "6.65",
-        donationCurrencyCode: "USD",
-        donationLink: null,
       },
     ]);
 
@@ -265,10 +241,52 @@ describe("buildWidgetProductPayload", () => {
       },
     };
 
-    const result = await buildWidgetProductPayload("shop-1", "gid://shopify/Product/1", db as never);
+    const result = await buildWidgetProductMetadata("shop-1", "gid://shopify/Product/1", db as never);
 
     expect(result?.deliveryMode).toBe("lazy");
     expect(result?.totalLineItemCount).toBe(210);
+  });
+
+  it("returns hidden metadata when a product has no active causes", async () => {
+    const db = {
+      product: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "prod-1",
+          shopifyId: "gid://shopify/Product/1",
+          variants: [
+            {
+              id: "var-1",
+              shopifyId: "gid://shopify/ProductVariant/1",
+              price: decimal("20.00"),
+              costConfig: { lineItemCount: 12 },
+            },
+          ],
+        }),
+      },
+      productCauseAssignment: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      shop: {
+        findUnique: vi.fn().mockResolvedValue({
+          currency: "USD",
+          paymentRate: decimal("0.029"),
+          effectiveTaxRate: decimal("0.25"),
+          taxDeductionMode: "dont_deduct",
+        }),
+      },
+      taxOffsetCache: {
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+    };
+
+    const result = await buildWidgetProductMetadata("shop-1", "gid://shopify/Product/1", db as never);
+
+    expect(result).toEqual({
+      productId: "gid://shopify/Product/1",
+      deliveryMode: "preload",
+      visible: false,
+      totalLineItemCount: 12,
+    });
   });
 
   it("uses the tax suppression flag from TaxOffsetCache", async () => {

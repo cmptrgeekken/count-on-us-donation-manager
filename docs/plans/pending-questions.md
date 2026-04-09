@@ -28,3 +28,11 @@ It is intentionally lightweight so decisions can be reviewed later without block
 - The follow-up decision is whether:
   - customer-currency donation conversion and Managed Markets applicability should be completed in the endpoint itself
   - or whether those should land with the Theme App Extension work that consumes the endpoint
+
+### Theme App Extension preload strategy
+
+- The current `#54` app block uses a metadata-first storefront strategy:
+  - fetch lightweight metadata immediately
+  - eager-fetch the full payload on page load for low-line products
+  - wait until first open for high-line products
+- The follow-up decision is whether this is an acceptable practical interpretation of the preload/lazy ADR, or whether we want to revisit the architecture to pursue a truer page-render-time preload path later.

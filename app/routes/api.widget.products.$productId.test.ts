@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { authenticatePublicAppProxyRequest } = vi.hoisted(() => ({
   authenticatePublicAppProxyRequest: vi.fn(),
 }));
-const { buildWidgetProductPayload, WIDGET_RATE_LIMIT_PER_MINUTE } = vi.hoisted(() => ({
+const { buildWidgetProductMetadata, buildWidgetProductPayload, WIDGET_RATE_LIMIT_PER_MINUTE } = vi.hoisted(() => ({
+  buildWidgetProductMetadata: vi.fn(),
   buildWidgetProductPayload: vi.fn(),
   WIDGET_RATE_LIMIT_PER_MINUTE: 60,
 }));
@@ -21,6 +22,7 @@ vi.mock("../utils/public-auth.server", () => ({
 }));
 
 vi.mock("../services/widgetData.server", () => ({
+  buildWidgetProductMetadata,
   buildWidgetProductPayload,
   WIDGET_RATE_LIMIT_PER_MINUTE,
 }));
@@ -36,6 +38,7 @@ vi.mock("../db.server", () => ({
 describe("api.widget.products.$productId loader", () => {
   beforeEach(() => {
     authenticatePublicAppProxyRequest.mockReset();
+    buildWidgetProductMetadata.mockReset();
     buildWidgetProductPayload.mockReset();
     checkRateLimit.mockReset();
     prisma.shop.findUnique.mockReset();
@@ -146,5 +149,47 @@ describe("api.widget.products.$productId loader", () => {
         message: "Product not found for this shop.",
       },
     });
+  });
+
+  it("returns metadata-only responses when requested", async () => {
+    authenticatePublicAppProxyRequest.mockResolvedValue({
+      shopifyDomain: "fixture-shop.myshopify.com",
+    });
+    prisma.shop.findUnique.mockResolvedValue({
+      shopId: "shop-1",
+    });
+    checkRateLimit.mockReturnValue({
+      allowed: true,
+      headers: new Headers(),
+    });
+    buildWidgetProductMetadata.mockResolvedValue({
+      productId: "gid://shopify/Product/1",
+      deliveryMode: "lazy",
+      visible: true,
+      totalLineItemCount: 240,
+    });
+
+    const { loader } = await import("./api.widget.products.$productId");
+    const response = await loader({
+      request: new Request("http://localhost/api/widget/products/gid%3A%2F%2Fshopify%2FProduct%2F1?metadataOnly=1"),
+      params: { productId: "gid://shopify/Product/1" },
+      context: {},
+    } as never);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      data: {
+        productId: "gid://shopify/Product/1",
+        deliveryMode: "lazy",
+        visible: true,
+        totalLineItemCount: 240,
+      },
+    });
+    expect(buildWidgetProductMetadata).toHaveBeenCalledWith(
+      "shop-1",
+      "gid://shopify/Product/1",
+      prisma,
+    );
+    expect(buildWidgetProductPayload).not.toHaveBeenCalled();
   });
 });

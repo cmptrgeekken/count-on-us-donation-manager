@@ -11,6 +11,40 @@ const WIDGET_MANAGED_MARKETS_RATE = new Prisma.Decimal("0.00");
 export const WIDGET_PRELOAD_LINE_THRESHOLD = 200;
 export const WIDGET_RATE_LIMIT_PER_MINUTE = 60;
 
+type WidgetProductContext = {
+  product: {
+    shopifyId: string;
+    variants: Array<{
+      id: string;
+      shopifyId: string;
+      price: Prisma.Decimal;
+      costConfig: {
+        lineItemCount: number;
+      } | null;
+    }>;
+  };
+  causeAssignments: Array<{
+    causeId: string;
+    percentage: Prisma.Decimal;
+    cause: {
+      id: string;
+      name: string;
+      is501c3: boolean;
+      iconUrl: string | null;
+      donationLink: string | null;
+    };
+  }>;
+  shop: {
+    currency: string;
+    paymentRate: Prisma.Decimal | null;
+    effectiveTaxRate: Prisma.Decimal | null;
+    taxDeductionMode: string;
+  };
+  taxOffsetCache: {
+    widgetTaxSuppressed: boolean;
+  } | null;
+};
+
 function formatMoney(value: Prisma.Decimal) {
   return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2);
 }
@@ -74,11 +108,13 @@ export type WidgetProductPayload = {
   variants: WidgetVariantPayload[];
 };
 
-export async function buildWidgetProductPayload(
+export type WidgetProductMetadata = Omit<WidgetProductPayload, "variants">;
+
+async function loadWidgetProductContext(
   shopId: string,
   productShopifyId: string,
   db = prisma,
-): Promise<WidgetProductPayload | null> {
+): Promise<WidgetProductContext | null> {
   const [product, causeAssignments, shop, taxOffsetCache] = await Promise.all([
     db.product.findFirst({
       where: { shopId, shopifyId: productShopifyId },
@@ -144,18 +180,63 @@ export async function buildWidgetProductPayload(
     return null;
   }
 
-  const totalLineItemCount = product.variants.reduce(
+  return {
+    product,
+    causeAssignments,
+    shop,
+    taxOffsetCache,
+  };
+}
+
+export async function buildWidgetProductMetadata(
+  shopId: string,
+  productShopifyId: string,
+  db = prisma,
+): Promise<WidgetProductMetadata | null> {
+  const context = await loadWidgetProductContext(shopId, productShopifyId, db);
+
+  if (!context) {
+    return null;
+  }
+
+  const totalLineItemCount = context.product.variants.reduce(
     (sum, variant) => sum + (variant.costConfig?.lineItemCount ?? 0),
     0,
   );
   const deliveryMode = totalLineItemCount < WIDGET_PRELOAD_LINE_THRESHOLD ? "preload" : "lazy";
-  const visible = causeAssignments.length > 0 && product.variants.length > 0;
-  const normalizedTaxDeductionMode = normalizeTaxDeductionMode(shop.taxDeductionMode);
-  const widgetTaxSuppressed = taxOffsetCache?.widgetTaxSuppressed ?? true;
-  const currencyCode = shop.currency;
+  const visible = context.causeAssignments.length > 0 && context.product.variants.length > 0;
+
+  return {
+    productId: context.product.shopifyId,
+    deliveryMode,
+    visible,
+    totalLineItemCount,
+  };
+}
+
+export async function buildWidgetProductPayload(
+  shopId: string,
+  productShopifyId: string,
+  db = prisma,
+): Promise<WidgetProductPayload | null> {
+  const context = await loadWidgetProductContext(shopId, productShopifyId, db);
+
+  if (!context) {
+    return null;
+  }
+
+  const totalLineItemCount = context.product.variants.reduce(
+    (sum, variant) => sum + (variant.costConfig?.lineItemCount ?? 0),
+    0,
+  );
+  const deliveryMode = totalLineItemCount < WIDGET_PRELOAD_LINE_THRESHOLD ? "preload" : "lazy";
+  const visible = context.causeAssignments.length > 0 && context.product.variants.length > 0;
+  const normalizedTaxDeductionMode = normalizeTaxDeductionMode(context.shop.taxDeductionMode);
+  const widgetTaxSuppressed = context.taxOffsetCache?.widgetTaxSuppressed ?? true;
+  const currencyCode = context.shop.currency;
 
   const variants = await Promise.all(
-    product.variants.map(async (variant) => {
+    context.product.variants.map(async (variant) => {
       const costs = await resolveCosts(
         shopId,
         variant.id,
@@ -163,11 +244,13 @@ export async function buildWidgetProductPayload(
         "preview",
         db as Parameters<typeof resolveCosts>[4],
       );
-      const netContribution = nonNegative(variant.price.sub(costs.totalCost));
+      const processingRate = context.shop.paymentRate ?? ZERO;
+      const processingFee = variant.price.mul(processingRate).add(PROCESSING_FLAT_FEE);
+      const preTaxContribution = nonNegative(variant.price.sub(costs.totalCost).sub(processingFee));
 
-      const allocations = causeAssignments.map((assignment) => ({
+      const allocations = context.causeAssignments.map((assignment) => ({
         is501c3: assignment.cause.is501c3,
-        allocated: netContribution.mul(assignment.percentage).div(100),
+        allocated: preTaxContribution.mul(assignment.percentage).div(100),
       }));
       const taxReserve = widgetTaxSuppressed
         ? {
@@ -176,12 +259,13 @@ export async function buildWidgetProductPayload(
             estimatedTaxReserve: ZERO,
           }
         : computeEstimatedTaxReserve({
-            totalNetContribution: netContribution,
+            totalNetContribution: preTaxContribution,
             businessExpenseTotal: ZERO,
             allocations,
-            effectiveTaxRate: shop.effectiveTaxRate,
+            effectiveTaxRate: context.shop.effectiveTaxRate,
             taxDeductionMode: normalizedTaxDeductionMode,
           });
+      const donationPool = nonNegative(preTaxContribution.sub(taxReserve.estimatedTaxReserve));
 
       return {
         variantId: variant.shopifyId,
@@ -208,25 +292,23 @@ export async function buildWidgetProductPayload(
         podCostTotal: formatMoney(costs.podCost),
         mistakeBufferAmount: formatMoney(costs.mistakeBufferAmount),
         shopifyFees: {
-          processingRate: formatPercent(shop.paymentRate),
+          processingRate: formatPercent(context.shop.paymentRate),
           processingFlatFee: formatMoney(PROCESSING_FLAT_FEE),
           managedMarketsRate: formatMoney(WIDGET_MANAGED_MARKETS_RATE),
           managedMarketsApplicable: false,
         },
-        causes: causeAssignments.map((assignment) => ({
+        causes: context.causeAssignments.map((assignment) => ({
           causeId: assignment.cause.id,
           name: assignment.cause.name,
           iconUrl: assignment.cause.iconUrl ?? null,
           donationPercentage: assignment.percentage.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2),
-          estimatedDonationAmount: formatMoney(
-            nonNegative(netContribution.mul(assignment.percentage).div(100)),
-          ),
+          estimatedDonationAmount: formatMoney(donationPool.mul(assignment.percentage).div(100)),
           donationCurrencyCode: currencyCode,
           donationLink: assignment.cause.donationLink ?? null,
         })),
         taxReserve: {
           suppressed: widgetTaxSuppressed,
-          estimatedRate: formatPercent(shop.effectiveTaxRate),
+          estimatedRate: formatPercent(context.shop.effectiveTaxRate),
           estimatedAmount: widgetTaxSuppressed ? "0.00" : formatMoney(taxReserve.estimatedTaxReserve),
         },
       };
@@ -234,7 +316,7 @@ export async function buildWidgetProductPayload(
   );
 
   return {
-    productId: product.shopifyId,
+    productId: context.product.shopifyId,
     deliveryMode,
     visible,
     totalLineItemCount,
