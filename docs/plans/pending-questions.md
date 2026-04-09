@@ -64,3 +64,14 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - whether Resend is the long-term production default
   - whether merchants need a configurable `from` address in-app
   - how much store branding (logo/colors/name treatment) must be present before we consider the donation email production-complete
+
+### Setup wizard truth sources for currently manual steps
+
+- `#58` derives most setup completion directly from shop data, but a few steps are still manual:
+  - Managed Markets enable date review
+  - POD provider connection review
+  - storefront widget placement in Theme Editor
+- We should decide whether future iterations should replace those manual completions with:
+  - real saved Settings state for Managed Markets
+  - actual provider connection state
+  - Theme App Extension/theme-placement detection, if Shopify makes that feasible

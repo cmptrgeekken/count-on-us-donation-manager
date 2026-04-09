@@ -6,7 +6,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 **Project:** Count On Us  
 **Date:** April 9, 2026  
-**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, receipt storage, tax true-up, export support, audit log browsing, and analytical recalculation groundwork implemented. Current focus is finishing the remaining reporting follow-up work while the storefront widget, Theme App Extension, cart donation summary, public receipts, post-purchase donation, and post-purchase email slices are active on the branch.
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, receipt storage, tax true-up, export support, audit log browsing, and analytical recalculation groundwork implemented. Current focus is finishing the remaining reporting follow-up work while the storefront widget, Theme App Extension, cart donation summary, public receipts, post-purchase donation, post-purchase email, and setup wizard slices are active on the branch.
 
 ---
 
@@ -14,7 +14,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application active, analytical recalculation implemented on the active branch, and the storefront widget, post-purchase, cart summary, public receipts, and email slices now underway
+- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application active, analytical recalculation implemented on the active branch, and the storefront widget, post-purchase, cart summary, public receipts, email, and setup wizard slices now underway
 - **Phase 3:** Complete
 
 ---
@@ -149,7 +149,8 @@ These are useful next items, but they are no longer blockers for closing Phase 3
   Merchant toggle, email service, and snapshot-triggered worker are implemented on the active branch and awaiting review/merge.
 - [~] App Proxy donation receipts page
   A public app-proxy receipts page is implemented on the active branch and awaiting review/merge.
-- [ ] Full setup wizard
+- [~] Full setup wizard
+  First-run dashboard wizard and persistent checklist are implemented on the active branch and awaiting review/merge.
 
 ---
 

@@ -15,7 +15,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 8. `#57` Add app proxy donation receipts page
 9. `#55` Add Thank You and Order Status donation extension
 10. `#56` Add post-purchase donation email
-11. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+11. `#58` Build first-run setup wizard and persistent setup checklist
+12. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -464,3 +465,47 @@ Each section is meant to give a compact review summary, automated/manual test fo
   - donation links where available
   - a link to the public donation receipts page
 - Disable the setting and confirm no post-purchase email is sent for subsequent donation orders.
+
+## Issue `#58` Review Notes
+
+### Summary
+
+- Add a first-run setup wizard directly on the Dashboard once catalog sync is complete.
+- Persist skip/manual completion state through `WizardState`, while deriving completion from real shop data wherever possible.
+- Keep a persistent setup checklist visible until every step is truly complete, including previously skipped steps.
+
+### Files
+
+- `app/routes/app.dashboard.tsx`
+- `app/routes/ui-fixtures.setup-wizard-bootstrap.tsx`
+- `app/services/setupWizard.server.ts`
+- `app/services/setupWizard.server.test.ts`
+- `tests/ui/setup-wizard-workflow.spec.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `setupWizard.server.test.ts`
+  - catalog-sync gating suppresses wizard launch until setup is meaningful
+  - skipped steps advance the current wizard step while remaining on the checklist
+  - manual completion steps (for example storefront widget placement) can mark as complete explicitly
+  - derived steps auto-complete based on current shop data
+- full `npm test`
+  - regression coverage remains green with wizard helper logic added
+
+#### Manual
+
+- For a newly synced shop, open Dashboard and confirm the setup wizard appears above the welcome content.
+- Confirm the current step advances automatically after completing real data steps:
+  - create a Cause
+  - add a Material or Equipment item
+  - create a Cost Template
+  - configure at least one Variant
+  - assign at least one Cause to a Product
+- Skip one or more steps and confirm:
+  - the wizard advances
+  - the checklist still shows the skipped steps as needing attention
+- Use `Resume step` on a skipped checklist item and confirm it becomes the active wizard step again.
+- Use `Mark complete` on manual steps such as Managed Markets review, Provider Connections, and storefront widget enablement.
+- Confirm the Theme Editor link opens Shopify theme editing in a new tab.
