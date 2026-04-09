@@ -6,7 +6,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 **Project:** Count On Us  
 **Date:** April 9, 2026  
-**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, receipt storage, tax true-up, export support, audit log browsing, and analytical recalculation groundwork implemented. Current focus is finishing the remaining reporting follow-up work while the first storefront widget endpoint and Theme App Extension slices are active on the branch.
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, receipt storage, tax true-up, export support, audit log browsing, and analytical recalculation groundwork implemented. Current focus is finishing the remaining reporting follow-up work while the storefront widget, Theme App Extension, and cart donation summary slices are active on the branch.
 
 ---
 
@@ -14,7 +14,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application active, analytical recalculation implemented on the active branch, and the first storefront widget endpoint + Theme App Extension groundwork now underway
+- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application active, analytical recalculation implemented on the active branch, and the first storefront widget + cart summary Theme App Extension slices now underway
 - **Phase 3:** Complete
 
 ---
@@ -141,7 +141,8 @@ These are useful next items, but they are no longer blockers for closing Phase 3
   Display-safe widget payloads, threshold-based delivery mode, app-proxy auth, and per-shop rate limiting are implemented on the active branch and awaiting review/merge.
 - [~] Theme app extension
   A first product-page Theme App Extension app block scaffold is implemented on the active branch and awaiting review/merge.
-- [ ] Cart donation summary
+- [~] Cart donation summary
+  A cart-page donation summary modal block is implemented on the active branch and awaiting review/merge.
 - [ ] Thank You / Order Status extension
 - [ ] Post-purchase donation email
 - [ ] App Proxy donation receipts page

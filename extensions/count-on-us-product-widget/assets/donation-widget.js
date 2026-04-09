@@ -1,6 +1,30 @@
 (function () {
   const SELECTOR = "[data-count-on-us-widget]";
 
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+
+  function safeExternalUrl(value) {
+    if (!value) return "";
+
+    try {
+      const parsed = new URL(value, window.location.origin);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return parsed.toString();
+      }
+    } catch {
+      return "";
+    }
+
+    return "";
+  }
+
   function parseMoney(value) {
     const parsed = Number.parseFloat(String(value ?? "0"));
     return Number.isFinite(parsed) ? parsed : 0;
@@ -72,15 +96,15 @@
 
     return `
       <section class="count-on-us-widget__section">
-        <h4 class="count-on-us-widget__section-title">${title}</h4>
+        <h4 class="count-on-us-widget__section-title">${escapeHtml(title)}</h4>
         <table class="count-on-us-widget__table">
           <tbody>
             ${rows
               .map(
                 (row) => `
                   <tr>
-                    <td>${row.label}</td>
-                    <td>${row.value}</td>
+                    <td>${escapeHtml(row.label)}</td>
+                    <td>${escapeHtml(row.value)}</td>
                   </tr>
                 `,
               )
@@ -99,24 +123,26 @@
         <h4 class="count-on-us-widget__section-title">Causes</h4>
         <div class="count-on-us-widget__list">
           ${variant.causes
-            .map(
-              (cause) => `
+            .map((cause) => {
+              const donationLink = safeExternalUrl(cause.donationLink);
+
+              return `
                 <article class="count-on-us-widget__cause">
                   <div class="count-on-us-widget__cause-line">
-                    <strong>${cause.name}</strong>
+                    <strong>${escapeHtml(cause.name)}</strong>
                     <strong>${formatMoney(parseMoney(cause.estimatedDonationAmount), cause.donationCurrencyCode)}</strong>
                   </div>
                   <div class="count-on-us-widget__cause-line">
-                    <span class="count-on-us-widget__subdued">${cause.donationPercentage}% of the estimated donation pool</span>
+                    <span class="count-on-us-widget__subdued">${escapeHtml(cause.donationPercentage)}% of the estimated donation pool</span>
                     ${
-                      cause.donationLink
-                        ? `<a href="${cause.donationLink}" target="_blank" rel="noreferrer" class="count-on-us-widget__subdued">Donate direct</a>`
+                      donationLink
+                        ? `<a href="${donationLink}" target="_blank" rel="noreferrer" class="count-on-us-widget__subdued">Donate direct</a>`
                         : ""
                     }
                   </div>
                 </article>
-              `,
-            )
+              `;
+            })
             .join("")}
         </div>
       </section>
@@ -130,14 +156,14 @@
         <div class="count-on-us-widget__list">
           <div class="count-on-us-widget__row">
             <span>Payment processing</span>
-            <strong>${variant.shopifyFees.processingRate}% + ${formatMoney(parseMoney(variant.shopifyFees.processingFlatFee), variant.currencyCode)}</strong>
+            <strong>${escapeHtml(variant.shopifyFees.processingRate)}% + ${formatMoney(parseMoney(variant.shopifyFees.processingFlatFee), variant.currencyCode)}</strong>
           </div>
           ${
             variant.shopifyFees.managedMarketsApplicable
               ? `
                 <div class="count-on-us-widget__row">
                   <span>Managed Markets</span>
-                  <strong>${variant.shopifyFees.managedMarketsRate}%</strong>
+                  <strong>${escapeHtml(variant.shopifyFees.managedMarketsRate)}%</strong>
                 </div>
               `
               : ""
@@ -163,7 +189,7 @@
         <div class="count-on-us-widget__list">
           <div class="count-on-us-widget__row">
             <span>Rate</span>
-            <strong>${variant.taxReserve.estimatedRate}%</strong>
+            <strong>${escapeHtml(variant.taxReserve.estimatedRate)}%</strong>
           </div>
           <div class="count-on-us-widget__row">
             <span>Estimated amount</span>
@@ -251,12 +277,11 @@
     const liveRegion = container.querySelector("[data-count-on-us-live]");
     if (!toggle || !panel) return;
 
-    let metadata = null;
     let payload = null;
     let isOpen = false;
 
     const setStatus = (message, tone) => {
-      panel.innerHTML = `<p class="count-on-us-widget__status${tone === "error" ? " count-on-us-widget__status--error" : ""}">${message}</p>`;
+      panel.innerHTML = `<p class="count-on-us-widget__status${tone === "error" ? " count-on-us-widget__status--error" : ""}">${escapeHtml(message)}</p>`;
       if (liveRegion) {
         liveRegion.textContent = message;
       }
@@ -271,7 +296,7 @@
     };
 
     try {
-      metadata = await loadMetadata(container);
+      const metadata = await loadMetadata(container);
       if (!metadata.visible) {
         container.hidden = true;
         return;
@@ -290,7 +315,7 @@
       isOpen = !isOpen;
       toggle.setAttribute("aria-expanded", String(isOpen));
       panel.hidden = !isOpen;
-      toggle.querySelector("[aria-hidden='true']").textContent = isOpen ? "−" : "+";
+      toggle.querySelector("[aria-hidden='true']").textContent = isOpen ? "-" : "+";
 
       if (!isOpen) return;
 
@@ -328,15 +353,221 @@
     });
   }
 
+  function aggregateCartCauseTotals(lines, payloads) {
+    const payloadMap = new Map(payloads.map((payload) => [payload.productId, payload]));
+    const totals = new Map();
+    let hasDonationProducts = false;
+
+    lines.forEach((line) => {
+      const payload = payloadMap.get(line.productId);
+      if (!payload || !payload.visible) return;
+
+      const variant = findVariant(payload, line.variantId);
+      if (!variant) return;
+
+      hasDonationProducts = true;
+      const scaled = scaleVariant(variant, line.quantity);
+
+      scaled.causes.forEach((cause) => {
+        const current = totals.get(cause.causeId) || {
+          causeId: cause.causeId,
+          name: cause.name,
+          amount: 0,
+          donationCurrencyCode: cause.donationCurrencyCode,
+          donationLink: cause.donationLink,
+        };
+        current.amount += parseMoney(cause.estimatedDonationAmount);
+        totals.set(cause.causeId, current);
+      });
+    });
+
+    return {
+      hasDonationProducts,
+      totals: Array.from(totals.values())
+        .map((cause) => ({
+          ...cause,
+          amount: cause.amount.toFixed(2),
+        }))
+        .sort((left, right) => parseMoney(right.amount) - parseMoney(left.amount) || left.name.localeCompare(right.name)),
+    };
+  }
+
+  function trapFocus(dialog, event) {
+    if (event.key !== "Tab") return;
+
+    const focusables = dialog.querySelectorAll(
+      "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])",
+    );
+    if (!focusables.length) return;
+
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+      return;
+    }
+
+    if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  async function setupCartSummary(container) {
+    if (!container || container.dataset.cartSummaryReady === "true") return;
+    container.dataset.cartSummaryReady = "true";
+
+    const trigger = container.querySelector("[data-count-on-us-cart-trigger]");
+    const linesScript = container.querySelector("[data-count-on-us-cart-lines]");
+    if (!trigger || !linesScript) return;
+
+    let modal = null;
+    let lastFocusedElement = null;
+
+    function closeModal() {
+      if (!modal) return;
+      modal.remove();
+      modal = null;
+      trigger.setAttribute("aria-expanded", "false");
+      if (lastFocusedElement && typeof lastFocusedElement.focus === "function") {
+        lastFocusedElement.focus();
+      } else {
+        trigger.focus();
+      }
+    }
+
+    function openModal(content) {
+      if (modal) closeModal();
+      lastFocusedElement = document.activeElement;
+
+      modal = document.createElement("div");
+      modal.className = "count-on-us-widget__modal-overlay";
+      modal.innerHTML = `
+        <div class="count-on-us-widget__modal" role="dialog" aria-modal="true" aria-labelledby="count-on-us-cart-title">
+          <div class="count-on-us-widget__modal-header">
+            <div>
+              <h3 id="count-on-us-cart-title" class="count-on-us-widget__heading">Cart donation impact</h3>
+              <p class="count-on-us-widget__description">Estimated donation totals across the causes in this cart.</p>
+            </div>
+            <button type="button" class="count-on-us-widget__modal-close" data-count-on-us-cart-close aria-label="Close donation summary">&times;</button>
+          </div>
+          <div>${content}</div>
+        </div>
+      `;
+
+      modal.addEventListener("click", (event) => {
+        if (event.target === modal) {
+          closeModal();
+        }
+      });
+      modal.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          closeModal();
+          return;
+        }
+
+        const dialog = modal.querySelector("[role='dialog']");
+        if (dialog) {
+          trapFocus(dialog, event);
+        }
+      });
+
+      document.body.appendChild(modal);
+      trigger.setAttribute("aria-expanded", "true");
+
+      const closeButton = modal.querySelector("[data-count-on-us-cart-close]");
+      closeButton.addEventListener("click", closeModal);
+      closeButton.focus();
+    }
+
+    trigger.addEventListener("click", async () => {
+      let lines = [];
+      try {
+        lines = JSON.parse(linesScript.textContent || "[]");
+      } catch (error) {
+        console.error("[Count On Us Cart Summary] Invalid cart lines payload:", error);
+      }
+
+      if (!lines.length) {
+        openModal(`<p class="count-on-us-widget__status">No donation products in this cart yet.</p>`);
+        return;
+      }
+
+      openModal(`<p class="count-on-us-widget__status">Loading donation summary...</p>`);
+
+      try {
+        const uniqueProducts = Array.from(new Set(lines.map((line) => line.productId)));
+        const proxyBase = container.dataset.proxyBase || "/apps/count-on-us";
+        const payloads = await Promise.all(
+          uniqueProducts.map(async (productId) => {
+            const json = await fetchJson(`${proxyBase}/products/${encodeURIComponent(productId)}`);
+            return json.data;
+          }),
+        );
+
+        const summary = aggregateCartCauseTotals(lines, payloads);
+
+        if (!summary.hasDonationProducts || !summary.totals.length) {
+          openModal(`<p class="count-on-us-widget__status">No donation products in this cart yet.</p>`);
+          return;
+        }
+
+        openModal(`
+          <section class="count-on-us-widget__section">
+            <h4 class="count-on-us-widget__section-title">Causes</h4>
+            <div class="count-on-us-widget__list">
+              ${summary.totals
+                .map((cause) => {
+                  const donationLink = safeExternalUrl(cause.donationLink);
+
+                  return `
+                    <article class="count-on-us-widget__cause">
+                      <div class="count-on-us-widget__cause-line">
+                        <strong>${escapeHtml(cause.name)}</strong>
+                        <strong>${formatMoney(parseMoney(cause.amount), cause.donationCurrencyCode)}</strong>
+                      </div>
+                      ${
+                        donationLink
+                          ? `<div class="count-on-us-widget__cause-line"><span class="count-on-us-widget__subdued">Estimated across your cart</span><a href="${donationLink}" target="_blank" rel="noreferrer" class="count-on-us-widget__subdued">Donate direct</a></div>`
+                          : `<div class="count-on-us-widget__cause-line"><span class="count-on-us-widget__subdued">Estimated across your cart</span></div>`
+                      }
+                    </article>
+                  `;
+                })
+                .join("")}
+            </div>
+          </section>
+        `);
+      } catch (error) {
+        console.error("[Count On Us Cart Summary] Failed to load summary:", error);
+        openModal(`<p class="count-on-us-widget__status count-on-us-widget__status--error">Donation summary unavailable right now.</p>`);
+      }
+    });
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => initWidgets(document));
+    document.addEventListener("DOMContentLoaded", () => {
+      initWidgets(document);
+      document.querySelectorAll("[data-count-on-us-cart-summary]").forEach((container) => {
+        void setupCartSummary(container);
+      });
+    });
   } else {
     initWidgets(document);
+    document.querySelectorAll("[data-count-on-us-cart-summary]").forEach((container) => {
+      void setupCartSummary(container);
+    });
   }
 
   document.addEventListener("shopify:section:load", (event) => {
     if (event.target instanceof HTMLElement) {
       initWidgets(event.target);
+      event.target.querySelectorAll("[data-count-on-us-cart-summary]").forEach((container) => {
+        void setupCartSummary(container);
+      });
     }
   });
 })();

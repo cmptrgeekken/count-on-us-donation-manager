@@ -11,7 +11,8 @@ Each section is meant to give a compact review summary, automated/manual test fo
 4. `#50` Add analytical recalculation delta view
 5. `#53` Build storefront widget data endpoint and display-safe projection
 6. `#54` Build product page Theme App Extension donation widget
-7. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
+7. `#64` Add cart donation summary modal
+8. Remaining issues to follow in priority order after the reporting/storefront foundation tranche
 
 ## Issue `#69` Review Notes
 
@@ -268,3 +269,45 @@ Each section is meant to give a compact review summary, automated/manual test fo
 - Change variants and confirm the widget updates in place.
 - Change quantity and confirm labor/material/equipment/donation/tax values scale while shipping lines stay fixed.
 - Confirm low-line products feel loaded immediately after page load, while high-line products wait until first open.
+
+## Issue `#64` Review Notes
+
+### Summary
+
+- Add a cart-page Theme App Extension block that opens a donation-impact modal for the current cart.
+- Aggregate per-cause donation totals across donation products in the cart, using the existing storefront widget payloads.
+- Handle empty / no-donation carts gracefully while preserving modal focus management and keyboard-close behavior.
+
+### Files
+
+- `extensions/count-on-us-product-widget/blocks/cart-donation-summary.liquid`
+- `extensions/count-on-us-product-widget/assets/donation-widget.js`
+- `extensions/count-on-us-product-widget/assets/donation-widget.css`
+- `app/routes/ui-fixtures.cart-donation-summary.tsx`
+- `app/utils/cart-summary.ts`
+- `app/utils/cart-summary.test.ts`
+- `tests/ui/cart-donation-summary-workflow.spec.ts`
+
+### Test Cases For Review
+
+#### Automated
+
+- `cart-summary.test.ts`
+  - aggregates per-cause totals across multiple cart lines
+  - returns an empty state for carts without visible donation products
+- full `npm test`
+  - regression coverage remains green with the cart summary helper and fixture route added
+- `cart-donation-summary-workflow.spec.ts`
+  - modal opens from the cart summary trigger
+  - per-cause totals render for a mixed cart
+  - `Escape` closes the modal and returns focus to the trigger
+  - no-donation carts show a graceful empty-state message
+
+#### Manual
+
+- Add the `Cart donation summary` app block to the cart template in the theme editor.
+- Confirm the trigger opens a modal with `aria-haspopup="dialog"` and `aria-expanded` updates.
+- Confirm the modal shows per-cause totals aggregated across cart items, not just per-product totals.
+- Confirm `Escape`, overlay click, and the close button all dismiss the modal and return focus to the trigger.
+- Confirm carts without donation products show a non-broken empty state.
+- Confirm external cause links only render when a valid donation link exists.

@@ -36,3 +36,12 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - eager-fetch the full payload on page load for low-line products
   - wait until first open for high-line products
 - The follow-up decision is whether this is an acceptable practical interpretation of the preload/lazy ADR, or whether we want to revisit the architecture to pursue a truer page-render-time preload path later.
+
+### Cart donation summary surface breadth
+
+- `#64` adds a cart-page app block for the donation summary modal.
+- We should decide whether the long-term storefront expectation is:
+  - cart template support only
+  - a separate cart drawer-compatible integration surface
+  - or both
+- That decision affects whether we keep the current block as-is or factor the modal trigger/summary logic into a more reusable storefront bundle later.

@@ -1,0 +1,65 @@
+<div
+  class="count-on-us-widget"
+  data-count-on-us-cart-summary
+  data-proxy-base="/apps/count-on-us"
+>
+  <div class="count-on-us-widget__header">
+    <h3 class="count-on-us-widget__heading">{{ block.settings.heading | escape }}</h3>
+    <p class="count-on-us-widget__description">{{ block.settings.description | escape }}</p>
+  </div>
+
+  <button
+    type="button"
+    class="count-on-us-widget__toggle"
+    data-count-on-us-cart-trigger
+    aria-haspopup="dialog"
+    aria-expanded="false"
+  >
+    <span>{{ block.settings.button_label | escape }}</span>
+    <span aria-hidden="true">+</span>
+  </button>
+
+  <script type="application/json" data-count-on-us-cart-lines>
+    [
+      {% for item in cart.items %}
+        {
+          "productId": "gid://shopify/Product/{{ item.product.id }}",
+          "variantId": "gid://shopify/ProductVariant/{{ item.variant.id }}",
+          "quantity": {{ item.quantity }}
+        }{% unless forloop.last %},{% endunless %}
+      {% endfor %}
+    ]
+  </script>
+</div>
+
+{% schema %}
+{
+  "name": "Cart donation summary",
+  "target": "section",
+  "enabled_on": {
+    "templates": ["cart"]
+  },
+  "stylesheet": "donation-widget.css",
+  "javascript": "donation-widget.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "See your donation impact"
+    },
+    {
+      "type": "textarea",
+      "id": "description",
+      "label": "Description",
+      "default": "Open a cart-level view of the estimated donation totals across the causes in your cart."
+    },
+    {
+      "type": "text",
+      "id": "button_label",
+      "label": "Button label",
+      "default": "See your donation impact"
+    }
+  ]
+}
+{% endschema %}
