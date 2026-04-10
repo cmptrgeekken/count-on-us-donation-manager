@@ -32,5 +32,5 @@ test("cart donation summary handles carts without donation products", async ({ p
 
   const dialog = page.getByRole("dialog", { name: "Cart donation impact" });
   await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("No donation products in this cart yet.")).toBeVisible();
+  await expect(dialog).toContainText("No donation products in this cart yet.");
 });

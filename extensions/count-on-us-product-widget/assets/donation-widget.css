@@ -56,6 +56,10 @@
   gap: 1rem;
 }
 
+.count-on-us-widget__panel[hidden] {
+  display: none !important;
+}
+
 .count-on-us-widget__status {
   margin: 0;
   padding: 0.85rem 1rem;

@@ -27,12 +27,20 @@
       return "";
     }
   };
+  const toVariantGid = (value) => {
+    const normalized = String(value ?? "").trim();
+    if (!normalized) return "";
+    return normalized.startsWith("gid://shopify/ProductVariant/")
+      ? normalized
+      : `gid://shopify/ProductVariant/${normalized}`;
+  };
   const findVariant = (payload, variantId) => payload.variants.find((variant) => variant.variantId === variantId) || payload.variants[0] || null;
   const closestAddToCartForm = (container) => container.closest("form[action*='/cart/add']") || document.querySelector("form[action*='/cart/add']");
   const getVariantId = (container) => {
-    if (container.dataset.selectedVariantId) return container.dataset.selectedVariantId;
     const variantInput = closestAddToCartForm(container)?.querySelector("[name='id']");
-    return variantInput ? variantInput.value : "";
+    if (variantInput) return toVariantGid(variantInput.value);
+    if (container.dataset.selectedVariantId) return toVariantGid(container.dataset.selectedVariantId);
+    return "";
   };
   const getQuantity = (container) => {
     const quantityInput = closestAddToCartForm(container)?.querySelector("[name='quantity']");
@@ -114,31 +122,58 @@
   async function setupWidget(container) {
     if (!container || container.dataset.widgetReady === "true") return;
     container.dataset.widgetReady = "true";
+    container.dataset.widgetInteractive = "false";
     const toggle = container.querySelector("[data-count-on-us-toggle]");
     const panel = container.querySelector("[data-count-on-us-panel]");
     const liveRegion = container.querySelector("[data-count-on-us-live]");
     if (!toggle || !panel) return;
     let payload = null;
     let isOpen = false;
+    let lastRenderedVariantId = "";
+    let lastRenderedQuantity = 0;
+    let syncTimer = null;
     const setStatus = (message, tone) => {
       panel.innerHTML = `<p class="count-on-us-widget__status${tone === "error" ? " count-on-us-widget__status--error" : ""}">${escapeHtml(message)}</p>`;
       if (liveRegion) liveRegion.textContent = message;
     };
     const renderCurrent = () => {
       if (!payload) return;
-      renderVariant(panel, payload, getVariantId(container), getQuantity(container));
+      const variantId = getVariantId(container);
+      const quantity = getQuantity(container);
+      lastRenderedVariantId = variantId;
+      lastRenderedQuantity = quantity;
+      renderVariant(panel, payload, variantId, quantity);
       if (liveRegion) liveRegion.textContent = "Donation estimate updated.";
+    };
+    const syncCurrent = () => {
+      if (!isOpen || !payload) return;
+      const variantId = getVariantId(container);
+      const quantity = getQuantity(container);
+      if (variantId !== lastRenderedVariantId || quantity !== lastRenderedQuantity) {
+        renderCurrent();
+      }
+    };
+    const startSync = () => {
+      if (syncTimer) return;
+      syncTimer = window.setInterval(syncCurrent, 200);
+    };
+    const stopSync = () => {
+      if (!syncTimer) return;
+      window.clearInterval(syncTimer);
+      syncTimer = null;
     };
     try {
       const metadata = await loadMetadata(container);
       if (!metadata.visible) {
         container.hidden = true;
+        container.dataset.widgetInteractive = "true";
         return;
       }
       if (metadata.deliveryMode === "preload") payload = await loadPayload(container);
     } catch (error) {
       console.error("[Count On Us Widget] Failed to load metadata:", error);
       container.hidden = true;
+      container.dataset.widgetInteractive = "true";
       return;
     }
     toggle.addEventListener("click", async () => {
@@ -146,7 +181,10 @@
       toggle.setAttribute("aria-expanded", String(isOpen));
       panel.hidden = !isOpen;
       toggle.querySelector("[aria-hidden='true']").textContent = isOpen ? "-" : "+";
-      if (!isOpen) return;
+      if (!isOpen) {
+        stopSync();
+        return;
+      }
       if (!payload) {
         setStatus("Loading donation estimate...", "info");
         try {
@@ -158,15 +196,17 @@
         }
       }
       renderCurrent();
+      startSync();
     });
+    container.dataset.widgetBound = "true";
     const form = closestAddToCartForm(container);
-    if (!form) return;
-    form.addEventListener("change", () => {
-      if (isOpen && payload) renderCurrent();
-    });
-    form.addEventListener("input", () => {
-      if (isOpen && payload) renderCurrent();
-    });
+    const eventTarget = form || document;
+    const scheduleSync = () => window.setTimeout(syncCurrent, 0);
+    eventTarget.addEventListener("change", scheduleSync);
+    eventTarget.addEventListener("input", scheduleSync);
+    eventTarget.addEventListener("click", scheduleSync);
+    document.addEventListener("variant:change", scheduleSync);
+    container.dataset.widgetInteractive = "true";
   }
   const boot = (root) => root.querySelectorAll(SELECTOR).forEach((container) => void setupWidget(container));
   if (document.readyState === "loading") {

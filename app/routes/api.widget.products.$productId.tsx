@@ -1,4 +1,5 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
+import { Prisma } from "@prisma/client";
 
 import { prisma } from "../db.server";
 import {
@@ -39,10 +40,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   }
 
   const { shopifyDomain } = await authenticatePublicAppProxyRequest(request);
-  const shop = await prisma.shop.findUnique({
-    where: { shopifyDomain },
-    select: { shopId: true },
-  });
+  const [shop] = await prisma.$queryRaw<Array<{ shopId: string }>>(
+    Prisma.sql`SELECT "shopId" FROM "Shop" WHERE "shopifyDomain" = ${shopifyDomain} LIMIT 1`,
+  );
 
   if (!shop) {
     return errorResponse(404, "NOT_FOUND", "Shop not found for widget request.");

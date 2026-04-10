@@ -1,8 +1,8 @@
 <div
   class="count-on-us-widget"
   data-count-on-us-widget
-  data-product-id="{{ product.admin_graphql_api_id }}"
-  data-selected-variant-id="{{ product.selected_or_first_available_variant.admin_graphql_api_id }}"
+  data-product-id="gid://shopify/Product/{{ product.id }}"
+  data-selected-variant-id="gid://shopify/ProductVariant/{{ product.selected_or_first_available_variant.id }}"
   data-selected-quantity="1"
   data-proxy-base="/apps/count-on-us"
 >
