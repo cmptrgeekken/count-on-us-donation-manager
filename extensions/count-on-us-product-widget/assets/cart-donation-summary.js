@@ -1,4 +1,5 @@
 (function () {
+  window.__COUNT_ON_US_CART_SUMMARY_READY__ = false;
   const money = (value) => {
     const parsed = Number.parseFloat(String(value ?? "0"));
     return Number.isFinite(parsed) ? parsed : 0;
@@ -177,4 +178,5 @@
     event.preventDefault();
     void handleTrigger(container, trigger);
   });
+  window.__COUNT_ON_US_CART_SUMMARY_READY__ = true;
 })();

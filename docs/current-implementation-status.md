@@ -64,7 +64,8 @@ This file is intentionally lightweight and operational. It should summarize real
 
 ### Deferred or intentionally incomplete
 
-- [ ] POD/provider connections
+- [~] POD/provider connections
+  Provider Connections now has a real admin foundation page plus stored Printify credential state, but provider sync, mapping, and POD cost resolution are still pending.
 - [ ] Full inline bulk editor
 - [ ] Full design revisit for large-list filtering UX
 
