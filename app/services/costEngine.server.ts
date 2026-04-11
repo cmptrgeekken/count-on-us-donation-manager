@@ -39,13 +39,24 @@ export type ResolvedEquipmentLine = {
   perUseCost?: Prisma.Decimal | null;
 };
 
+export type ResolvedPodLine = {
+  provider: string;
+  costLineType: string;
+  description: string | null;
+  amount: Prisma.Decimal;
+  currency: string;
+};
+
 export type CostResult = {
   laborCost: Prisma.Decimal;
   materialCost: Prisma.Decimal;      // production materials only (before mistake buffer)
   packagingCost: Prisma.Decimal;     // max shipping material line (ADR-003 packaging rule)
   equipmentCost: Prisma.Decimal;
   mistakeBufferAmount: Prisma.Decimal; // applied to production materials only
-  podCost: Prisma.Decimal;           // stubbed at 0 until Phase 2.9
+  podCost: Prisma.Decimal;
+  podLines: ResolvedPodLine[];
+  podCostEstimated: boolean;
+  podCostMissing: boolean;
   totalCost: Prisma.Decimal;
   materialLines: ResolvedMaterialLine[];
   equipmentLines: ResolvedEquipmentLine[];
@@ -113,6 +124,80 @@ function computeEquipmentLineCost(params: {
   return cost;
 }
 
+async function resolvePodCosts(
+  shopId: string,
+  variantId: string,
+  db: PrismaClient,
+): Promise<{
+  podCost: Prisma.Decimal;
+  podLines: ResolvedPodLine[];
+  podCostEstimated: boolean;
+  podCostMissing: boolean;
+}> {
+  const mappings = await db.providerVariantMapping.findMany({
+    where: {
+      shopId,
+      variantId,
+    },
+    include: {
+      connection: {
+        select: {
+          status: true,
+        },
+      },
+      costLines: {
+        orderBy: [{ syncedAt: "desc" }, { createdAt: "desc" }],
+      },
+    },
+  });
+
+  const activeMappings = mappings.filter(
+    (mapping) =>
+      mapping.connection.status === "validated" &&
+      mapping.status !== "inactive" &&
+      Boolean(mapping.providerVariantId),
+  );
+
+  const podLines: ResolvedPodLine[] = [];
+  let podCostMissing = false;
+
+  for (const mapping of activeMappings) {
+    const latestSyncedAt = mapping.costLines[0]?.syncedAt;
+    if (!latestSyncedAt) {
+      podCostMissing = true;
+      continue;
+    }
+
+    const latestLines = mapping.costLines.filter(
+      (line) => line.syncedAt.getTime() === latestSyncedAt.getTime(),
+    );
+
+    if (latestLines.length === 0) {
+      podCostMissing = true;
+      continue;
+    }
+
+    for (const line of latestLines) {
+      podLines.push({
+        provider: mapping.provider,
+        costLineType: line.costLineType,
+        description: line.description ?? null,
+        amount: line.amount,
+        currency: line.currency,
+      });
+    }
+  }
+
+  const podCost = podLines.reduce((sum, line) => sum.add(line.amount), ZERO);
+
+  return {
+    podCost,
+    podLines,
+    podCostEstimated: podLines.length > 0,
+    podCostMissing,
+  };
+}
+
 export async function resolveCosts(
   shopId: string,
   variantId: string,
@@ -157,6 +242,9 @@ export async function resolveCosts(
       equipmentCost: ZERO,
       mistakeBufferAmount: ZERO,
       podCost: ZERO,
+      podLines: [],
+      podCostEstimated: false,
+      podCostMissing: false,
       totalCost: ZERO,
       materialLines: [],
       equipmentLines: [],
@@ -365,8 +453,13 @@ export async function resolveCosts(
     return line;
   });
 
-  // Step 4: POD (stubbed — Phase 2.9)
-  const podCost = ZERO;
+  // Step 4: POD
+  const {
+    podCost,
+    podLines,
+    podCostEstimated,
+    podCostMissing,
+  } = await resolvePodCosts(shopId, variantId, db);
 
   // Step 5: Packaging rule — max cost among shipping material lines (ADR-003)
   const shippingLineCosts = resolvedMaterialLines
@@ -423,6 +516,9 @@ export async function resolveCosts(
     equipmentCost,
     mistakeBufferAmount,
     podCost,
+    podLines,
+    podCostEstimated,
+    podCostMissing,
     totalCost,
     materialLines: resolvedMaterialLines,
     equipmentLines: resolvedEquipmentLines,

@@ -45,6 +45,7 @@ function createDb({
   const orderSnapshotLineCreate = vi.fn().mockResolvedValue({ id: "snapshot-line-1" });
   const materialLineCreateMany = vi.fn().mockResolvedValue(undefined);
   const equipmentLineCreateMany = vi.fn().mockResolvedValue(undefined);
+  const podLineCreateMany = vi.fn().mockResolvedValue(undefined);
   const causeAllocationCreateMany = vi.fn().mockResolvedValue(undefined);
   const auditLogCreate = vi.fn().mockResolvedValue(undefined);
   const variantCostConfigFindFirst = vi
@@ -57,6 +58,7 @@ function createDb({
     orderSnapshotLine: { create: orderSnapshotLineCreate },
     orderSnapshotMaterialLine: { createMany: materialLineCreateMany },
     orderSnapshotEquipmentLine: { createMany: equipmentLineCreateMany },
+    orderSnapshotPODLine: { createMany: podLineCreateMany },
     lineCauseAllocation: { createMany: causeAllocationCreateMany },
     variantCostConfig: { findFirst: variantCostConfigFindFirst },
     auditLog: { create: auditLogCreate },
@@ -88,6 +90,7 @@ function createDb({
       orderSnapshotLineCreate,
       materialLineCreateMany,
       equipmentLineCreateMany,
+      podLineCreateMany,
       causeAllocationCreateMany,
       auditLogCreate,
     },
@@ -124,6 +127,9 @@ describe("createSnapshot", () => {
         equipmentCost: decimal("3"),
         mistakeBufferAmount: decimal("2"),
         podCost: decimal("0"),
+        podLines: [],
+        podCostEstimated: false,
+        podCostMissing: false,
         totalCost: decimal("39"),
         netContribution: decimal("11"),
         materialLines: [
@@ -160,6 +166,9 @@ describe("createSnapshot", () => {
         equipmentCost: decimal("3"),
         mistakeBufferAmount: decimal("2"),
         podCost: decimal("0"),
+        podLines: [],
+        podCostEstimated: false,
+        podCostMissing: false,
         totalCost: decimal("39"),
         netContribution: decimal("11"),
         materialLines: [

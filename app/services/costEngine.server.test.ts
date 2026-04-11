@@ -40,6 +40,7 @@ function createEquipment(id: string) {
 function createDb(
   config: unknown,
   shopOverrides?: { mistakeBuffer?: Prisma.Decimal | null; defaultLaborRate?: Prisma.Decimal | null },
+  providerMappings: unknown[] = [],
 ) {
   return {
     variantCostConfig: {
@@ -50,6 +51,9 @@ function createDb(
         mistakeBuffer: shopOverrides?.mistakeBuffer ?? null,
         defaultLaborRate: shopOverrides?.defaultLaborRate ?? null,
       }),
+    },
+    providerVariantMapping: {
+      findMany: vi.fn().mockResolvedValue(providerMappings),
     },
   } as unknown as PrismaClient;
 }
@@ -484,5 +488,112 @@ describe("resolveCosts shipping material uses costing", () => {
     expect(result.materialCost.toString()).toBe("24");
     expect(result.packagingCost.toString()).toBe("5");
     expect(result.totalCost.toString()).toBe("29");
+  });
+});
+
+describe("resolveCosts provider cache support", () => {
+  it("includes the latest cached POD lines from validated provider mappings", async () => {
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: null,
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [],
+    };
+    const syncedAt = new Date("2026-04-11T14:00:00Z");
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(
+        config,
+        undefined,
+        [
+          {
+            provider: "printify",
+            providerVariantId: "pv-1",
+            status: "mapped",
+            connection: {
+              status: "validated",
+            },
+            costLines: [
+              {
+                costLineType: "base",
+                description: "Base production cost",
+                amount: decimal("8.50"),
+                currency: "USD",
+                syncedAt,
+                createdAt: syncedAt,
+              },
+              {
+                costLineType: "shipping",
+                description: "Shipping estimate",
+                amount: decimal("4.25"),
+                currency: "USD",
+                syncedAt,
+                createdAt: syncedAt,
+              },
+              {
+                costLineType: "older",
+                description: "Older sync line",
+                amount: decimal("99.99"),
+                currency: "USD",
+                syncedAt: new Date("2026-04-10T14:00:00Z"),
+                createdAt: new Date("2026-04-10T14:00:00Z"),
+              },
+            ],
+          },
+        ],
+      ),
+    );
+
+    expect(result.podCost.toString()).toBe("12.75");
+    expect(result.podLines).toHaveLength(2);
+    expect(result.podCostEstimated).toBe(true);
+    expect(result.podCostMissing).toBe(false);
+    expect(result.totalCost.toString()).toBe("12.75");
+  });
+
+  it("marks POD cost missing when a validated mapping has no cached lines", async () => {
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: null,
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(
+        config,
+        undefined,
+        [
+          {
+            provider: "printify",
+            providerVariantId: "pv-1",
+            status: "mapped",
+            connection: {
+              status: "validated",
+            },
+            costLines: [],
+          },
+        ],
+      ),
+    );
+
+    expect(result.podCost.toString()).toBe("0");
+    expect(result.podLines).toEqual([]);
+    expect(result.podCostEstimated).toBe(false);
+    expect(result.podCostMissing).toBe(true);
   });
 });

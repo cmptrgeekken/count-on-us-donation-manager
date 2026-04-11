@@ -136,6 +136,9 @@ export async function createSnapshot(
             equipmentCost: ZERO,
             mistakeBufferAmount: ZERO,
             podCost: ZERO,
+            podLines: [],
+            podCostEstimated: false,
+            podCostMissing: false,
             totalCost: ZERO,
             materialLines: [],
             equipmentLines: [],
@@ -243,6 +246,8 @@ export async function createSnapshot(
             mistakeBufferAmount: line.finalCosts.mistakeBufferAmount.mul(line.quantity),
             totalCost: line.finalCosts.totalCost.mul(line.quantity),
             netContribution: (line.finalCosts.netContribution ?? ZERO).mul(line.quantity),
+            podCostEstimated: line.finalCosts.podCostEstimated,
+            podCostMissing: line.finalCosts.podCostMissing,
             laborMinutes: line.variantId
               ? (
                   await tx.variantCostConfig.findFirst({
@@ -292,6 +297,18 @@ export async function createSnapshot(
               minutes: scaleDecimal(equipmentLine.minutes, line.quantity),
               uses: scaleDecimal(equipmentLine.uses, line.quantity),
               lineCost: equipmentLine.lineCost.mul(line.quantity),
+            })),
+          });
+        }
+
+        if (line.finalCosts.podLines.length > 0) {
+          await tx.orderSnapshotPODLine.createMany({
+            data: line.finalCosts.podLines.map((podLine) => ({
+              snapshotLineId: snapshotLine.id,
+              provider: podLine.provider,
+              costLineType: podLine.costLineType,
+              description: podLine.description,
+              amount: podLine.amount.mul(line.quantity),
             })),
           });
         }
