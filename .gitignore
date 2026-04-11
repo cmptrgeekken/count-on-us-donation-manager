@@ -20,6 +20,7 @@ database.sqlite
 
 # Ignore local settings
 .claude/*.local.json
+.claude/worktrees/*
 
 
 
