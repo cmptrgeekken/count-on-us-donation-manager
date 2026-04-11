@@ -5,8 +5,8 @@ Use this document as the practical snapshot of what is implemented in the repo t
 This file is intentionally lightweight and operational. It should summarize reality, not restate full product requirements or phase specs.
 
 **Project:** Count On Us  
-**Date:** April 9, 2026  
-**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is now well underway, with the reporting foundation, dashboard, charge sync groundwork, disbursement logging, receipt storage, tax true-up, export support, audit log browsing, and analytical recalculation groundwork implemented. Current focus is finishing the remaining reporting follow-up work while the storefront widget, Theme App Extension, cart donation summary, public receipts, post-purchase donation, post-purchase email, setup wizard, demo-store prep, listing-draft, technical-audit, QA-workbook, and final-review-template slices are active on the branch.
+**Date:** April 10, 2026  
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is functionally implemented, including reporting periods, disbursements, receipts, tax true-up, exports, audit log browsing, analytical recalculation, and rolling cause payables. Phase 5 foundations are also now present in the repo: storefront product/cart blocks, public receipts, post-purchase donation surfaces, and the setup wizard are implemented. The main product gap that still cuts across storefront, reporting, and Provider Connections is POD/provider completion: Printify credential storage exists, but real provider sync, mapping, cached POD costs, and live POD cost resolution are still pending.
 
 ---
 
@@ -14,7 +14,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 - **Phase 1:** Complete
 - **Phase 2:** Complete
-- **Current focus:** Phase 4 reporting completion, with rolling cause payables and cross-period disbursement application active, analytical recalculation implemented on the active branch, and the storefront widget, post-purchase, cart summary, public receipts, email, setup wizard, demo-store prep, listing-draft, technical-audit, QA-workbook, and final-review-template slices now underway
+- **Current focus:** Provider/POD completion (`#85`) plus supporting storefront, docs, and submission hardening work
 - **Phase 3:** Complete
 
 ---
@@ -126,12 +126,11 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 - [x] Disbursements
   Includes receipt upload plus split disbursement tracking for allocated amount, extra contribution, and fees covered.
 - [x] Tax true-up
-- [~] Rolling cause payables and cross-period disbursement application
-  ADR direction is accepted and the first implementation tranche is in progress on the active branch.
-- [~] Export flows
-  CSV and PDF reporting-period export support are implemented on the active branch and awaiting review/merge.
-- [~] Analytical recalculation delta view
-  Asynchronous analytical recalculation runs and reporting deltas are implemented on the active branch and awaiting review/merge.
+- [x] Rolling cause payables and cross-period disbursement application
+- [x] Export flows
+  CSV and PDF reporting-period export support are implemented.
+- [x] Analytical recalculation delta view
+  Asynchronous analytical recalculation runs and reporting deltas are implemented.
 - [x] Audit log browsing UI
 
 ---
@@ -139,19 +138,26 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 ## Phase 5 Checklist
 
 - [~] Storefront widget endpoint
-  Display-safe widget payloads, threshold-based delivery mode, app-proxy auth, and per-shop rate limiting are implemented on the active branch and awaiting review/merge.
+  Display-safe widget payloads, threshold-based delivery mode, and app-proxy auth are implemented. Further batching, rate-limit, and theme-boundary hardening remain open follow-on work.
 - [~] Theme app extension
-  A first product-page Theme App Extension app block scaffold is implemented on the active branch and awaiting review/merge.
+  Product and cart storefront surfaces ship today as Online Store 2.0 theme app blocks. No app embed currently exists.
 - [~] Cart donation summary
-  A cart-page donation summary modal block is implemented on the active branch and awaiting review/merge.
+  A cart-page donation summary modal block is implemented, including storefront reconciliation and line annotations.
 - [~] Thank You / Order Status extension
-  Checkout-authenticated donation summary endpoint and extension scaffold are implemented on the active branch and awaiting review/merge.
+  Checkout-authenticated donation summary endpoint and extension scaffold are implemented.
 - [~] Post-purchase donation email
-  Merchant toggle, email service, and snapshot-triggered worker are implemented on the active branch and awaiting review/merge.
+  Merchant toggle, email service, and snapshot-triggered worker are implemented.
 - [~] App Proxy donation receipts page
-  A public app-proxy receipts page is implemented on the active branch and awaiting review/merge.
+  A public app-proxy receipts page is implemented.
 - [~] Full setup wizard
-  First-run dashboard wizard and persistent checklist are implemented on the active branch and awaiting review/merge.
+  First-run dashboard wizard and persistent checklist are implemented. Some steps remain intentionally manual because there is no reliable truth source yet.
+
+### Phase 5 Current Gaps
+
+- [~] POD/provider completion
+  Provider Connections is no longer a placeholder page. It stores Printify credential state and exposes readiness context, but provider validation, sync, mapping, cost cache population, and real POD cost resolution are still pending.
+- [~] Storefront hardening
+  Product/cart surfaces are live, but batching, theme-boundary hardening, and accessibility/comprehension cleanup remain open follow-on work.
 
 ---
 
@@ -174,6 +180,6 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 
 - This file is a practical implementation snapshot, not the source of product requirements.
 - The PRD, build plan, ADRs, and implementation plans remain authoritative for scope and architecture.
-- For immediate next work, use `docs/plans/issue-29-production-vs-shipping-templates-plan.md` and the open enhancement issues as the next planning inputs.
+- For immediate next work, use [docs/plans/issue-85-printify-pod-rollout-plan.md](./plans/issue-85-printify-pod-rollout-plan.md), [docs/plans/pending-questions.md](./plans/pending-questions.md), and the open enhancement issues as the next planning inputs.
 - Update this file when a phase meaningfully changes state, not for every small commit.
 - Local Shopify CLI development currently uses [shopify.app.toml](../shopify.app.toml) as a safe default. The full Phase 3 webhook subscription set is tracked in [shopify.app.phase3.toml](../shopify.app.phase3.toml) until the local CLI issue around order/refund topics is resolved.

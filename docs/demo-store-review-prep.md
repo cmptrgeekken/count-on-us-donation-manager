@@ -28,13 +28,18 @@ What the preset gives you:
 
 The seed preset gets the store close to review-ready, but a few items still require manual prep:
 
-1. Confirm the storefront widget block is enabled in the Theme Editor.
-2. Confirm the cart donation summary block is enabled if you want reviewers to exercise it.
+1. Confirm the product-page donation widget theme app block is enabled in the Theme Editor.
+2. Confirm the cart donation summary theme app block is enabled if you want reviewers to exercise it.
 3. Confirm the post-purchase / order-status extension is deployed to the intended review surface.
 4. Add or verify at least one representative disbursement receipt upload for the public receipts page.
 5. Decide whether POD provider review is in scope:
-   - if yes, connect and verify the expected provider path
+   - if yes, connect and verify the currently supported provider path
    - if no, note that POD review is intentionally excluded from reviewer instructions
+
+Current recommendation:
+
+- keep POD out of the primary reviewer path until provider completion and storefront hardening work land
+- if reviewers will not exercise POD, say so explicitly in the handoff notes rather than implying the flow is fully production-ready
 
 ## Recommended reviewer path
 

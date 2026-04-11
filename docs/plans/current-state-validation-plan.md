@@ -53,8 +53,8 @@ Expected current result:
   - variant costs
   - product cause assignment
 - Confirm these manual steps are still manual:
-  - POD provider review
-  - storefront widget enablement
+  - POD/provider review
+  - storefront theme-block enablement
 - Confirm skip/resume works.
 - Confirm the checklist persists incomplete/skipped items.
 
@@ -166,12 +166,12 @@ Expected current result:
 
 ## Storefront And Public Surfaces
 
-### Product Page Theme Block
+### Product Page Theme App Block
 
 - In Theme Editor, add the product donation widget block to a product template.
 - Confirm it renders on the storefront and shows donation impact.
 
-### Cart Page Theme Block
+### Cart Page Theme App Block
 
 - Add the cart donation summary block to a cart template.
 - Confirm the modal opens and closes cleanly.
@@ -191,7 +191,7 @@ Expected current result:
 
 ## Known Current Limitations To Keep In Mind
 
-- Provider Connections is still a placeholder page.
+- Provider Connections is no longer a placeholder page, but it is still a partial foundation.
 - POD/provider cost resolution is still stubbed at zero.
 - The theme extension currently ships app blocks, not a true app embed.
 - Managed Markets fee behavior is not yet storefront-aware.
