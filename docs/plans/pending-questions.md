@@ -5,6 +5,15 @@ It is intentionally lightweight so decisions can be reviewed later without block
 
 ## Open Questions
 
+### `#85` Printify rollout breaking-change readiness
+
+- `#85` now has a dedicated implementation plan in [docs/plans/issue-85-printify-pod-rollout-plan.md](issue-85-printify-pod-rollout-plan.md).
+- Before implementation starts, we should explicitly confirm:
+  - whether disconnecting a provider should remove mappings/cache immediately or preserve historical linkage
+  - whether manual sync is enough for the first tranche or whether scheduled sync must land in the same issue
+  - whether unmapped provider variants should silently fall back to manual cost config or raise a stronger merchant warning
+  - whether POD becomes reviewer-facing immediately after `#85`, or only after follow-on storefront/doc hardening
+
 ### `#45` Shopify charge sync completion scope
 
 - The core Shopify Payments charge sync service, jobs, and reporting integration appear to be implemented already.

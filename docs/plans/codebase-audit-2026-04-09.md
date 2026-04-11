@@ -5,24 +5,24 @@ It focuses on missing logic, placeholder behavior, and places where the UI or do
 
 ## Highest-Priority Gaps
 
-### 1. Provider Connections is not implemented
+### 1. Provider Connections is only partially implemented
 
-**Status:** Missing feature behind a live nav item and setup-wizard step
+**Status:** Foundation implemented, but not yet operationally complete
 
 **Evidence**
 - [app.provider-connections.tsx](/d:/projects/count-on-us-donation-manager/app/routes/app.provider-connections.tsx)
 
 **Current behavior**
 - The route authenticates successfully.
-- It only renders `PlaceholderPage`.
-- There is no provider connection state, OAuth flow, manual mapping UI, sync status, or refresh action.
+- It stores encrypted Printify credential state and shows provider readiness context.
+- It does not yet provide live validation, provider catalog sync, mapping management, or sync-run visibility.
 
 **Why it matters**
 - Dashboard and setup wizard currently imply a meaningful POD review flow exists.
-- PRD/docs describe provider mapping and refresh behavior that is not present.
+- PRD/docs describe a fuller provider workflow than the implementation currently delivers.
 
 **Recommendation**
-- Either build the first real provider connection slice next, or downgrade the nav/wizard copy so the app stops implying the feature exists today.
+- Treat Provider Connections and POD cost resolution as the next coordinated workstream, and keep merchant/reviewer copy explicit that only the connection foundation exists today.
 
 ## Major Functional Gaps
 
@@ -78,7 +78,7 @@ It focuses on missing logic, placeholder behavior, and places where the UI or do
 
 **Why it matters**
 - Manual steps are acceptable, but only if the copy clearly states the feature state.
-- Right now, the POD step points to a placeholder page.
+- Right now, the POD step points to a real but partial Provider Connections page.
 
 **Recommendation**
 - Keep manual steps where needed, but explicitly mark them as review-only or not-yet-automated.
@@ -171,27 +171,27 @@ It focuses on missing logic, placeholder behavior, and places where the UI or do
 ### Implemented but still partial
 
 - Shopify charge sync hardening
+- Provider Connections foundation
+- POD/provider completion
 - Rolling cause payables follow-through across exports and broader reporting polish
 - Managed Markets downstream fee logic
 - Submission readiness docs/process
 
 ### Not actually implemented yet
 
-- Provider Connections feature
-- POD provider sync / real POD cost resolution
+- Full provider sync / mapping / real POD cost resolution
 - Theme app embed
 
 ## Recommended Next Order
 
-1. Fix product/UI honesty around Provider Connections and storefront widget wording.
-2. Decide whether to build POD/provider work next or explicitly defer it out of the current submission path.
-3. If POD remains in scope, implement:
+1. Keep product/UI honesty around Provider Connections and storefront widget wording aligned with current scope.
+2. Complete the POD/provider workstream:
    - provider connection state
    - provider sync/cache
    - POD cost resolution in `CostEngine`
-4. Resolve submission blockers:
+3. Resolve submission blockers:
    - `compliance_topics`
    - privacy policy URL
    - DPA path
    - support/contact details
-5. Clean up lower-priority placeholders like `plan.detect` and adjustment-service limitations.
+4. Clean up lower-priority placeholders like `plan.detect` and adjustment-service limitations.

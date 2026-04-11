@@ -1,6 +1,6 @@
 # App Store Listing Draft
 
-This draft is the working source for Issue `#62`. It is written to match the product as implemented on the active branch today and should be reviewed before submission.
+This draft is the working source for Issue `#62`. It should stay aligned with the implemented product, not the full aspirational PRD.
 
 ## App Name
 
@@ -38,6 +38,12 @@ The app includes:
 - audit log visibility for financial changes
 
 Count On Us is designed for merchants who want charitable giving workflows that stay grounded in real product costs and clear operational reporting.
+
+Current scope note for internal review:
+
+- storefront donation transparency is implemented today
+- Provider Connections exists as a real admin foundation page
+- full Printify sync, mapping, and POD-backed cost resolution are still being completed and should not be overstated in listing copy until the provider tranche lands
 
 ## Platform Requirements / Disclosures
 
@@ -77,5 +83,6 @@ Recommended additional screenshots:
 - Keep wording aligned with what is already implemented. Avoid claiming:
   - automatic historical import before app install
   - legacy-theme widget support
+  - app embeds where the product currently ships theme app blocks
   - fully automated POD review readiness unless provider review is explicitly in scope
 - Re-check this draft after any remaining Phase 6 hardening work lands.
