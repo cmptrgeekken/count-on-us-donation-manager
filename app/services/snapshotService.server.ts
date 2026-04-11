@@ -1,7 +1,9 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
-import { resolveCosts, type CostResult } from "./costEngine.server";
+import { resolveCosts, type CostResult, type PodCostResolution } from "./costEngine.server";
+import { decryptProviderCredential } from "./providerCredentials.server";
+import { listPrintifyProducts } from "./printify.server";
 import { recomputeTaxOffsetCache } from "./taxOffsetCache.server";
 
 type SnapshotLineItemPayload = {
@@ -84,11 +86,172 @@ function scaleDecimal(value: Prisma.Decimal | null | undefined, quantity: number
   return value.mul(quantity);
 }
 
+function getCachedPodResolution(mapping: {
+  provider: string;
+  costLines: Array<{
+    costLineType: string;
+    description: string | null;
+    amount: Prisma.Decimal;
+    currency: string;
+    syncedAt: Date;
+  }>;
+}): PodCostResolution {
+  const latestSyncedAt = mapping.costLines[0]?.syncedAt;
+  if (!latestSyncedAt) {
+    return {
+      podCost: ZERO,
+      podLines: [],
+      podCostEstimated: false,
+      podCostMissing: true,
+    };
+  }
+
+  const latestLines = mapping.costLines.filter((line) => line.syncedAt.getTime() === latestSyncedAt.getTime());
+  if (latestLines.length === 0) {
+    return {
+      podCost: ZERO,
+      podLines: [],
+      podCostEstimated: false,
+      podCostMissing: true,
+    };
+  }
+
+  const podLines = latestLines.map((line) => ({
+    provider: mapping.provider,
+    costLineType: line.costLineType,
+    description: line.description,
+    amount: line.amount,
+    currency: line.currency,
+  }));
+
+  return {
+    podCost: podLines.reduce((sum, line) => sum.add(line.amount), ZERO),
+    podLines,
+    podCostEstimated: true,
+    podCostMissing: false,
+  };
+}
+
+async function fetchSnapshotPodOverrides(
+  shopId: string,
+  variantIds: string[],
+  db: any,
+  fetchImpl: typeof fetch,
+): Promise<Map<string, PodCostResolution>> {
+  if (variantIds.length === 0 || !db.providerVariantMapping?.findMany) {
+    return new Map();
+  }
+
+  const [mappings, shop] = await Promise.all([
+    db.providerVariantMapping.findMany({
+      where: {
+        shopId,
+        variantId: {
+          in: variantIds,
+        },
+      },
+      include: {
+        connection: {
+          select: {
+            id: true,
+            provider: true,
+            status: true,
+            providerAccountId: true,
+            credentialsEncrypted: true,
+          },
+        },
+        costLines: {
+          orderBy: [{ syncedAt: "desc" }, { createdAt: "desc" }],
+        },
+      },
+    }),
+    db.shop?.findUnique
+      ? db.shop.findUnique({
+          where: { shopId },
+          select: { currency: true },
+        })
+      : Promise.resolve(null),
+  ]);
+
+  const activeMappings = mappings.filter(
+    (mapping: any) =>
+      mapping.connection?.provider === "printify" &&
+      mapping.connection?.status === "validated" &&
+      mapping.status !== "inactive" &&
+      Boolean(mapping.providerVariantId),
+  );
+
+  if (activeMappings.length === 0) {
+    return new Map();
+  }
+
+  const resolutionByVariantId = new Map<string, PodCostResolution>();
+  const currency = shop?.currency ?? "USD";
+  const mappingsByConnection = new Map<string, typeof activeMappings>();
+
+  for (const mapping of activeMappings) {
+    const bucket = mappingsByConnection.get(mapping.connection.id) ?? [];
+    bucket.push(mapping);
+    mappingsByConnection.set(mapping.connection.id, bucket);
+  }
+
+  for (const connectionMappings of mappingsByConnection.values()) {
+    const connection = connectionMappings[0]!.connection;
+    if (!connection.credentialsEncrypted || !connection.providerAccountId) {
+      for (const mapping of connectionMappings) {
+        resolutionByVariantId.set(mapping.variantId, getCachedPodResolution(mapping));
+      }
+      continue;
+    }
+
+    try {
+      const liveVariants = await listPrintifyProducts(
+        decryptProviderCredential(connection.credentialsEncrypted),
+        connection.providerAccountId,
+        fetchImpl,
+      );
+      const liveVariantById = new Map(
+        liveVariants.map((variant) => [variant.variantId, variant]),
+      );
+
+      for (const mapping of connectionMappings) {
+        const liveVariant = mapping.providerVariantId ? liveVariantById.get(mapping.providerVariantId) : null;
+        if (liveVariant && typeof liveVariant.cost === "number") {
+          resolutionByVariantId.set(mapping.variantId, {
+            podCost: new Prisma.Decimal(liveVariant.cost).div(100),
+            podLines: [
+              {
+                provider: mapping.provider,
+                costLineType: "base_fulfillment",
+                description: liveVariant.variantTitle ?? liveVariant.productTitle ?? "Printify fulfillment cost",
+                amount: new Prisma.Decimal(liveVariant.cost).div(100),
+                currency,
+              },
+            ],
+            podCostEstimated: false,
+            podCostMissing: false,
+          });
+          continue;
+        }
+
+        resolutionByVariantId.set(mapping.variantId, getCachedPodResolution(mapping));
+      }
+    } catch {
+      for (const mapping of connectionMappings) {
+        resolutionByVariantId.set(mapping.variantId, getCachedPodResolution(mapping));
+      }
+    }
+  }
+
+  return resolutionByVariantId;
+}
+
 export async function createSnapshot(
   shopId: string,
   order: ShopifyOrderPayload,
   db: any = prisma,
   origin: "webhook" | "reconciliation" = "webhook",
+  fetchImpl: typeof fetch = fetch,
 ): Promise<{ created: boolean; snapshotId?: string }> {
   const shopifyOrderId = order.admin_graphql_api_id ?? null;
   if (!shopifyOrderId) {
@@ -106,6 +269,29 @@ export async function createSnapshot(
 
   const lineItems = order.line_items ?? [];
   const missingProductGids = new Set<string>();
+  const variantGids = Array.from(
+    new Set(lineItems.map((lineItem) => toVariantGid(lineItem)).filter((variantGid): variantGid is string => Boolean(variantGid))),
+  );
+  const variants =
+    db.variant?.findMany && variantGids.length > 0
+      ? await db.variant.findMany({
+          where: {
+            shopId,
+            shopifyId: {
+              in: variantGids,
+            },
+          },
+          select: {
+            id: true,
+            shopifyId: true,
+          },
+        })
+      : [];
+  const variantByGid = new Map(
+    variants.map((variant: { id: string; shopifyId: string }) => [variant.shopifyId, variant]),
+  );
+  const initialVariantIds = variants.map((variant: { id: string }) => variant.id);
+  const podOverrides = await fetchSnapshotPodOverrides(shopId, initialVariantIds, db, fetchImpl);
 
   const firstPassResolutions = await Promise.all(
     lineItems.map(async (lineItem): Promise<SnapshotResolution> => {
@@ -116,19 +302,20 @@ export async function createSnapshot(
       const subtotal = salePrice.mul(quantity);
 
       const variant =
-        variantGid
+        (variantGid ? variantByGid.get(variantGid) : null) ??
+        (variantGid && !db.variant?.findMany
           ? await db.variant.findFirst({
               where: { shopId, shopifyId: variantGid },
               select: { id: true },
             })
-          : null;
+          : null);
 
       if (!variant && productGid) {
         missingProductGids.add(productGid);
       }
 
       const firstPass = variant
-        ? await resolveCosts(shopId, variant.id, salePrice, "snapshot", db)
+        ? await resolveCosts(shopId, variant.id, salePrice, "snapshot", db, undefined, podOverrides.get(variant.id))
         : {
             laborCost: ZERO,
             materialCost: ZERO,
@@ -176,7 +363,15 @@ export async function createSnapshot(
 
       const finalCosts =
         line.variantId
-          ? await resolveCosts(shopId, line.variantId, line.salePrice, "snapshot", db, packagingAllocated)
+          ? await resolveCosts(
+              shopId,
+              line.variantId,
+              line.salePrice,
+              "snapshot",
+              db,
+              packagingAllocated,
+              podOverrides.get(line.variantId),
+            )
           : {
               ...line.firstPass,
               packagingCost: packagingAllocated,

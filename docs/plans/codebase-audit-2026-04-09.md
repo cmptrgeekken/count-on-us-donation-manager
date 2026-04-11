@@ -5,44 +5,46 @@ It focuses on missing logic, placeholder behavior, and places where the UI or do
 
 ## Highest-Priority Gaps
 
-### 1. Provider Connections is only partially implemented
+### 1. Provider Connections is still only partially implemented
 
-**Status:** Foundation implemented, but not yet operationally complete
+**Status:** Real validation/sync foundation now exists, but the workflow is not yet operationally complete
 
 **Evidence**
 - [app.provider-connections.tsx](/d:/projects/count-on-us-donation-manager/app/routes/app.provider-connections.tsx)
 
 **Current behavior**
 - The route authenticates successfully.
-- It stores encrypted Printify credential state and shows provider readiness context.
-- It does not yet provide live validation, provider catalog sync, mapping management, or sync-run visibility.
+- It validates Printify credentials before save.
+- It can queue and run Printify syncs, auto-match unique SKUs, and cache base POD fulfillment costs.
+- It still does not yet provide manual mapping management or deeper provider diagnostics.
 
 **Why it matters**
 - Dashboard and setup wizard currently imply a meaningful POD review flow exists.
 - PRD/docs describe a fuller provider workflow than the implementation currently delivers.
 
 **Recommendation**
-- Treat Provider Connections and POD cost resolution as the next coordinated workstream, and keep merchant/reviewer copy explicit that only the connection foundation exists today.
+- Keep Provider Connections and POD completion as the next coordinated workstream, but update merchant/reviewer copy to reflect that validation, sync runs, and cached cost import are now real.
 
 ## Major Functional Gaps
 
-### 2. POD cost resolution is still stubbed
+### 2. POD completion is still partial
 
-**Status:** Core logic missing
+**Status:** Preview-mode cache integration and snapshot-time live fetch/fallback are now implemented; mapping/admin review is still missing
 
 **Evidence**
 - [costEngine.server.ts](/d:/projects/count-on-us-donation-manager/app/services/costEngine.server.ts): `// Step 4: POD (stubbed — Phase 2.9)`
 
 **Current behavior**
-- `podCost` resolves to zero.
-- Reporting, widget, snapshot, and order-history surfaces can display POD fields, but there is no real provider-fed cost input.
+- Preview-mode `CostEngine` now reads cached provider-backed POD fulfillment costs where a synced mapping exists.
+- Snapshot persistence now writes POD rows and flags when provider-backed cache data is present.
+- Snapshot creation now attempts a live Printify fetch before transaction open and falls back to cached POD cost lines when the provider call fails.
 
 **Why it matters**
-- Provider Connections cannot be considered complete without this.
-- Order snapshots and storefront estimates understate costs for POD-based merchants.
+- The money path is now materially closer to ADR-003, but merchants still lack a manual mapping workflow for unresolved variants.
+- Operational transparency is still limited when auto-match by SKU is not enough or provider-side data is ambiguous.
 
 **Recommendation**
-- Treat provider connections and POD cost resolution as one coordinated workstream.
+- Finish `#85` by adding manual mapping plus richer provider/admin review surfaces around unresolved or ambiguous variants.
 
 ### 3. No theme app embed exists
 
@@ -171,7 +173,7 @@ It focuses on missing logic, placeholder behavior, and places where the UI or do
 ### Implemented but still partial
 
 - Shopify charge sync hardening
-- Provider Connections foundation
+- Provider Connections validation/sync foundation
 - POD/provider completion
 - Rolling cause payables follow-through across exports and broader reporting polish
 - Managed Markets downstream fee logic
@@ -179,7 +181,8 @@ It focuses on missing logic, placeholder behavior, and places where the UI or do
 
 ### Not actually implemented yet
 
-- Full provider sync / mapping / real POD cost resolution
+- Snapshot-time live POD fetch/fallback behavior
+- Manual provider mapping workflow
 - Theme app embed
 
 ## Recommended Next Order

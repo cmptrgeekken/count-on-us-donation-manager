@@ -6,7 +6,7 @@ This file is intentionally lightweight and operational. It should summarize real
 
 **Project:** Count On Us  
 **Date:** April 10, 2026  
-**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is functionally implemented, including reporting periods, disbursements, receipts, tax true-up, exports, audit log browsing, analytical recalculation, and rolling cause payables. Phase 5 foundations are also now present in the repo: storefront product/cart blocks, public receipts, post-purchase donation surfaces, and the setup wizard are implemented. The main product gap that still cuts across storefront, reporting, and Provider Connections is POD/provider completion: Printify credential storage exists, but real provider sync, mapping, cached POD costs, and live POD cost resolution are still pending.
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is functionally implemented, including reporting periods, disbursements, receipts, tax true-up, exports, audit log browsing, analytical recalculation, and rolling cause payables. Phase 5 foundations are also now present in the repo: storefront product/cart blocks, public receipts, post-purchase donation surfaces, and the setup wizard are implemented. The main product gap that still cuts across storefront, reporting, and Provider Connections is POD/provider completion: Printify credentials now validate successfully, manual sync runs now auto-match unique SKUs and cache base POD fulfillment costs, preview-mode cost resolution now consumes cached POD inputs, and snapshot creation now attempts a live provider fetch before falling back to cache. Manual mapping and richer provider diagnostics are still pending.
 
 ---
 
@@ -65,7 +65,7 @@ This file is intentionally lightweight and operational. It should summarize real
 ### Deferred or intentionally incomplete
 
 - [~] POD/provider connections
-  Provider Connections now has a real admin foundation page plus stored Printify credential state, but provider sync, mapping, and POD cost resolution are still pending.
+  Provider Connections now validates Printify credentials, queues sync runs, auto-matches unique SKUs, and caches base provider fulfillment costs. Manual mapping and broader provider diagnostics are still pending.
 - [ ] Full inline bulk editor
 - [ ] Full design revisit for large-list filtering UX
 
@@ -155,7 +155,7 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 ### Phase 5 Current Gaps
 
 - [~] POD/provider completion
-  Provider Connections is no longer a placeholder page. It stores Printify credential state and exposes readiness context, but provider validation, sync, mapping, cost cache population, and real POD cost resolution are still pending.
+  Provider Connections is no longer a placeholder page. Printify credentials validate before save, sync runs record real mapping/cache counts, cached base POD fulfillment costs now flow into preview-mode cost resolution, and snapshot creation now attempts a live Printify refresh before cache fallback. Manual mapping and broader provider diagnostics are still pending.
 - [~] Storefront hardening
   Product/cart surfaces are live, but batching, theme-boundary hardening, and accessibility/comprehension cleanup remain open follow-on work.
 

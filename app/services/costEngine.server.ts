@@ -64,6 +64,11 @@ export type CostResult = {
   netContribution?: Prisma.Decimal;
 };
 
+export type PodCostResolution = Pick<
+  CostResult,
+  "podCost" | "podLines" | "podCostEstimated" | "podCostMissing"
+>;
+
 const ZERO = new Prisma.Decimal(0);
 
 function decimalOrZero(value: Prisma.Decimal | null | undefined): Prisma.Decimal {
@@ -128,12 +133,7 @@ async function resolvePodCosts(
   shopId: string,
   variantId: string,
   db: PrismaClient,
-): Promise<{
-  podCost: Prisma.Decimal;
-  podLines: ResolvedPodLine[];
-  podCostEstimated: boolean;
-  podCostMissing: boolean;
-}> {
+): Promise<PodCostResolution> {
   const mappings = await db.providerVariantMapping.findMany({
     where: {
       shopId,
@@ -205,6 +205,7 @@ export async function resolveCosts(
   mode: CostEngineMode,
   db: PrismaClient,
   packagingCostOverride?: Prisma.Decimal,
+  podCostOverride?: PodCostResolution,
 ): Promise<CostResult> {
   // Step 1: Load VariantCostConfig with all lines and library items
   const config = await db.variantCostConfig.findUnique({
@@ -459,7 +460,7 @@ export async function resolveCosts(
     podLines,
     podCostEstimated,
     podCostMissing,
-  } = await resolvePodCosts(shopId, variantId, db);
+  } = podCostOverride ?? await resolvePodCosts(shopId, variantId, db);
 
   // Step 5: Packaging rule — max cost among shipping material lines (ADR-003)
   const shippingLineCosts = resolvedMaterialLines
