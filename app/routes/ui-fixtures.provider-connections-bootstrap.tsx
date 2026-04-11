@@ -16,6 +16,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.providerSyncRun.deleteMany({
+    where: { shopId },
+  });
+
   await prisma.providerVariantMapping.deleteMany({
     where: { shopId },
   });

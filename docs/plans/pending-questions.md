@@ -13,6 +13,10 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - whether manual sync is enough for the first tranche or whether scheduled sync must land in the same issue
   - whether unmapped provider variants should silently fall back to manual cost config or raise a stronger merchant warning
   - whether POD becomes reviewer-facing immediately after `#85`, or only after follow-on storefront/doc hardening
+  - how we want to handle Printify credentials that can access multiple provider shops:
+    - automatically bind to the first accessible shop for the first tranche
+    - prompt the merchant to choose one shop before mapping/sync
+    - or allow syncing multiple Printify shops into one Shopify shop
 
 ### `#45` Shopify charge sync completion scope
 

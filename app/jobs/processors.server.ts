@@ -8,6 +8,7 @@ import { runReconciliation } from "../services/reconciliationService.server";
 import { createReportingPeriodFromPayout } from "../services/reportingPeriodService.server";
 import { refreshTaxOffsetCacheForShop } from "../services/reportingService.server";
 import { sendPostPurchaseDonationEmail } from "../services/postPurchaseEmail.server";
+import { runProviderSync } from "../services/providerSync.server";
 import { createSnapshot } from "../services/snapshotService.server";
 import { unauthenticated } from "../shopify.server";
 
@@ -30,6 +31,7 @@ const QUEUES = [
   "webhook.compliance",
   "catalog.sync",
   "catalog.sync.incremental",
+  "provider.sync",
 ];
 
 export async function registerAllProcessors(boss: PgBoss): Promise<void> {
@@ -318,6 +320,14 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       await incrementalSync(shopId, admin, productGid);
     },
   );
+
+  await boss.work<{ shopId: string; runId: string }>("provider.sync", async (jobs) => {
+    const job = jobs[0];
+    if (!job) return;
+
+    const { shopId, runId } = job.data;
+    await runProviderSync({ shopId, runId }, prisma);
+  });
 
   await boss.work<{ shopId: string; topic: string }>(
     "webhook.compliance",

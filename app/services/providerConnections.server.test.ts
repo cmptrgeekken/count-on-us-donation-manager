@@ -14,10 +14,14 @@ describe("providerConnections.server", () => {
           {
             provider: "printify",
             authType: "api_key",
-            status: "configured",
+            status: "validated",
             displayName: "Fixture Shop",
+            providerAccountName: "Fixture Shop",
             credentialHint: "****1234",
+            lastValidatedAt: new Date("2026-04-09T17:00:00Z"),
+            lastValidationError: null,
             lastSyncedAt: null,
+            lastSyncError: null,
             updatedAt: new Date("2026-04-09T18:00:00Z"),
             _count: {
               mappings: 2,
@@ -25,10 +29,12 @@ describe("providerConnections.server", () => {
           },
         ]),
       },
+      providerSyncRun: {
+        findMany: vi.fn().mockResolvedValue([{ provider: "printify", status: "completed" }]),
+      },
       variant: {
         count: vi.fn().mockResolvedValueOnce(5).mockResolvedValueOnce(4),
       },
-      providerVariantMapping: {},
       auditLog: {},
     };
 
@@ -37,21 +43,27 @@ describe("providerConnections.server", () => {
     expect(result.totalVariantCount).toBe(5);
     expect(result.variantsWithSkuCount).toBe(4);
     expect(result.summaries.find((summary) => summary.provider === "printify")?.configured).toBe(true);
+    expect(result.summaries.find((summary) => summary.provider === "printify")?.status).toBe("validated");
     expect(result.summaries.find((summary) => summary.provider === "printify")?.unmappedVariantCount).toBe(2);
     expect(result.summaries.find((summary) => summary.provider === "printful")?.configured).toBe(false);
   });
 
-  it("stores encrypted Printify credentials", async () => {
+  it("validates and stores encrypted Printify credentials", async () => {
     vi.stubEnv("PROVIDER_CREDENTIALS_SECRET", "provider-test-secret");
 
     const upsert = vi.fn().mockResolvedValue({ id: "connection_1" });
     const createAudit = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        data: [{ id: 1234, title: "Fixture Shop" }],
+      }),
+    });
     const db = {
       providerConnection: {
         upsert,
       },
-      providerVariantMapping: {},
-      variant: {},
+      providerSyncRun: {},
       auditLog: {
         create: createAudit,
       },
@@ -61,14 +73,19 @@ describe("providerConnections.server", () => {
       {
         shopId: "fixture.myshopify.com",
         apiKey: "pk_live_fixture_printify_key_1234",
-        displayName: "Fixture Shop",
+        displayName: "",
       },
       db as never,
+      fetchMock as never,
     );
 
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(upsert).toHaveBeenCalledOnce();
     const upsertArgs = upsert.mock.calls[0]?.[0];
+    expect(upsertArgs.update.status).toBe("validated");
     expect(upsertArgs.update.credentialHint).toBe("****1234");
+    expect(upsertArgs.update.providerAccountId).toBe("1234");
+    expect(upsertArgs.update.providerAccountName).toBe("Fixture Shop");
     expect(upsertArgs.update.credentialsEncrypted).not.toContain("pk_live_fixture_printify_key_1234");
     expect(createAudit).toHaveBeenCalledOnce();
   });
@@ -82,8 +99,7 @@ describe("providerConnections.server", () => {
         findUnique,
         delete: deleteConnection,
       },
-      providerVariantMapping: {},
-      variant: {},
+      providerSyncRun: {},
       auditLog: {
         create: createAudit,
       },

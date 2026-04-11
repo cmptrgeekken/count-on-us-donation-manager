@@ -2,12 +2,14 @@ import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 
-import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { jobQueue } from "../jobs/queue.server";
+import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 import {
   disconnectProviderConnection,
   getProviderConnectionsPageData,
   savePrintifyConnection,
 } from "../services/providerConnections.server";
+import { queueProviderSyncRun } from "../services/providerSync.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -18,6 +20,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
+  const isBypass = isPlaywrightBypassRequest(request);
+  const testFetch: typeof fetch | undefined = isBypass
+    ? (async () =>
+        new Response(
+          JSON.stringify({
+            data: [{ id: 1234, title: "Fixture Shop" }],
+          }),
+          {
+            status: 200,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          },
+        )) as typeof fetch
+    : undefined;
 
   if (intent === "save-printify-credentials") {
     try {
@@ -25,7 +42,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shopId: session.shop,
         apiKey: formData.get("apiKey")?.toString() ?? "",
         displayName: formData.get("displayName")?.toString() ?? null,
-      });
+      }, undefined, testFetch);
     } catch (error) {
       if (error instanceof Response) {
         return Response.json({ ok: false, message: await error.text() });
@@ -35,7 +52,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     return Response.json({
       ok: true,
-      message: "Printify credentials saved. Live validation and sync will land in a follow-up provider tranche.",
+      message: "Printify credentials validated and saved. Provider mapping and cost import still land in the next tranche.",
+    });
+  }
+
+  if (intent === "refresh-provider") {
+    const provider = formData.get("provider")?.toString();
+    if (provider !== "printful" && provider !== "printify") {
+      return Response.json({ ok: false, message: "Unknown provider." });
+    }
+
+    try {
+      await queueProviderSyncRun(
+        {
+          shopId: session.shop,
+          provider,
+          trigger: "manual",
+        },
+        undefined,
+        jobQueue,
+      );
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return Response.json({
+      ok: true,
+      message:
+        provider === "printify"
+          ? "Printify provider refresh queued. This currently revalidates account state and prepares for mapping/cost import."
+          : "Printful provider refresh is not available yet.",
     });
   }
 
@@ -71,6 +120,7 @@ function formatTimestamp(value: string | null) {
 export default function ProviderConnectionsPage() {
   const { totalVariantCount, variantsWithSkuCount, summaries } = useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const syncFetcher = useFetcher<{ ok: boolean; message: string }>();
   const disconnectFetcher = useFetcher<{ ok: boolean; message: string }>();
   const statusRef = useRef<HTMLDivElement>(null);
   const saveFormRef = useRef<HTMLFormElement>(null);
@@ -81,7 +131,10 @@ export default function ProviderConnectionsPage() {
   const [printifyDisplayName, setPrintifyDisplayName] = useState(printify?.displayName ?? "");
   const [printifyFormError, setPrintifyFormError] = useState<string | null>(null);
   const saveErrorMessage = printifyFormError ?? (saveFetcher.data && !saveFetcher.data.ok ? saveFetcher.data.message : null);
-  const globalStatus = disconnectFetcher.data ?? (saveFetcher.data?.ok ? saveFetcher.data : null);
+  const globalStatus =
+    disconnectFetcher.data ??
+    syncFetcher.data ??
+    (saveFetcher.data?.ok ? saveFetcher.data : null);
 
   return (
     <>
@@ -149,8 +202,12 @@ export default function ProviderConnectionsPage() {
                 <strong>Status</strong>
                 <s-text>{printify?.note}</s-text>
               </div>
-              <s-badge tone={printify?.configured ? "success" : "warning"}>
-                {printify?.configured ? "Configured" : "Not configured"}
+              <s-badge tone={printify?.status === "validated" ? "success" : printify?.configured ? "info" : "warning"}>
+                {printify?.status === "validated"
+                  ? "Validated"
+                  : printify?.configured
+                    ? "Stored"
+                    : "Not configured"}
               </s-badge>
             </div>
 
@@ -164,6 +221,10 @@ export default function ProviderConnectionsPage() {
                 <div>{printify?.unmappedVariantCount ?? variantsWithSkuCount}</div>
               </div>
               <div>
+                <strong>Validated</strong>
+                <div>{formatTimestamp(printify?.lastValidatedAt ?? null)}</div>
+              </div>
+              <div>
                 <strong>Last sync</strong>
                 <div>{formatTimestamp(printify?.lastSyncedAt ?? null)}</div>
               </div>
@@ -172,8 +233,19 @@ export default function ProviderConnectionsPage() {
             {printify?.configured ? (
               <s-banner tone="info">
                 <s-text>
-                  Stored credential hint: {printify.credentialHint ?? "Stored"}. No live validation has run yet.
+                  Stored credential hint: {printify.credentialHint ?? "Stored"}.
+                  {printify?.providerAccountName ? ` Connected account: ${printify.providerAccountName}.` : ""}
                 </s-text>
+              </s-banner>
+            ) : null}
+            {printify?.lastValidationError ? (
+              <s-banner tone="critical">
+                <s-text>{printify.lastValidationError}</s-text>
+              </s-banner>
+            ) : null}
+            {printify?.lastSyncError ? (
+              <s-banner tone="warning">
+                <s-text>{printify.lastSyncError}</s-text>
               </s-banner>
             ) : null}
 
@@ -247,10 +319,10 @@ export default function ProviderConnectionsPage() {
                   />
                 </div>
                 <s-text>
-                  Credentials are encrypted before persistence. Saving here records connection readiness only; validation and
-                  sync are still pending.
+                  Credentials are encrypted before persistence. Saving here now validates the API key and records the current
+                  Printify account metadata.
                 </s-text>
-                <div>
+                <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
                   <button
                     type="button"
                     disabled={saveFetcher.state !== "idle"}
@@ -279,6 +351,15 @@ export default function ProviderConnectionsPage() {
                   >
                     {printify?.configured ? "Update Printify credentials" : "Save Printify credentials"}
                   </button>
+                  {printify?.status === "validated" ? (
+                    <syncFetcher.Form method="post">
+                      <input type="hidden" name="intent" value="refresh-provider" />
+                      <input type="hidden" name="provider" value="printify" />
+                      <s-button type="submit" variant="secondary" disabled={syncFetcher.state !== "idle"}>
+                        Refresh provider state
+                      </s-button>
+                    </syncFetcher.Form>
+                  ) : null}
                 </div>
               </div>
             </saveFetcher.Form>

@@ -1,22 +1,28 @@
 import { prisma } from "../db.server";
 import { encryptProviderCredential } from "./providerCredentials.server";
+import { validatePrintifyApiKey, PrintifyValidationError } from "./printify.server";
 
 type ProviderDbClient = Pick<
   typeof prisma,
-  "providerConnection" | "providerVariantMapping" | "variant" | "auditLog"
+  "providerConnection" | "providerVariantMapping" | "variant" | "auditLog" | "providerSyncRun"
 >;
 
 export type ProviderConnectionSummary = {
   provider: "printful" | "printify";
   authType: "oauth" | "api_key";
-  status: "not_configured" | "configured";
+  status: "not_configured" | "configured" | "validated" | "sync_failed";
   configured: boolean;
   displayName: string | null;
+  providerAccountName: string | null;
   credentialHint: string | null;
+  lastValidatedAt: string | null;
+  lastValidationError: string | null;
   lastSyncedAt: string | null;
+  lastSyncError: string | null;
   updatedAt: string | null;
   mappedVariantCount: number;
   unmappedVariantCount: number;
+  latestSyncRunStatus: string | null;
   note: string;
 };
 
@@ -48,8 +54,12 @@ export async function getProviderConnectionsPageData(
         authType: true,
         status: true,
         displayName: true,
+        providerAccountName: true,
         credentialHint: true,
+        lastValidatedAt: true,
+        lastValidationError: true,
         lastSyncedAt: true,
+        lastSyncError: true,
         updatedAt: true,
         _count: {
           select: {
@@ -79,34 +89,72 @@ export async function getProviderConnectionsPageData(
       status: connectionMap.has("printful") ? "configured" : "not_configured",
       configured: connectionMap.has("printful"),
       displayName: connectionMap.get("printful")?.displayName ?? null,
+      providerAccountName: connectionMap.get("printful")?.providerAccountName ?? null,
       credentialHint: connectionMap.get("printful")?.credentialHint ?? null,
+      lastValidatedAt: toIsoString(connectionMap.get("printful")?.lastValidatedAt),
+      lastValidationError: connectionMap.get("printful")?.lastValidationError ?? null,
       lastSyncedAt: toIsoString(connectionMap.get("printful")?.lastSyncedAt),
+      lastSyncError: connectionMap.get("printful")?.lastSyncError ?? null,
       updatedAt: toIsoString(connectionMap.get("printful")?.updatedAt),
       mappedVariantCount: connectionMap.get("printful")?._count.mappings ?? 0,
       unmappedVariantCount: Math.max(variantsWithSkuCount - (connectionMap.get("printful")?._count.mappings ?? 0), 0),
+      latestSyncRunStatus: null,
       note: "Printful OAuth is not wired yet. This page will expose that flow in a later provider tranche.",
     },
     {
       provider: "printify",
       authType: "api_key",
-      status: connectionMap.has("printify") ? "configured" : "not_configured",
+      status: (connectionMap.get("printify")?.status as ProviderConnectionSummary["status"] | undefined) ?? "not_configured",
       configured: connectionMap.has("printify"),
       displayName: connectionMap.get("printify")?.displayName ?? null,
+      providerAccountName: connectionMap.get("printify")?.providerAccountName ?? null,
       credentialHint: connectionMap.get("printify")?.credentialHint ?? null,
+      lastValidatedAt: toIsoString(connectionMap.get("printify")?.lastValidatedAt),
+      lastValidationError: connectionMap.get("printify")?.lastValidationError ?? null,
       lastSyncedAt: toIsoString(connectionMap.get("printify")?.lastSyncedAt),
+      lastSyncError: connectionMap.get("printify")?.lastSyncError ?? null,
       updatedAt: toIsoString(connectionMap.get("printify")?.updatedAt),
       mappedVariantCount: connectionMap.get("printify")?._count.mappings ?? 0,
       unmappedVariantCount: Math.max(variantsWithSkuCount - (connectionMap.get("printify")?._count.mappings ?? 0), 0),
-      note:
-        "Printify API keys can be stored now. Live validation, variant matching, and cost sync are still pending.",
+      latestSyncRunStatus: null,
+      note: getPrintifyNote(connectionMap.get("printify")?.status),
     },
   ];
+
+  const latestRuns = await db.providerSyncRun.findMany({
+    where: { shopId },
+    distinct: ["provider"],
+    orderBy: [{ provider: "asc" }, { createdAt: "desc" }],
+    select: {
+      provider: true,
+      status: true,
+    },
+  });
+
+  const latestRunMap = new Map(latestRuns.map((run) => [run.provider, run.status]));
+
+  for (const summary of summaries) {
+    summary.latestSyncRunStatus = latestRunMap.get(summary.provider) ?? null;
+  }
 
   return {
     totalVariantCount,
     variantsWithSkuCount,
     summaries,
   };
+}
+
+function getPrintifyNote(status: string | undefined) {
+  switch (status) {
+    case "validated":
+      return "Printify credentials have been validated. Catalog sync, mapping, and cost import still land in the next provider slice.";
+    case "sync_failed":
+      return "The most recent provider refresh failed. Credential state is preserved, but mapping and cost import are still pending.";
+    case "configured":
+      return "Printify credentials are stored, but have not been validated yet.";
+    default:
+      return "Printify API keys can be stored now. Live validation, variant matching, and cost sync are still pending.";
+  }
 }
 
 export async function savePrintifyConnection(
@@ -116,6 +164,7 @@ export async function savePrintifyConnection(
     displayName?: string | null;
   },
   db: ProviderDbClient = prisma,
+  fetchImpl: typeof fetch = fetch,
 ): Promise<{ id: string }> {
   const apiKey = input.apiKey.trim();
   if (!apiKey) {
@@ -127,8 +176,19 @@ export async function savePrintifyConnection(
   }
 
   const displayName = input.displayName?.trim() || null;
+  let validatedConnection;
+  try {
+    validatedConnection = await validatePrintifyApiKey(apiKey, fetchImpl);
+  } catch (error) {
+    if (error instanceof PrintifyValidationError) {
+      throw new Response(error.message, { status: error.status });
+    }
+    throw error;
+  }
+
   const credentialsEncrypted = encryptProviderCredential(apiKey);
   const credentialHint = maskApiKey(apiKey);
+  const validatedAt = new Date();
 
   const connection = await db.providerConnection.upsert({
     where: {
@@ -139,19 +199,29 @@ export async function savePrintifyConnection(
     },
     update: {
       authType: "api_key",
-      status: "configured",
-      displayName,
+      status: "validated",
+      displayName: displayName ?? validatedConnection.primaryShop?.title ?? null,
+      providerAccountId: validatedConnection.primaryShop?.id ?? null,
+      providerAccountName: validatedConnection.primaryShop?.title ?? null,
       credentialsEncrypted,
       credentialHint,
+      lastValidatedAt: validatedAt,
+      lastValidationError: null,
+      lastSyncError: null,
     },
     create: {
       shopId: input.shopId,
       provider: "printify",
       authType: "api_key",
-      status: "configured",
-      displayName,
+      status: "validated",
+      displayName: displayName ?? validatedConnection.primaryShop?.title ?? null,
+      providerAccountId: validatedConnection.primaryShop?.id ?? null,
+      providerAccountName: validatedConnection.primaryShop?.title ?? null,
       credentialsEncrypted,
       credentialHint,
+      lastValidatedAt: validatedAt,
+      lastValidationError: null,
+      lastSyncError: null,
     },
     select: {
       id: true,
@@ -167,8 +237,11 @@ export async function savePrintifyConnection(
       actor: "merchant",
       payload: {
         provider: "printify",
-        status: "configured",
-        displayName,
+        status: "validated",
+        displayName: displayName ?? validatedConnection.primaryShop?.title ?? null,
+        providerAccountId: validatedConnection.primaryShop?.id ?? null,
+        providerAccountName: validatedConnection.primaryShop?.title ?? null,
+        shopCount: validatedConnection.shopCount,
       },
     },
   });

@@ -280,13 +280,19 @@ model ProviderConnection {
   authType             String
   status               String   @default("configured")
   displayName          String?
+  providerAccountId    String?
+  providerAccountName  String?
   credentialsEncrypted String?
   credentialHint       String?
+  lastValidatedAt      DateTime?
+  lastValidationError  String?
   lastSyncedAt         DateTime?
+  lastSyncError        String?
   createdAt            DateTime @default(now())
   updatedAt            DateTime @updatedAt
 
   mappings ProviderVariantMapping[]
+  syncRuns ProviderSyncRun[]
 
   @@unique([shopId, provider])
   @@index([shopId, status])
@@ -300,10 +306,15 @@ model ProviderVariantMapping {
   variantId         String
   variant           Variant            @relation(fields: [variantId], references: [id], onDelete: Cascade)
   provider          String
+  status            String             @default("mapped")
+  providerProductId String?
+  providerProductTitle String?
   providerVariantId String?
+  providerVariantTitle String?
   providerSku       String?
   matchMethod       String?
   lastCostSyncedAt  DateTime?
+  lastSyncError     String?
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
@@ -323,9 +334,32 @@ model ProviderCostCache {
   amount       Decimal                @db.Decimal(10, 2)
   currency     String                 @default("USD")
   syncedAt     DateTime
+  sourceUpdatedAt DateTime?
+  staleReason  String?
   createdAt    DateTime               @default(now())
 
   @@index([mappingId, syncedAt])
+}
+
+model ProviderSyncRun {
+  id                String             @id @default(cuid())
+  shopId            String
+  connectionId      String
+  connection        ProviderConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  provider          String
+  trigger           String
+  status            String             @default("queued")
+  startedAt         DateTime?
+  completedAt       DateTime?
+  mappedCount       Int                @default(0)
+  unmappedCount     Int                @default(0)
+  cachedCostCount   Int                @default(0)
+  errorSummary      String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  @@index([shopId, provider, createdAt])
+  @@index([connectionId, createdAt])
 }
 
 // Phase 3 tables

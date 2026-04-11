@@ -17,9 +17,11 @@ test("provider connections can save and disconnect Printify credentials", async 
   await page.getByRole("button", { name: "Save Printify credentials" }).click();
 
   await expect(
-    page.getByText("Printify credentials saved. Live validation and sync will land in a follow-up provider tranche.").last(),
+    page.getByText("Printify credentials validated and saved. Provider mapping and cost import still land in the next tranche.").last(),
   ).toBeVisible();
   await expect(page.getByText("Stored credential hint: ****1234.")).toBeVisible();
+  await expect(page.getByText("Connected account: Fixture Shop.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Refresh provider state" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Disconnect Printify" })).toBeVisible();
 
   await page.getByRole("button", { name: "Disconnect Printify" }).click();

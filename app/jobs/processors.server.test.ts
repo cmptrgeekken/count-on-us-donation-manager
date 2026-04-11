@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   runAnalyticalRecalculation: vi.fn(),
   sendPostPurchaseDonationEmail: vi.fn(),
   createSnapshot: vi.fn(),
+  runProviderSync: vi.fn(),
   adminFactory: vi.fn(),
 }));
 
@@ -56,6 +57,10 @@ vi.mock("../services/postPurchaseEmail.server", () => ({
 
 vi.mock("../services/snapshotService.server", () => ({
   createSnapshot: mocks.createSnapshot,
+}));
+
+vi.mock("../services/providerSync.server", () => ({
+  runProviderSync: mocks.runProviderSync,
 }));
 
 vi.mock("../shopify.server", () => ({
@@ -342,6 +347,22 @@ describe("registerAllProcessors", () => {
     expect(mocks.runAnalyticalRecalculation).toHaveBeenCalledWith(
       "shop-1",
       "run-1",
+      mocks.prisma,
+    );
+  });
+
+  it("runs queued provider sync jobs by shop and run id", async () => {
+    const boss = createBoss();
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("provider.sync");
+    expect(worker).toBeTruthy();
+
+    await worker!([{ data: { shopId: "shop-1", runId: "run-1" } }]);
+
+    expect(mocks.runProviderSync).toHaveBeenCalledWith(
+      { shopId: "shop-1", runId: "run-1" },
       mocks.prisma,
     );
   });
