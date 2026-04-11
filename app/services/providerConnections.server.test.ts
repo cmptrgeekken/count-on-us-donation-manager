@@ -42,6 +42,33 @@ describe("providerConnections.server", () => {
       },
       variant: {
         count: vi.fn().mockResolvedValueOnce(5).mockResolvedValueOnce(4),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "variant-1",
+            title: "Mapped Variant",
+            sku: "SKU-READY-001",
+            product: {
+              title: "Fixture Product",
+            },
+          },
+          {
+            id: "variant-2",
+            title: "Needs Review",
+            sku: "SKU-NEEDS-REVIEW",
+            product: {
+              title: "Fixture Product",
+            },
+          },
+        ]),
+      },
+      providerVariantMapping: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            variantId: "variant-1",
+            status: "mapped",
+            lastSyncError: null,
+          },
+        ]),
       },
       auditLog: {},
     };
@@ -55,6 +82,12 @@ describe("providerConnections.server", () => {
     expect(result.summaries.find((summary) => summary.provider === "printify")?.mappedVariantCount).toBe(3);
     expect(result.summaries.find((summary) => summary.provider === "printify")?.unmappedVariantCount).toBe(1);
     expect(result.summaries.find((summary) => summary.provider === "printify")?.latestCachedCostCount).toBe(3);
+    expect(result.printifyUnresolvedVariants).toEqual([
+      expect.objectContaining({
+        variantId: "variant-2",
+        sku: "SKU-NEEDS-REVIEW",
+      }),
+    ]);
     expect(result.summaries.find((summary) => summary.provider === "printful")?.configured).toBe(false);
   });
 
@@ -73,7 +106,14 @@ describe("providerConnections.server", () => {
       providerConnection: {
         upsert,
       },
+      providerVariantMapping: {
+        findMany: vi.fn(),
+      },
       providerSyncRun: {},
+      variant: {
+        count: vi.fn(),
+        findMany: vi.fn(),
+      },
       auditLog: {
         create: createAudit,
       },
@@ -109,7 +149,14 @@ describe("providerConnections.server", () => {
         findUnique,
         delete: deleteConnection,
       },
+      providerVariantMapping: {
+        findMany: vi.fn(),
+      },
       providerSyncRun: {},
+      variant: {
+        count: vi.fn(),
+        findMany: vi.fn(),
+      },
       auditLog: {
         create: createAudit,
       },

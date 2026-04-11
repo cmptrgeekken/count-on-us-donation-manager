@@ -30,6 +30,13 @@ export type ProviderConnectionSummary = {
 export type ProviderConnectionsPageData = {
   totalVariantCount: number;
   variantsWithSkuCount: number;
+  printifyUnresolvedVariants: Array<{
+    variantId: string;
+    productTitle: string;
+    variantTitle: string;
+    sku: string;
+    reason: string;
+  }>;
   summaries: ProviderConnectionSummary[];
 };
 
@@ -47,7 +54,7 @@ export async function getProviderConnectionsPageData(
   shopId: string,
   db: ProviderDbClient = prisma,
 ): Promise<ProviderConnectionsPageData> {
-  const [connections, totalVariantCount, variantsWithSkuCount] = await Promise.all([
+  const [connections, totalVariantCount, variantsWithSkuCount, variants, printifyMappings] = await Promise.all([
     db.providerConnection.findMany({
       where: { shopId },
       select: {
@@ -77,6 +84,30 @@ export async function getProviderConnectionsPageData(
         sku: {
           not: null,
         },
+      },
+    }),
+    db.variant.findMany({
+      where: { shopId },
+      select: {
+        id: true,
+        title: true,
+        sku: true,
+        product: {
+          select: {
+            title: true,
+          },
+        },
+      },
+    }),
+    db.providerVariantMapping.findMany({
+      where: {
+        shopId,
+        provider: "printify",
+      },
+      select: {
+        variantId: true,
+        status: true,
+        lastSyncError: true,
       },
     }),
   ]);
@@ -150,9 +181,49 @@ export async function getProviderConnectionsPageData(
     }
   }
 
+  const printifyMappingByVariantId = new Map(
+    printifyMappings.map((mapping) => [mapping.variantId, mapping]),
+  );
+  const skuCounts = new Map<string, number>();
+
+  for (const variant of variants) {
+    const sku = variant.sku?.trim();
+    if (!sku) continue;
+
+    skuCounts.set(sku, (skuCounts.get(sku) ?? 0) + 1);
+  }
+
+  const printifyUnresolvedVariants = variants.flatMap((variant) => {
+    const sku = variant.sku?.trim();
+    if (!sku) {
+      return [];
+    }
+
+    const mapping = printifyMappingByVariantId.get(variant.id);
+    if (mapping?.status === "mapped") {
+      return [];
+    }
+
+    const reason =
+      (skuCounts.get(sku) ?? 0) > 1
+        ? "Duplicate SKU blocks automatic Printify matching."
+        : mapping?.lastSyncError?.trim() || "No Printify SKU match found in the latest sync.";
+
+    return [
+      {
+        variantId: variant.id,
+        productTitle: variant.product.title,
+        variantTitle: variant.title,
+        sku,
+        reason,
+      },
+    ];
+  });
+
   return {
     totalVariantCount,
     variantsWithSkuCount,
+    printifyUnresolvedVariants,
     summaries,
   };
 }

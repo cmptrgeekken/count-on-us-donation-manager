@@ -162,7 +162,7 @@ function formatTimestamp(value: string | null) {
 }
 
 export default function ProviderConnectionsPage() {
-  const { totalVariantCount, variantsWithSkuCount, summaries } = useLoaderData<typeof loader>();
+  const { totalVariantCount, variantsWithSkuCount, printifyUnresolvedVariants, summaries } = useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string }>();
   const syncFetcher = useFetcher<{ ok: boolean; message: string }>();
   const disconnectFetcher = useFetcher<{ ok: boolean; message: string }>();
@@ -296,6 +296,24 @@ export default function ProviderConnectionsPage() {
                 <s-text>{printify.lastSyncError}</s-text>
               </s-banner>
             ) : null}
+            {printify?.latestSyncRunStatus === null && printify?.configured ? (
+              <s-banner tone="info">
+                <s-text>Run your first Printify sync to populate SKU matches and cached POD cost lines.</s-text>
+              </s-banner>
+            ) : null}
+            {printify?.latestSyncRunStatus === "completed" && printifyUnresolvedVariants.length === 0 ? (
+              <s-banner tone="success">
+                <s-text>All sync-eligible variants are currently matched to Printify.</s-text>
+              </s-banner>
+            ) : null}
+            {printify?.latestSyncRunStatus === "completed" && printifyUnresolvedVariants.length > 0 ? (
+              <s-banner tone="warning">
+                <s-text>
+                  {printifyUnresolvedVariants.length} variant{printifyUnresolvedVariants.length === 1 ? "" : "s"} still
+                  need review before they can use provider-backed POD costs.
+                </s-text>
+              </s-banner>
+            ) : null}
 
             {saveErrorMessage ? (
               <s-banner tone="critical">
@@ -419,6 +437,37 @@ export default function ProviderConnectionsPage() {
                   Disconnect Printify
                 </s-button>
               </disconnectFetcher.Form>
+            ) : null}
+
+            {printify?.latestSyncRunStatus === "completed" && printifyUnresolvedVariants.length > 0 ? (
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <strong>Needs review</strong>
+                <div style={{ display: "grid", gap: "0.75rem" }}>
+                  {printifyUnresolvedVariants.map((variant: (typeof printifyUnresolvedVariants)[number]) => (
+                    <div
+                      key={variant.variantId}
+                      style={{
+                        border: "1px solid var(--p-color-border, #d0d5dd)",
+                        borderRadius: "0.75rem",
+                        padding: "0.85rem 1rem",
+                        background: "var(--p-color-bg-surface-secondary, #f6f6f7)",
+                        display: "grid",
+                        gap: "0.25rem",
+                      }}
+                    >
+                      <strong>
+                        {variant.productTitle} · {variant.variantTitle}
+                      </strong>
+                      <s-text>SKU: {variant.sku}</s-text>
+                      <s-text>{variant.reason}</s-text>
+                    </div>
+                  ))}
+                </div>
+                <s-text>
+                  Unresolved variants continue using manual cost configuration where available. Manual provider mapping lands
+                  in a follow-on slice.
+                </s-text>
+              </div>
             ) : null}
           </div>
         </s-section>
