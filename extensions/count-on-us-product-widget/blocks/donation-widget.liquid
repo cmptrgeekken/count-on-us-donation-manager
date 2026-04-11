@@ -1,10 +1,12 @@
 <div
   class="count-on-us-widget"
   data-count-on-us-widget
+  data-count-on-us-design-mode="{{ request.design_mode | json }}"
   data-product-id="gid://shopify/Product/{{ product.id }}"
   data-selected-variant-id="gid://shopify/ProductVariant/{{ product.selected_or_first_available_variant.id }}"
   data-selected-quantity="1"
   data-proxy-base="/apps/count-on-us"
+  {% unless request.design_mode %}hidden{% endunless %}
 >
   <div class="count-on-us-widget__header">
     <h3 class="count-on-us-widget__heading">{{ block.settings.heading | escape }}</h3>

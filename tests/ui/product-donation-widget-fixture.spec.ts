@@ -9,7 +9,8 @@ test("product donation widget fixture renders the widget shell and product contr
   );
 
   await expect(page.locator("[data-count-on-us-widget]")).toBeVisible();
-  await expect(page.getByRole("button", { name: "See how we calculate this" })).toBeVisible();
+  const trigger = page.getByRole("button", { name: "See how we calculate this" });
+  await expect(trigger).toBeVisible();
   await expect(page.locator('select[name="id"]')).toBeVisible();
   await expect(page.locator('input[name="quantity"]')).toBeVisible();
 });

@@ -50,6 +50,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           estimatedRate: "25.00",
           estimatedAmount: "1.00",
         },
+        reconciliation: {
+          estimatedTotal: "20.00",
+          allocatedDonations: "4.00",
+          retainedByShop: "5.97",
+          labor: "3.00",
+          materials: "2.00",
+          equipment: "1.00",
+          packaging: "0.50",
+          pod: "0.00",
+          mistakeBuffer: "0.50",
+          shopifyFees: "2.03",
+          taxReserve: "1.00",
+          remainder: "0.00",
+        },
       },
       {
         variantId: "gid://shopify/ProductVariant/202",
@@ -83,6 +97,20 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           estimatedRate: "25.00",
           estimatedAmount: "2.00",
         },
+        reconciliation: {
+          estimatedTotal: "35.00",
+          allocatedDonations: "8.00",
+          retainedByShop: "11.93",
+          labor: "5.00",
+          materials: "4.00",
+          equipment: "2.00",
+          packaging: "1.25",
+          pod: "0.00",
+          mistakeBuffer: "0.75",
+          shopifyFees: "2.07",
+          taxReserve: "2.00",
+          remainder: "0.00",
+        },
       },
     ],
   };
@@ -100,27 +128,34 @@ export default function ProductDonationWidgetFixtureRoute() {
 
   const fetchShim = `
     const fixturePayload = ${JSON.stringify(payload)};
-    const expectedMetadataPath = "/apps/count-on-us/products/" + encodeURIComponent(fixturePayload.productId) + "?metadataOnly=1";
-    const expectedPayloadPath = "/apps/count-on-us/products/" + encodeURIComponent(fixturePayload.productId);
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
       const requestUrl = new URL(typeof input === "string" ? input : input.url, window.location.origin);
-      const pathWithQuery = requestUrl.pathname + requestUrl.search;
-      if (pathWithQuery === expectedMetadataPath) {
+      const prefix = "/apps/count-on-us/products/";
+      if (requestUrl.pathname.startsWith(prefix)) {
+        const encodedProductId = requestUrl.pathname.slice(prefix.length);
+        const productId = decodeURIComponent(encodedProductId);
+        if (productId !== fixturePayload.productId) {
+          return new Response(JSON.stringify({ ok: false, message: "Missing fixture payload" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+
+        if (requestUrl.searchParams.get("metadataOnly") === "1") {
+          return new Response(JSON.stringify({
+            data: {
+              productId: fixturePayload.productId,
+              deliveryMode: fixturePayload.deliveryMode,
+              visible: fixturePayload.visible,
+              totalLineItemCount: fixturePayload.totalLineItemCount
+            }
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+
         return new Response(JSON.stringify({
-          data: {
-            productId: fixturePayload.productId,
-            deliveryMode: fixturePayload.deliveryMode,
-            visible: fixturePayload.visible,
-            totalLineItemCount: fixturePayload.totalLineItemCount
-          }
+          data: fixturePayload
         }), { status: 200, headers: { "Content-Type": "application/json" } });
-      }
-      if (pathWithQuery === expectedPayloadPath) {
-        return new Response(JSON.stringify({ data: fixturePayload }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
       }
       return originalFetch(input, init);
     };

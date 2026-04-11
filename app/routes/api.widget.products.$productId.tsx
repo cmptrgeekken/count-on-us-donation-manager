@@ -34,9 +34,41 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const productId = params.productId?.trim();
   const url = new URL(request.url);
   const metadataOnly = url.searchParams.get("metadataOnly") === "1";
+  const variantId = url.searchParams.get("variantId")?.trim() || "";
+  const quantityParam = url.searchParams.get("quantity")?.trim() || "";
+  const lineSubtotalParam = url.searchParams.get("lineSubtotal")?.trim() || "";
 
   if (!productId) {
     return errorResponse(400, "VALIDATION_ERROR", "Product ID is required.");
+  }
+
+  let lineContext:
+    | {
+        variantShopifyId: string;
+        quantity: number;
+        lineSubtotal: Prisma.Decimal | null;
+      }
+    | undefined;
+
+  if (!metadataOnly && variantId) {
+    const quantity = Number.parseInt(quantityParam || "1", 10);
+    if (!Number.isFinite(quantity) || quantity < 1) {
+      return errorResponse(400, "VALIDATION_ERROR", "Quantity must be a positive integer.");
+    }
+
+    let lineSubtotal: Prisma.Decimal | null = null;
+    if (lineSubtotalParam) {
+      if (!/^\d+(\.\d{1,2})?$/.test(lineSubtotalParam)) {
+        return errorResponse(400, "VALIDATION_ERROR", "Line subtotal must be a valid money amount.");
+      }
+      lineSubtotal = new Prisma.Decimal(lineSubtotalParam);
+    }
+
+    lineContext = {
+      variantShopifyId: variantId,
+      quantity,
+      lineSubtotal,
+    };
   }
 
   const { shopifyDomain } = await authenticatePublicAppProxyRequest(request);
@@ -65,7 +97,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   const payload = metadataOnly
     ? await buildWidgetProductMetadata(shop.shopId, productId, prisma)
-    : await buildWidgetProductPayload(shop.shopId, productId, prisma);
+    : await buildWidgetProductPayload(shop.shopId, productId, prisma, lineContext);
 
   if (!payload) {
     return errorResponse(404, "NOT_FOUND", "Product not found for this shop.", rateLimit.headers);

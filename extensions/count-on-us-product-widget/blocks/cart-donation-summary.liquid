@@ -1,7 +1,9 @@
 <div
-  class="count-on-us-widget"
+  class="count-on-us-widget count-on-us-widget--cart-summary"
   data-count-on-us-cart-summary
+  data-count-on-us-design-mode="{{ request.design_mode | json }}"
   data-proxy-base="/apps/count-on-us"
+  {% unless request.design_mode %}hidden{% endunless %}
 >
   <div class="count-on-us-widget__header">
     <h3 class="count-on-us-widget__heading">{{ block.settings.heading | escape }}</h3>
@@ -16,7 +18,6 @@
     aria-expanded="false"
   >
     <span>{{ block.settings.button_label | escape }}</span>
-    <span aria-hidden="true">+</span>
   </button>
 
   <script type="application/json" data-count-on-us-cart-lines>
@@ -25,7 +26,8 @@
         {
           "productId": "gid://shopify/Product/{{ item.product.id }}",
           "variantId": "gid://shopify/ProductVariant/{{ item.variant.id }}",
-          "quantity": {{ item.quantity }}
+          "quantity": {{ item.quantity }},
+          "lineSubtotal": {{ item.final_line_price | divided_by: 100.0 | json }}
         }{% unless forloop.last %},{% endunless %}
       {% endfor %}
     ]
@@ -46,19 +48,19 @@
       "type": "text",
       "id": "heading",
       "label": "Heading",
-      "default": "See your donation impact"
+      "default": "Your purchase is making a difference!"
     },
     {
       "type": "textarea",
       "id": "description",
       "label": "Description",
-      "default": "Open a cart-level view of the estimated donation totals across the causes in your cart."
+      "default": "Open a cart-level view of the causes your purchase supports and how the estimate is calculated."
     },
     {
       "type": "text",
       "id": "button_label",
       "label": "Button label",
-      "default": "See your donation impact"
+      "default": "See donation details"
     }
   ]
 }
