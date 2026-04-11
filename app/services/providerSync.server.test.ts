@@ -50,14 +50,47 @@ describe("providerSync.server", () => {
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined);
     const updateConnection = vi.fn().mockResolvedValue(undefined);
+    const upsertMapping = vi.fn().mockResolvedValue({ id: "mapping_1" });
+    const updateManyMappings = vi.fn().mockResolvedValue({ count: 0 });
+    const createManyCostCache = vi.fn().mockResolvedValue({ count: 1 });
     const createAudit = vi.fn().mockResolvedValue(undefined);
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: vi.fn().mockResolvedValue({
-        data: [{ id: 555, title: "Validated Shop" }],
-      }),
-    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({
+          data: [{ id: 555, title: "Validated Shop" }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: vi.fn().mockResolvedValue({
+          current_page: 1,
+          last_page: 1,
+          data: [
+            {
+              id: "prod_1",
+              title: "Fixture Tee",
+              blueprint_id: 10,
+              print_provider_id: 20,
+              updated_at: "2026-04-10T16:00:00Z",
+              variants: [
+                {
+                  id: 9001,
+                  title: "Black / M",
+                  sku: "SKU-READY-001",
+                  cost: 1299,
+                },
+              ],
+            },
+          ],
+        }),
+      });
     const db = {
+      shop: {
+        findUnique: vi.fn().mockResolvedValue({
+          currency: "USD",
+        }),
+      },
       providerSyncRun: {
         findUnique: vi.fn().mockResolvedValue({
           id: "run_1",
@@ -71,9 +104,34 @@ describe("providerSync.server", () => {
         findUnique: vi.fn().mockResolvedValue({
           id: "connection_1",
           provider: "printify",
+          providerAccountId: "555",
+          providerAccountName: "Validated Shop",
           credentialsEncrypted: "c2hvcnQ=.c2hvcnQ=.c2hvcnQ=",
         }),
         update: updateConnection,
+      },
+      variant: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "variant_1",
+            sku: "SKU-READY-001",
+          },
+          {
+            id: "variant_2",
+            sku: "SKU-DUPLICATE",
+          },
+          {
+            id: "variant_3",
+            sku: "SKU-DUPLICATE",
+          },
+        ]),
+      },
+      providerVariantMapping: {
+        upsert: upsertMapping,
+        updateMany: updateManyMappings,
+      },
+      providerCostCache: {
+        createMany: createManyCostCache,
       },
       auditLog: {
         create: createAudit,
@@ -102,14 +160,42 @@ describe("providerSync.server", () => {
         data: expect.objectContaining({
           status: "validated",
           providerAccountId: "555",
-          providerAccountName: "Validated Shop",
         }),
       }),
     );
+    expect(upsertMapping).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          providerProductId: "prod_1",
+          providerVariantId: "9001",
+          providerSku: "SKU-READY-001",
+          matchMethod: "sku",
+        }),
+      }),
+    );
+    const cachedCostArgs = createManyCostCache.mock.calls[0]?.[0];
+    expect(cachedCostArgs.data).toHaveLength(1);
+    expect(cachedCostArgs.data[0]).toEqual(
+      expect.objectContaining({
+        mappingId: "mapping_1",
+        costLineType: "base_fulfillment",
+        currency: "USD",
+      }),
+    );
+    expect(cachedCostArgs.data[0].amount.toString()).toBe("12.99");
     expect(createAudit).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           action: "PROVIDER_SYNC_COMPLETED",
+        }),
+      }),
+    );
+    expect(updateRun).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          mappedCount: 1,
+          unmappedCount: 2,
+          cachedCostCount: 1,
         }),
       }),
     );

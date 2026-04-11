@@ -1,14 +1,23 @@
 import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
+import { Prisma } from "@prisma/client";
 import { decryptProviderCredential } from "./providerCredentials.server";
-import { validatePrintifyApiKey } from "./printify.server";
+import { listPrintifyProducts, validatePrintifyApiKey } from "./printify.server";
 
 type SyncDbClient = Pick<
   typeof prisma,
-  "providerConnection" | "providerSyncRun" | "auditLog"
+  "shop" | "providerConnection" | "providerSyncRun" | "auditLog" | "variant" | "providerVariantMapping" | "providerCostCache"
 >;
 
 type JobSender = Pick<typeof jobQueue, "send">;
+
+function normalizeSku(value: string | null | undefined) {
+  return value?.trim() || null;
+}
+
+function centsToDecimal(value: number) {
+  return new Prisma.Decimal(value).div(100);
+}
 
 export async function queueProviderSyncRun(
   input: {
@@ -116,6 +125,8 @@ export async function runProviderSync(
       select: {
         id: true,
         provider: true,
+        providerAccountId: true,
+        providerAccountName: true,
         credentialsEncrypted: true,
       },
     });
@@ -133,14 +144,178 @@ export async function runProviderSync(
       fetchImpl,
     );
 
+    const shopCurrency =
+      (
+        await db.shop.findUnique({
+          where: { shopId: run.shopId },
+          select: { currency: true },
+        })
+      )?.currency ?? "USD";
+
+    const printifyShopId =
+      validation.primaryShop && validation.primaryShop.id === connection.providerAccountId
+        ? validation.primaryShop.id
+        : connection.providerAccountId?.trim() || validation.primaryShop?.id;
+
+    if (!printifyShopId) {
+      throw new Error("Validated Printify credentials did not yield a usable shop id.");
+    }
+
+    const [printifyVariants, localVariants] = await Promise.all([
+      listPrintifyProducts(
+        decryptProviderCredential(connection.credentialsEncrypted),
+        printifyShopId,
+        fetchImpl,
+      ),
+      db.variant.findMany({
+        where: {
+          shopId: run.shopId,
+          sku: {
+            not: null,
+          },
+        },
+        select: {
+          id: true,
+          sku: true,
+        },
+      }),
+    ]);
+
+    const localVariantsBySku = new Map<string, Array<{ id: string }>>();
+    for (const variant of localVariants) {
+      const sku = normalizeSku(variant.sku);
+      if (!sku) continue;
+
+      const current = localVariantsBySku.get(sku) ?? [];
+      current.push({ id: variant.id });
+      localVariantsBySku.set(sku, current);
+    }
+
+    const printifyVariantsBySku = new Map<string, typeof printifyVariants>();
+    for (const variant of printifyVariants) {
+      const sku = normalizeSku(variant.sku);
+      if (!sku) continue;
+
+      const current = printifyVariantsBySku.get(sku) ?? [];
+      current.push(variant);
+      printifyVariantsBySku.set(sku, current);
+    }
+
+    const matchedPairs = Array.from(localVariantsBySku.entries()).flatMap(([sku, localCandidates]) => {
+      const providerCandidates = printifyVariantsBySku.get(sku) ?? [];
+      if (localCandidates.length !== 1 || providerCandidates.length !== 1) {
+        return [];
+      }
+
+      return [
+        {
+          localVariantId: localCandidates[0]!.id,
+          providerVariant: providerCandidates[0]!,
+        },
+      ];
+    });
+
+    const syncedAt = new Date();
+
+    const mappingResults = await Promise.all(
+      matchedPairs.map(({ localVariantId, providerVariant }) =>
+        db.providerVariantMapping.upsert({
+          where: {
+            connectionId_variantId: {
+              connectionId: connection.id,
+              variantId: localVariantId,
+            },
+          },
+          update: {
+            provider: connection.provider,
+            status: "mapped",
+            providerProductId: providerVariant.productId,
+            providerProductTitle: providerVariant.productTitle,
+            providerVariantId: providerVariant.variantId,
+            providerVariantTitle: providerVariant.variantTitle,
+            providerSku: normalizeSku(providerVariant.sku),
+            matchMethod: "sku",
+            lastCostSyncedAt: syncedAt,
+            lastSyncError: null,
+          },
+          create: {
+            shopId: run.shopId,
+            connectionId: connection.id,
+            variantId: localVariantId,
+            provider: connection.provider,
+            status: "mapped",
+            providerProductId: providerVariant.productId,
+            providerProductTitle: providerVariant.productTitle,
+            providerVariantId: providerVariant.variantId,
+            providerVariantTitle: providerVariant.variantTitle,
+            providerSku: normalizeSku(providerVariant.sku),
+            matchMethod: "sku",
+            lastCostSyncedAt: syncedAt,
+            lastSyncError: null,
+          },
+          select: {
+            id: true,
+          },
+        }),
+      ),
+    );
+
+    const cachedCostRows = mappingResults.flatMap((mappingResult, index) => {
+      const providerVariant = matchedPairs[index]?.providerVariant;
+      if (!providerVariant || typeof providerVariant.cost !== "number") {
+        return [];
+      }
+
+      return [
+        {
+          mappingId: mappingResult.id,
+          costLineType: "base_fulfillment",
+          description: providerVariant.variantTitle ?? providerVariant.productTitle ?? "Printify fulfillment cost",
+          amount: centsToDecimal(providerVariant.cost),
+          currency: shopCurrency,
+          syncedAt,
+          sourceUpdatedAt: providerVariant.productUpdatedAt,
+          staleReason: null,
+        },
+      ];
+    });
+
+    const matchedLocalVariantIds = matchedPairs.map((pair) => pair.localVariantId);
+    await db.providerVariantMapping.updateMany({
+      where: {
+        connectionId: connection.id,
+        matchMethod: "sku",
+        ...(matchedLocalVariantIds.length > 0
+          ? {
+              variantId: {
+                notIn: matchedLocalVariantIds,
+              },
+            }
+          : {}),
+      },
+      data: {
+        status: "unresolved",
+        lastSyncError: "No unique Printify SKU match was found during the latest sync.",
+      },
+    });
+
+    if (cachedCostRows.length > 0) {
+      await db.providerCostCache.createMany({
+        data: cachedCostRows,
+      });
+    }
+
     const now = new Date();
 
     await db.providerConnection.update({
       where: { id: connection.id },
       data: {
         status: "validated",
-        providerAccountId: validation.primaryShop?.id ?? null,
-        providerAccountName: validation.primaryShop?.title ?? null,
+        providerAccountId: printifyShopId,
+        providerAccountName:
+          validation.primaryShop?.id === printifyShopId
+            ? validation.primaryShop.title
+            : connection.providerAccountName,
         lastValidatedAt: now,
         lastValidationError: null,
         lastSyncedAt: now,
@@ -153,9 +328,9 @@ export async function runProviderSync(
       data: {
         status: "completed",
         completedAt: now,
-        mappedCount: 0,
-        unmappedCount: 0,
-        cachedCostCount: 0,
+        mappedCount: matchedPairs.length,
+        unmappedCount: Math.max(localVariants.length - matchedPairs.length, 0),
+        cachedCostCount: cachedCostRows.length,
       },
     });
 
@@ -168,10 +343,15 @@ export async function runProviderSync(
         actor: "system",
         payload: {
           provider: run.provider,
-          primaryShopId: validation.primaryShop?.id ?? null,
-          primaryShopName: validation.primaryShop?.title ?? null,
+          primaryShopId: printifyShopId,
+          primaryShopName:
+            validation.primaryShop?.id === printifyShopId
+              ? validation.primaryShop.title
+              : connection.providerAccountName,
           shopCount: validation.shopCount,
-          note: "Provider refresh currently revalidates credentials and account metadata. Mapping and cost import land in the next provider slice.",
+          mappedCount: matchedPairs.length,
+          unmappedCount: Math.max(localVariants.length - matchedPairs.length, 0),
+          cachedCostCount: cachedCostRows.length,
         },
       },
     });

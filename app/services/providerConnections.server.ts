@@ -23,6 +23,7 @@ export type ProviderConnectionSummary = {
   mappedVariantCount: number;
   unmappedVariantCount: number;
   latestSyncRunStatus: string | null;
+  latestCachedCostCount: number | null;
   note: string;
 };
 
@@ -99,6 +100,7 @@ export async function getProviderConnectionsPageData(
       mappedVariantCount: connectionMap.get("printful")?._count.mappings ?? 0,
       unmappedVariantCount: Math.max(variantsWithSkuCount - (connectionMap.get("printful")?._count.mappings ?? 0), 0),
       latestSyncRunStatus: null,
+      latestCachedCostCount: null,
       note: "Printful OAuth is not wired yet. This page will expose that flow in a later provider tranche.",
     },
     {
@@ -117,6 +119,7 @@ export async function getProviderConnectionsPageData(
       mappedVariantCount: connectionMap.get("printify")?._count.mappings ?? 0,
       unmappedVariantCount: Math.max(variantsWithSkuCount - (connectionMap.get("printify")?._count.mappings ?? 0), 0),
       latestSyncRunStatus: null,
+      latestCachedCostCount: null,
       note: getPrintifyNote(connectionMap.get("printify")?.status),
     },
   ];
@@ -128,13 +131,23 @@ export async function getProviderConnectionsPageData(
     select: {
       provider: true,
       status: true,
+      mappedCount: true,
+      unmappedCount: true,
+      cachedCostCount: true,
     },
   });
 
-  const latestRunMap = new Map(latestRuns.map((run) => [run.provider, run.status]));
+  const latestRunMap = new Map(latestRuns.map((run) => [run.provider, run]));
 
   for (const summary of summaries) {
-    summary.latestSyncRunStatus = latestRunMap.get(summary.provider) ?? null;
+    const latestRun = latestRunMap.get(summary.provider);
+    summary.latestSyncRunStatus = latestRun?.status ?? null;
+
+    if (summary.provider === "printify" && latestRun) {
+      summary.mappedVariantCount = latestRun.mappedCount;
+      summary.unmappedVariantCount = latestRun.unmappedCount;
+      summary.latestCachedCostCount = latestRun.cachedCostCount;
+    }
   }
 
   return {
@@ -147,13 +160,13 @@ export async function getProviderConnectionsPageData(
 function getPrintifyNote(status: string | undefined) {
   switch (status) {
     case "validated":
-      return "Printify credentials have been validated. Catalog sync, mapping, and cost import still land in the next provider slice.";
+      return "Printify credentials have been validated. Run a sync to refresh SKU matches and cached POD fulfillment costs.";
     case "sync_failed":
-      return "The most recent provider refresh failed. Credential state is preserved, but mapping and cost import are still pending.";
+      return "The most recent Printify sync failed. Credential state is preserved, and manual cost fallbacks remain active where configured.";
     case "configured":
       return "Printify credentials are stored, but have not been validated yet.";
     default:
-      return "Printify API keys can be stored now. Live validation, variant matching, and cost sync are still pending.";
+      return "Connect Printify to validate credentials, auto-match variants by SKU, and cache POD fulfillment costs.";
   }
 }
 

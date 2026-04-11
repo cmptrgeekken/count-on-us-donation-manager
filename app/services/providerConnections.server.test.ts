@@ -30,7 +30,15 @@ describe("providerConnections.server", () => {
         ]),
       },
       providerSyncRun: {
-        findMany: vi.fn().mockResolvedValue([{ provider: "printify", status: "completed" }]),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            provider: "printify",
+            status: "completed",
+            mappedCount: 3,
+            unmappedCount: 1,
+            cachedCostCount: 3,
+          },
+        ]),
       },
       variant: {
         count: vi.fn().mockResolvedValueOnce(5).mockResolvedValueOnce(4),
@@ -44,7 +52,9 @@ describe("providerConnections.server", () => {
     expect(result.variantsWithSkuCount).toBe(4);
     expect(result.summaries.find((summary) => summary.provider === "printify")?.configured).toBe(true);
     expect(result.summaries.find((summary) => summary.provider === "printify")?.status).toBe("validated");
-    expect(result.summaries.find((summary) => summary.provider === "printify")?.unmappedVariantCount).toBe(2);
+    expect(result.summaries.find((summary) => summary.provider === "printify")?.mappedVariantCount).toBe(3);
+    expect(result.summaries.find((summary) => summary.provider === "printify")?.unmappedVariantCount).toBe(1);
+    expect(result.summaries.find((summary) => summary.provider === "printify")?.latestCachedCostCount).toBe(3);
     expect(result.summaries.find((summary) => summary.provider === "printful")?.configured).toBe(false);
   });
 

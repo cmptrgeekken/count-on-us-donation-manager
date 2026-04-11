@@ -22,18 +22,62 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent")?.toString();
   const isBypass = isPlaywrightBypassRequest(request);
   const testFetch: typeof fetch | undefined = isBypass
-    ? (async () =>
-        new Response(
-          JSON.stringify({
-            data: [{ id: 1234, title: "Fixture Shop" }],
-          }),
-          {
-            status: 200,
-            headers: {
-              "Content-Type": "application/json",
+    ? (async (input) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (url.includes("/v1/shops.json")) {
+          return new Response(
+            JSON.stringify({
+              data: [{ id: 1234, title: "Fixture Shop" }],
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+              },
             },
+          );
+        }
+
+        if (url.includes("/v1/shops/1234/products.json")) {
+          return new Response(
+            JSON.stringify({
+              current_page: 1,
+              last_page: 1,
+              data: [
+                {
+                  id: "printify_product_1",
+                  title: "Provider Fixture Product",
+                  blueprint_id: 11,
+                  print_provider_id: 22,
+                  updated_at: "2026-04-10T15:00:00Z",
+                  variants: [
+                    {
+                      id: 7001,
+                      title: "Mapped-ready Variant",
+                      sku: "SKU-READY-001",
+                      cost: 875,
+                    },
+                  ],
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+              },
+            },
+          );
+        }
+
+        return new Response(JSON.stringify({ message: "Not found" }), {
+          status: 404,
+          headers: {
+            "Content-Type": "application/json",
           },
-        )) as typeof fetch
+        });
+      }) as typeof fetch
     : undefined;
 
   if (intent === "save-printify-credentials") {
@@ -52,7 +96,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     return Response.json({
       ok: true,
-      message: "Printify credentials validated and saved. Provider mapping and cost import still land in the next tranche.",
+      message: "Printify credentials validated and saved. Run a sync to import SKU matches and cached POD costs.",
     });
   }
 
@@ -83,7 +127,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       ok: true,
       message:
         provider === "printify"
-          ? "Printify provider refresh queued. This currently revalidates account state and prepares for mapping/cost import."
+          ? "Printify sync queued. This refreshes account state, SKU matches, and cached POD costs."
           : "Printful provider refresh is not available yet.",
     });
   }
@@ -153,13 +197,13 @@ export default function ProviderConnectionsPage() {
         <s-section heading="Provider Connections">
           <div style={{ display: "grid", gap: "0.75rem" }}>
             <s-text>
-              This page now stores provider configuration state and connection metadata. Full provider sync, live validation,
-              variant mapping, and POD cost resolution are still being built.
+              Provider Connections now validates Printify credentials and tracks sync state. The active rollout focus is
+              importing provider mappings and POD cost inputs cleanly before we broaden the UI further.
             </s-text>
             <s-banner tone="info">
               <s-text>
-                Current scope: save Printify API credentials, review variant SKU coverage, and track provider readiness without
-                pretending sync is already live.
+                Current scope: validate Printify credentials, auto-match variants by SKU, and cache provider fulfillment costs.
+                Manual mapping and richer provider diagnostics still land in follow-on slices.
               </s-text>
             </s-banner>
             {saveErrorMessage ? (
@@ -227,6 +271,10 @@ export default function ProviderConnectionsPage() {
               <div>
                 <strong>Last sync</strong>
                 <div>{formatTimestamp(printify?.lastSyncedAt ?? null)}</div>
+              </div>
+              <div>
+                <strong>Cached POD lines</strong>
+                <div>{printify?.latestCachedCostCount ?? 0}</div>
               </div>
             </div>
 
@@ -356,7 +404,7 @@ export default function ProviderConnectionsPage() {
                       <input type="hidden" name="intent" value="refresh-provider" />
                       <input type="hidden" name="provider" value="printify" />
                       <s-button type="submit" variant="secondary" disabled={syncFetcher.state !== "idle"}>
-                        Refresh provider state
+                        Sync Printify catalog
                       </s-button>
                     </syncFetcher.Form>
                   ) : null}

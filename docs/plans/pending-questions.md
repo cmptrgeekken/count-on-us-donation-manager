@@ -17,6 +17,11 @@ It is intentionally lightweight so decisions can be reviewed later without block
     - automatically bind to the first accessible shop for the first tranche
     - prompt the merchant to choose one shop before mapping/sync
     - or allow syncing multiple Printify shops into one Shopify shop
+  - how we want to treat Printify product costs that arrive as cents without an explicit currency field:
+    - assume shop currency for first-tranche estimates
+    - hard-code USD until provider evidence says otherwise
+    - or introduce provider-currency handling before POD costs are considered production-ready
+  - whether the first real Printify cache should stay limited to base fulfillment cost, or also import provider-side shipping estimates in the same sync path
 
 ### `#45` Shopify charge sync completion scope
 

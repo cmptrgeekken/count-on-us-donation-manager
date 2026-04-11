@@ -10,18 +10,18 @@ test("provider connections can save and disconnect Printify credentials", async 
 
   await expect(page.getByRole("heading", { name: "Provider Connections" })).toBeVisible();
   await expect(page.getByText("Variants with SKU")).toBeVisible();
-  await expect(page.getByText("Printify API keys can be stored now.")).toBeVisible();
+  await expect(page.getByText("Connect Printify to validate credentials")).toBeVisible();
 
   await page.getByLabel("Shop label").fill("Fixture Printify Shop");
   await page.getByLabel("API key").fill("pk_live_fixture_printify_key_1234");
   await page.getByRole("button", { name: "Save Printify credentials" }).click();
 
   await expect(
-    page.getByText("Printify credentials validated and saved. Provider mapping and cost import still land in the next tranche.").last(),
+    page.getByText("Printify credentials validated and saved. Run a sync to import SKU matches and cached POD costs.").last(),
   ).toBeVisible();
   await expect(page.getByText("Stored credential hint: ****1234.")).toBeVisible();
   await expect(page.getByText("Connected account: Fixture Shop.")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Refresh provider state" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Sync Printify catalog" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Disconnect Printify" })).toBeVisible();
 
   await page.getByRole("button", { name: "Disconnect Printify" }).click();
