@@ -107,17 +107,20 @@ function buildOrderHistoryHref({
   startDate,
   endDate,
   cursor,
+  playwrightShop,
 }: {
   origin: string;
   startDate?: string;
   endDate?: string;
   cursor?: string | null;
+  playwrightShop?: string | null;
 }) {
   const params = new URLSearchParams();
   if (origin && origin !== "all") params.set("origin", origin);
   if (startDate) params.set("startDate", startDate);
   if (endDate) params.set("endDate", endDate);
   if (cursor) params.set("cursor", cursor);
+  if (playwrightShop) params.set("__playwrightShop", playwrightShop);
   const query = params.toString();
   return query ? `/app/order-history?${query}` : "/app/order-history";
 }
@@ -128,18 +131,21 @@ function FilterLink({
   label,
   startDate,
   endDate,
+  playwrightShop,
 }: {
   currentOrigin: string;
   targetOrigin: string;
   label: string;
   startDate?: string;
   endDate?: string;
+  playwrightShop?: string | null;
 }) {
   const isActive = currentOrigin === targetOrigin;
   const href = buildOrderHistoryHref({
     origin: targetOrigin,
     startDate,
     endDate,
+    playwrightShop,
   });
 
   return (
@@ -165,6 +171,7 @@ export default function OrderHistoryPage() {
   const { formatMoney } = useAppLocalization();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const playwrightShop = searchParams.get("__playwrightShop");
 
   function applyDateFilters(form: HTMLFormElement) {
     const formData = new FormData(form);
@@ -180,7 +187,8 @@ export default function OrderHistoryPage() {
     if (nextEndDate) params.set("endDate", nextEndDate);
     else params.delete("endDate");
 
-    navigate(`?${params.toString()}`);
+    const query = params.toString();
+    navigate(query ? `?${query}` : ".");
   }
 
   return (
@@ -193,14 +201,29 @@ export default function OrderHistoryPage() {
             <HelpText>Order History shows immutable financial snapshots captured at order time or later reconciliation. Net contribution here means revenue remaining after resolved production costs for the order lines.</HelpText>
             <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
               <strong>Origin filter</strong>
-              <FilterLink currentOrigin={origin} targetOrigin="all" label="All" startDate={startDate} endDate={endDate} />
-              <FilterLink currentOrigin={origin} targetOrigin="webhook" label="Webhook" startDate={startDate} endDate={endDate} />
+              <FilterLink
+                currentOrigin={origin}
+                targetOrigin="all"
+                label="All"
+                startDate={startDate}
+                endDate={endDate}
+                playwrightShop={playwrightShop}
+              />
+              <FilterLink
+                currentOrigin={origin}
+                targetOrigin="webhook"
+                label="Webhook"
+                startDate={startDate}
+                endDate={endDate}
+                playwrightShop={playwrightShop}
+              />
               <FilterLink
                 currentOrigin={origin}
                 targetOrigin="reconciliation"
                 label="Reconciliation"
                 startDate={startDate}
                 endDate={endDate}
+                playwrightShop={playwrightShop}
               />
             </div>
 
@@ -257,7 +280,7 @@ export default function OrderHistoryPage() {
                   <s-button type="submit" variant="secondary">
                     Apply dates
                   </s-button>
-                  <Link to={buildOrderHistoryHref({ origin })} style={{ alignSelf: "center" }}>
+                  <Link to={buildOrderHistoryHref({ origin, playwrightShop })} style={{ alignSelf: "center" }}>
                     Clear dates
                   </Link>
                 </div>
@@ -309,6 +332,7 @@ export default function OrderHistoryPage() {
                     startDate,
                     endDate,
                     cursor: nextCursor,
+                    playwrightShop,
                   })}
                 >
                   Next page

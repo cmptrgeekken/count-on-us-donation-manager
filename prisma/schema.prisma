@@ -211,7 +211,8 @@ model Variant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  costConfig VariantCostConfig?
+  costConfig        VariantCostConfig?
+  providerMappings  ProviderVariantMapping[]
 
   @@unique([shopId, shopifyId])
   @@index([shopId])
@@ -270,6 +271,61 @@ model VariantEquipmentLine {
 
   @@unique([configId, templateLineId])
   @@index([shopId])
+}
+
+model ProviderConnection {
+  id                   String   @id @default(cuid())
+  shopId               String
+  provider             String
+  authType             String
+  status               String   @default("configured")
+  displayName          String?
+  credentialsEncrypted String?
+  credentialHint       String?
+  lastSyncedAt         DateTime?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  mappings ProviderVariantMapping[]
+
+  @@unique([shopId, provider])
+  @@index([shopId, status])
+}
+
+model ProviderVariantMapping {
+  id                String             @id @default(cuid())
+  shopId            String
+  connectionId      String
+  connection        ProviderConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  variantId         String
+  variant           Variant            @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  provider          String
+  providerVariantId String?
+  providerSku       String?
+  matchMethod       String?
+  lastCostSyncedAt  DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  costLines ProviderCostCache[]
+
+  @@unique([connectionId, variantId])
+  @@index([shopId, provider])
+  @@index([variantId])
+}
+
+model ProviderCostCache {
+  id           String                 @id @default(cuid())
+  mappingId    String
+  mapping      ProviderVariantMapping @relation(fields: [mappingId], references: [id], onDelete: Cascade)
+  costLineType String
+  description  String?
+  amount       Decimal                @db.Decimal(10, 2)
+  currency     String                 @default("USD")
+  syncedAt     DateTime
+  createdAt    DateTime               @default(now())
+
+  @@index([mappingId, syncedAt])
 }
 
 // Phase 3 tables

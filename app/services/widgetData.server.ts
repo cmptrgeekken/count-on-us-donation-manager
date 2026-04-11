@@ -98,6 +98,26 @@ export type WidgetVariantPayload = {
     estimatedRate: string;
     estimatedAmount: string;
   };
+  reconciliation: {
+    estimatedTotal: string;
+    allocatedDonations: string;
+    retainedByShop: string;
+    labor: string;
+    materials: string;
+    equipment: string;
+    packaging: string;
+    pod: string;
+    mistakeBuffer: string;
+    shopifyFees: string;
+    taxReserve: string;
+    remainder: string;
+  };
+};
+
+type WidgetLineContext = {
+  variantShopifyId: string;
+  quantity: number;
+  lineSubtotal: Prisma.Decimal | null;
 };
 
 export type WidgetProductPayload = {
@@ -218,6 +238,7 @@ export async function buildWidgetProductPayload(
   shopId: string,
   productShopifyId: string,
   db = prisma,
+  lineContext?: WidgetLineContext,
 ): Promise<WidgetProductPayload | null> {
   const context = await loadWidgetProductContext(shopId, productShopifyId, db);
 
@@ -235,8 +256,12 @@ export async function buildWidgetProductPayload(
   const widgetTaxSuppressed = context.taxOffsetCache?.widgetTaxSuppressed ?? true;
   const currencyCode = context.shop.currency;
 
+  const productVariants = lineContext
+    ? context.product.variants.filter((variant) => variant.shopifyId === lineContext.variantShopifyId)
+    : context.product.variants;
+
   const variants = await Promise.all(
-    context.product.variants.map(async (variant) => {
+    productVariants.map(async (variant) => {
       const costs = await resolveCosts(
         shopId,
         variant.id,
@@ -245,8 +270,25 @@ export async function buildWidgetProductPayload(
         db as Parameters<typeof resolveCosts>[4],
       );
       const processingRate = context.shop.paymentRate ?? ZERO;
-      const processingFee = variant.price.mul(processingRate).add(PROCESSING_FLAT_FEE);
-      const preTaxContribution = nonNegative(variant.price.sub(costs.totalCost).sub(processingFee));
+      const quantity = new Prisma.Decimal(lineContext?.quantity ?? 1);
+      const estimatedTotal = lineContext?.lineSubtotal ?? variant.price.mul(quantity);
+      const laborCost = costs.laborCost.mul(quantity);
+      const materialCost = costs.materialCost.mul(quantity);
+      const equipmentCost = costs.equipmentCost.mul(quantity);
+      const packagingCost = costs.packagingCost;
+      const podCost = costs.podCost.mul(quantity);
+      const mistakeBufferAmount = costs.mistakeBufferAmount.mul(quantity);
+      const processingFee = estimatedTotal.mul(processingRate).add(PROCESSING_FLAT_FEE);
+      const preTaxContribution = nonNegative(
+        estimatedTotal
+          .sub(laborCost)
+          .sub(materialCost)
+          .sub(equipmentCost)
+          .sub(packagingCost)
+          .sub(podCost)
+          .sub(mistakeBufferAmount)
+          .sub(processingFee),
+      );
 
       const allocations = context.causeAssignments.map((assignment) => ({
         is501c3: assignment.cause.is501c3,
@@ -266,12 +308,29 @@ export async function buildWidgetProductPayload(
             taxDeductionMode: normalizedTaxDeductionMode,
           });
       const donationPool = nonNegative(preTaxContribution.sub(taxReserve.estimatedTaxReserve));
+      const assignedDonationTotal = context.causeAssignments.reduce(
+        (sum, assignment) => sum.add(donationPool.mul(assignment.percentage).div(100)),
+        ZERO,
+      );
+      const retainedByShop = nonNegative(donationPool.sub(assignedDonationTotal));
+      const attributedTotal = assignedDonationTotal
+        .add(retainedByShop)
+        .add(laborCost)
+        .add(materialCost)
+        .add(equipmentCost)
+        .add(packagingCost)
+        .add(podCost)
+        .add(mistakeBufferAmount)
+        .add(processingFee)
+        .add(taxReserve.estimatedTaxReserve);
+      const rawRemainder = estimatedTotal.sub(attributedTotal);
+      const remainder = rawRemainder.abs().lessThan(new Prisma.Decimal("0.005")) ? ZERO : rawRemainder;
 
       return {
         variantId: variant.shopifyId,
-        price: formatMoney(variant.price),
+        price: formatMoney(estimatedTotal),
         currencyCode,
-        laborCost: formatMoney(costs.laborCost),
+        laborCost: formatMoney(laborCost),
         materialLines: costs.materialLines
           .filter((line) => line.type === "production")
           .map((line) => ({
@@ -289,8 +348,8 @@ export async function buildWidgetProductPayload(
             name: line.name,
             lineCost: formatMoney(line.lineCost),
           })),
-        podCostTotal: formatMoney(costs.podCost),
-        mistakeBufferAmount: formatMoney(costs.mistakeBufferAmount),
+        podCostTotal: formatMoney(podCost),
+        mistakeBufferAmount: formatMoney(mistakeBufferAmount),
         shopifyFees: {
           processingRate: formatPercent(context.shop.paymentRate),
           processingFlatFee: formatMoney(PROCESSING_FLAT_FEE),
@@ -310,6 +369,20 @@ export async function buildWidgetProductPayload(
           suppressed: widgetTaxSuppressed,
           estimatedRate: formatPercent(context.shop.effectiveTaxRate),
           estimatedAmount: widgetTaxSuppressed ? "0.00" : formatMoney(taxReserve.estimatedTaxReserve),
+        },
+        reconciliation: {
+          estimatedTotal: formatMoney(estimatedTotal),
+          allocatedDonations: formatMoney(assignedDonationTotal),
+          retainedByShop: formatMoney(retainedByShop),
+          labor: formatMoney(laborCost),
+          materials: formatMoney(materialCost),
+          equipment: formatMoney(equipmentCost),
+          packaging: formatMoney(packagingCost),
+          pod: formatMoney(podCost),
+          mistakeBuffer: formatMoney(mistakeBufferAmount),
+          shopifyFees: formatMoney(processingFee),
+          taxReserve: widgetTaxSuppressed ? "0.00" : formatMoney(taxReserve.estimatedTaxReserve),
+          remainder: formatMoney(remainder),
         },
       };
     }),

@@ -30,6 +30,7 @@ export const loader = async () => {
       shopifyDomain: FIXTURE_SHOP,
       catalogSynced: true,
       paymentRate: new Prisma.Decimal("0.0290"),
+      managedMarketsEnableDate: null,
       wizardStep: 0,
     },
     create: {
@@ -38,6 +39,7 @@ export const loader = async () => {
       currency: "USD",
       catalogSynced: true,
       paymentRate: new Prisma.Decimal("0.0290"),
+      managedMarketsEnableDate: null,
       wizardStep: 0,
     },
   });

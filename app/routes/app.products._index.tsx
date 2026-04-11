@@ -1,23 +1,48 @@
-import type { LoaderFunctionArgs } from "@remix-run/node";
-import { Link, useLoaderData, useRouteError } from "@remix-run/react";
+import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { prisma } from "../db.server";
-import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { jobQueue } from "../jobs/queue.server";
+import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
 
-  const products = await prisma.product.findMany({
-    where: { shopId },
-    orderBy: { title: "asc" },
-    include: {
-      _count: {
-        select: { causeAssignments: true, variants: true },
+  const [shop, latestCatalogSync, products] = await Promise.all([
+    prisma.shop.findUnique({
+      where: { shopId },
+      select: { catalogSynced: true },
+    }),
+    prisma.auditLog.findFirst({
+      where: {
+        shopId,
+        action: "CATALOG_SYNC_COMPLETED",
       },
-    },
-  });
+      orderBy: { createdAt: "desc" },
+      select: {
+        createdAt: true,
+        payload: true,
+      },
+    }),
+    prisma.product.findMany({
+      where: { shopId },
+      orderBy: { title: "asc" },
+      include: {
+        _count: {
+          select: { causeAssignments: true, variants: true },
+        },
+      },
+    }),
+  ]);
 
   return Response.json({
+    catalogSynced: shop?.catalogSynced ?? false,
+    latestCatalogSync: latestCatalogSync
+      ? {
+          completedAt: latestCatalogSync.createdAt.toISOString(),
+          payload: latestCatalogSync.payload,
+        }
+      : null,
     products: products.map((product) => ({
       id: product.id,
       title: product.title,
@@ -26,6 +51,46 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       variantCount: product._count.variants,
       causeAssignmentCount: product._count.causeAssignments,
     })),
+  });
+};
+
+export const action = async ({ request }: ActionFunctionArgs) => {
+  const { session } = await authenticateAdminRequest(request);
+  const shopId = session.shop;
+  const formData = await request.formData();
+  const intent = formData.get("intent")?.toString();
+
+  if (intent !== "sync-catalog") {
+    return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      shopId,
+      entity: "Shop",
+      action: "CATALOG_SYNC_REQUESTED",
+      actor: "merchant",
+      payload: {
+        source: "products_index",
+      },
+    },
+  });
+
+  if (!isPlaywrightBypassRequest(request)) {
+    await jobQueue.send(
+      "catalog.sync",
+      { shopId },
+      {
+        singletonKey: shopId,
+        singletonSeconds: 15 * 60,
+      },
+    );
+  }
+
+  return Response.json({
+    ok: true,
+    message:
+      "Catalog sync queued. Shopify products and variants will be added or refreshed without deleting your existing local seed data.",
   });
 };
 
@@ -38,16 +103,67 @@ type ProductRow = {
   causeAssignmentCount: number;
 };
 
+type SyncActionData = {
+  ok: boolean;
+  message: string;
+};
+
+function formatSyncDate(value: string | null) {
+  if (!value) return "Not yet completed";
+  return new Date(value).toLocaleString();
+}
+
 export default function ProductsPage() {
-  const { products } = useLoaderData<typeof loader>();
+  const { catalogSynced, latestCatalogSync, products } = useLoaderData<typeof loader>();
+  const syncFetcher = useFetcher<SyncActionData>();
 
   return (
     <>
       <ui-title-bar title="Products" />
       <s-page>
+        <s-section heading="Catalog sync">
+          <div style={{ display: "grid", gap: "0.75rem" }}>
+            <s-text>
+              Sync products and variants from Shopify without removing locally seeded test data. Existing Shopify-backed rows are
+              refreshed in place by `shopifyId`; unrelated local rows are left alone.
+            </s-text>
+            <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+              <div>
+                <strong>Status</strong>
+                <div>{catalogSynced ? "Catalog synced" : "Initial catalog sync still pending"}</div>
+              </div>
+              <div>
+                <strong>Last completed sync</strong>
+                <div>{formatSyncDate(latestCatalogSync?.completedAt ?? null)}</div>
+              </div>
+            </div>
+            {syncFetcher.data?.ok ? (
+              <s-banner tone="success">
+                <s-text>{syncFetcher.data.message}</s-text>
+              </s-banner>
+            ) : null}
+            {syncFetcher.data && !syncFetcher.data.ok ? (
+              <s-banner tone="critical">
+                <s-text>{syncFetcher.data.message}</s-text>
+              </s-banner>
+            ) : null}
+            <syncFetcher.Form method="post">
+              <input type="hidden" name="intent" value="sync-catalog" />
+              <s-button type="submit" variant="primary" disabled={syncFetcher.state !== "idle"}>
+                Sync catalog now
+              </s-button>
+            </syncFetcher.Form>
+          </div>
+        </s-section>
+
         {products.length === 0 ? (
           <s-section heading="No synced products">
-            <s-text>Catalog sync must complete before product-level Cause assignments can be configured.</s-text>
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <s-text>Catalog sync must complete before product-level Cause assignments can be configured.</s-text>
+              <s-text color="subdued">
+                Use the sync action above to import your Shopify catalog while keeping any seed data you already have.
+              </s-text>
+            </div>
           </s-section>
         ) : (
           <s-section padding="none">

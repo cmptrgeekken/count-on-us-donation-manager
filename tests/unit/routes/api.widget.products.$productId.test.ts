@@ -12,9 +12,7 @@ const { checkRateLimit } = vi.hoisted(() => ({
   checkRateLimit: vi.fn(),
 }));
 const prisma = {
-  shop: {
-    findUnique: vi.fn(),
-  },
+  $queryRaw: vi.fn(),
 };
 
 vi.mock("../../../app/utils/public-auth.server", () => ({
@@ -41,16 +39,14 @@ describe("api.widget.products.$productId loader", () => {
     buildWidgetProductMetadata.mockReset();
     buildWidgetProductPayload.mockReset();
     checkRateLimit.mockReset();
-    prisma.shop.findUnique.mockReset();
+    prisma.$queryRaw.mockReset();
   });
 
   it("returns widget payloads for authenticated shops", async () => {
     authenticatePublicAppProxyRequest.mockResolvedValue({
       shopifyDomain: "fixture-shop.myshopify.com",
     });
-    prisma.shop.findUnique.mockResolvedValue({
-      shopId: "shop-1",
-    });
+    prisma.$queryRaw.mockResolvedValue([{ shopId: "shop-1" }]);
     checkRateLimit.mockReturnValue({
       allowed: true,
       headers: new Headers({
@@ -94,9 +90,7 @@ describe("api.widget.products.$productId loader", () => {
     authenticatePublicAppProxyRequest.mockResolvedValue({
       shopifyDomain: "fixture-shop.myshopify.com",
     });
-    prisma.shop.findUnique.mockResolvedValue({
-      shopId: "shop-1",
-    });
+    prisma.$queryRaw.mockResolvedValue([{ shopId: "shop-1" }]);
     checkRateLimit.mockReturnValue({
       allowed: false,
       headers: new Headers({
@@ -126,9 +120,7 @@ describe("api.widget.products.$productId loader", () => {
     authenticatePublicAppProxyRequest.mockResolvedValue({
       shopifyDomain: "fixture-shop.myshopify.com",
     });
-    prisma.shop.findUnique.mockResolvedValue({
-      shopId: "shop-1",
-    });
+    prisma.$queryRaw.mockResolvedValue([{ shopId: "shop-1" }]);
     checkRateLimit.mockReturnValue({
       allowed: true,
       headers: new Headers(),
@@ -155,9 +147,7 @@ describe("api.widget.products.$productId loader", () => {
     authenticatePublicAppProxyRequest.mockResolvedValue({
       shopifyDomain: "fixture-shop.myshopify.com",
     });
-    prisma.shop.findUnique.mockResolvedValue({
-      shopId: "shop-1",
-    });
+    prisma.$queryRaw.mockResolvedValue([{ shopId: "shop-1" }]);
     checkRateLimit.mockReturnValue({
       allowed: true,
       headers: new Headers(),
