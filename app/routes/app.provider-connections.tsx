@@ -7,6 +7,7 @@ import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/ad
 import {
   disconnectProviderConnection,
   getProviderConnectionsPageData,
+  savePrintifyManualMapping,
   savePrintifyConnection,
 } from "../services/providerConnections.server";
 import { queueProviderSyncRun } from "../services/providerSync.server";
@@ -132,6 +133,26 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
+  if (intent === "save-printify-mapping") {
+    try {
+      await savePrintifyManualMapping({
+        shopId: session.shop,
+        variantId: formData.get("variantId")?.toString() ?? "",
+        catalogVariantId: formData.get("catalogVariantId")?.toString() ?? "",
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return Response.json({
+      ok: true,
+      message: "Printify mapping saved. The selected variant will now use provider-backed POD costs.",
+    });
+  }
+
   if (intent === "disconnect-provider") {
     const provider = formData.get("provider")?.toString();
     if (provider !== "printful" && provider !== "printify") {
@@ -181,9 +202,17 @@ function formatEstimatedExpiry(value: string | null) {
 }
 
 export default function ProviderConnectionsPage() {
-  const { totalVariantCount, variantsWithSkuCount, printifyUnresolvedVariants, summaries } = useLoaderData<typeof loader>();
+  const {
+    totalVariantCount,
+    variantsWithSkuCount,
+    printifyCatalogVariants,
+    printifyDiagnostics,
+    printifyUnresolvedVariants,
+    summaries,
+  } = useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string }>();
   const syncFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const mappingFetcher = useFetcher<{ ok: boolean; message: string }>();
   const disconnectFetcher = useFetcher<{ ok: boolean; message: string }>();
   const statusRef = useRef<HTMLDivElement>(null);
   const printify = summaries.find((summary: (typeof summaries)[number]) => summary.provider === "printify");
@@ -192,9 +221,11 @@ export default function ProviderConnectionsPage() {
   const [printifyApiKey, setPrintifyApiKey] = useState("");
   const [printifyDisplayName, setPrintifyDisplayName] = useState(printify?.displayName ?? "");
   const [printifyFormError, setPrintifyFormError] = useState<string | null>(null);
+  type PrintifyCatalogVariant = (typeof printifyCatalogVariants)[number];
   const saveErrorMessage = printifyFormError ?? (saveFetcher.data && !saveFetcher.data.ok ? saveFetcher.data.message : null);
   const globalStatus =
     disconnectFetcher.data ??
+    mappingFetcher.data ??
     syncFetcher.data ??
     (saveFetcher.data?.ok ? saveFetcher.data : null);
 
@@ -218,6 +249,15 @@ export default function ProviderConnectionsPage() {
     formData.append("intent", "refresh-provider");
     formData.append("provider", "printify");
     syncFetcher.submit(formData, { method: "post" });
+  }
+
+  function getCatalogOptionsForVariant(variant: (typeof printifyUnresolvedVariants)[number]) {
+    const preferredIds = new Set(variant.suggestedCatalogVariantIds);
+    const preferred = printifyCatalogVariants.filter((catalogVariant: PrintifyCatalogVariant) => preferredIds.has(catalogVariant.id));
+    const fallback = printifyCatalogVariants.filter(
+      (catalogVariant: PrintifyCatalogVariant) => !preferredIds.has(catalogVariant.id) && !catalogVariant.isMapped,
+    );
+    return [...preferred, ...fallback].slice(0, 50);
   }
 
   return (
@@ -327,6 +367,29 @@ export default function ProviderConnectionsPage() {
               <div>
                 <strong>Cached POD lines</strong>
                 <div>{printify?.latestCachedCostCount ?? 0}</div>
+              </div>
+              <div>
+                <strong>Cached provider variants</strong>
+                <div>{printifyDiagnostics.providerCatalogVariantCount}</div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+              <div>
+                <strong>Local missing SKU</strong>
+                <div>{printifyDiagnostics.localMissingSkuCount}</div>
+              </div>
+              <div>
+                <strong>Local duplicate SKU groups</strong>
+                <div>{printifyDiagnostics.localDuplicateSkuCount}</div>
+              </div>
+              <div>
+                <strong>Provider missing SKU</strong>
+                <div>{printifyDiagnostics.providerMissingSkuCount}</div>
+              </div>
+              <div>
+                <strong>Provider duplicate SKU groups</strong>
+                <div>{printifyDiagnostics.providerDuplicateSkuCount}</div>
               </div>
             </div>
 
@@ -522,14 +585,72 @@ export default function ProviderConnectionsPage() {
                       <strong>
                         {variant.productTitle} · {variant.variantTitle}
                       </strong>
-                      <s-text>SKU: {variant.sku}</s-text>
+                      <s-text>SKU: {variant.sku ?? "Missing SKU"}</s-text>
                       <s-text>{variant.reason}</s-text>
+                      {getCatalogOptionsForVariant(variant).length > 0 ? (
+                        <mappingFetcher.Form method="post">
+                          <input type="hidden" name="intent" value="save-printify-mapping" />
+                          <input type="hidden" name="variantId" value={variant.variantId} />
+                          <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.5rem" }}>
+                            <label htmlFor={`catalog-variant-${variant.variantId}`}>Manual Printify mapping</label>
+                            <select
+                              id={`catalog-variant-${variant.variantId}`}
+                              name="catalogVariantId"
+                              defaultValue={getCatalogOptionsForVariant(variant)[0]?.id ?? ""}
+                              style={{
+                                width: "100%",
+                                boxSizing: "border-box",
+                                padding: "0.75rem",
+                                borderRadius: "0.75rem",
+                                border: "1px solid var(--p-color-border, #c9cccf)",
+                                background: "var(--p-color-bg-surface, #fff)",
+                                color: "var(--p-color-text, #303030)",
+                                font: "inherit",
+                              }}
+                            >
+                              {getCatalogOptionsForVariant(variant).map((catalogVariant) => (
+                                <option key={catalogVariant.id} value={catalogVariant.id}>
+                                  {catalogVariant.providerProductTitle ?? "Untitled product"} · {catalogVariant.providerVariantTitle ?? "Untitled variant"}
+                                  {catalogVariant.providerSku ? ` · SKU ${catalogVariant.providerSku}` : " · No SKU"}
+                                  {catalogVariant.baseCost ? ` · ${catalogVariant.baseCost} ${catalogVariant.currency}` : ""}
+                                  {catalogVariant.isMapped ? " · already mapped" : ""}
+                                </option>
+                              ))}
+                            </select>
+                            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+                              <button
+                                type="submit"
+                                disabled={mappingFetcher.state !== "idle"}
+                                style={{
+                                  appearance: "none",
+                                  border: 0,
+                                  borderRadius: "999px",
+                                  padding: "0.7rem 1.1rem",
+                                  background: "var(--p-color-bg-fill-brand, #303030)",
+                                  color: "var(--p-color-text-on-color, #fff)",
+                                  font: "inherit",
+                                  fontWeight: 600,
+                                  cursor: mappingFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                                  opacity: mappingFetcher.state !== "idle" ? 0.6 : 1,
+                                }}
+                              >
+                                Save manual mapping
+                              </button>
+                              <s-text>Choose the Printify variant that should drive POD cost resolution for this Shopify variant.</s-text>
+                            </div>
+                          </div>
+                        </mappingFetcher.Form>
+                      ) : (
+                        <s-banner tone="info">
+                          <s-text>No cached Printify variants are available to map yet. Run a sync first, then review again.</s-text>
+                        </s-banner>
+                      )}
                     </div>
                   ))}
                 </div>
                 <s-text>
-                  Unresolved variants continue using manual cost configuration where available. Manual provider mapping lands
-                  in a follow-on slice.
+                  Unresolved variants continue using manual cost configuration where available until a provider mapping is
+                  saved.
                 </s-text>
               </div>
             ) : null}

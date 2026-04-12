@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   disconnectProviderConnection,
   getProviderConnectionsPageData,
+  savePrintifyManualMapping,
   savePrintifyConnection,
 } from "./providerConnections.server";
 
@@ -69,8 +70,27 @@ describe("providerConnections.server", () => {
             variantId: "variant-1",
             status: "mapped",
             lastSyncError: null,
+            providerSku: "SKU-READY-001",
+            providerVariantId: "provider-variant-1",
           },
         ]),
+      },
+      providerCatalogVariant: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "catalog-variant-1",
+            providerProductTitle: "Provider Fixture Product",
+            providerVariantTitle: "Provider Variant",
+            providerSku: "SKU-READY-001",
+            providerVariantId: "provider-variant-1",
+            baseCost: { toString: () => "12.99" },
+            currency: "USD",
+            syncedAt: new Date("2026-04-09T18:00:00Z"),
+          },
+        ]),
+      },
+      providerCostCache: {
+        createMany: vi.fn(),
       },
       auditLog: {},
     };
@@ -90,6 +110,14 @@ describe("providerConnections.server", () => {
       expect.objectContaining({
         variantId: "variant-2",
         sku: "SKU-NEEDS-REVIEW",
+      }),
+    ]);
+    expect(result.printifyDiagnostics.providerCatalogVariantCount).toBe(1);
+    expect(result.printifyCatalogVariants).toEqual([
+      expect.objectContaining({
+        id: "catalog-variant-1",
+        providerVariantId: "provider-variant-1",
+        isMapped: true,
       }),
     ]);
     expect(result.summaries.find((summary) => summary.provider === "printful")?.configured).toBe(false);
@@ -112,6 +140,12 @@ describe("providerConnections.server", () => {
       },
       providerVariantMapping: {
         findMany: vi.fn(),
+      },
+      providerCatalogVariant: {
+        findMany: vi.fn(),
+      },
+      providerCostCache: {
+        createMany: vi.fn(),
       },
       providerSyncRun: {},
       variant: {
@@ -158,6 +192,12 @@ describe("providerConnections.server", () => {
       providerVariantMapping: {
         findMany: vi.fn(),
       },
+      providerCatalogVariant: {
+        findMany: vi.fn(),
+      },
+      providerCostCache: {
+        createMany: vi.fn(),
+      },
       providerSyncRun: {},
       variant: {
         count: vi.fn(),
@@ -179,5 +219,81 @@ describe("providerConnections.server", () => {
     expect(findUnique).toHaveBeenCalledOnce();
     expect(deleteConnection).toHaveBeenCalledOnce();
     expect(createAudit).toHaveBeenCalledOnce();
+  });
+
+  it("saves a manual Printify mapping from a cached provider catalog variant", async () => {
+    const upsertMapping = vi.fn().mockResolvedValue({ id: "mapping-1" });
+    const createManyCostCache = vi.fn().mockResolvedValue({ count: 1 });
+    const createAudit = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      providerConnection: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "connection-1",
+          status: "validated",
+        }),
+      },
+      variant: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "variant-1",
+          shopId: "fixture.myshopify.com",
+        }),
+      },
+      providerCatalogVariant: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "catalog-variant-1",
+          shopId: "fixture.myshopify.com",
+          connectionId: "connection-1",
+          provider: "printify",
+          providerProductId: "prod-1",
+          providerProductTitle: "Provider Product",
+          providerVariantId: "provider-variant-1",
+          providerVariantTitle: "Provider Variant",
+          providerSku: "SKU-MANUAL-001",
+          baseCost: { toString: () => "14.50" },
+          currency: "USD",
+          sourceUpdatedAt: new Date("2026-04-10T10:00:00Z"),
+          syncedAt: new Date("2026-04-10T12:00:00Z"),
+        }),
+        findMany: vi.fn(),
+      },
+      providerVariantMapping: {
+        upsert: upsertMapping,
+        findMany: vi.fn(),
+      },
+      providerCostCache: {
+        createMany: createManyCostCache,
+      },
+      providerSyncRun: {},
+      auditLog: {
+        create: createAudit,
+      },
+    };
+
+    await savePrintifyManualMapping(
+      {
+        shopId: "fixture.myshopify.com",
+        variantId: "variant-1",
+        catalogVariantId: "catalog-variant-1",
+      },
+      db as never,
+    );
+
+    expect(upsertMapping).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: expect.objectContaining({
+          providerVariantId: "provider-variant-1",
+          matchMethod: "manual",
+          status: "mapped",
+        }),
+      }),
+    );
+    expect(createManyCostCache).toHaveBeenCalledOnce();
+    expect(createAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "PRINTIFY_MAPPING_SAVED",
+        }),
+      }),
+    );
   });
 });

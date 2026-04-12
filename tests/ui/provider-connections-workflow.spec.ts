@@ -48,3 +48,25 @@ test("provider connections show a visible validation error when Printify API key
   await expect(page.getByText("Printify API key is required.").last()).toBeVisible();
   await expect(page.getByRole("button", { name: "Save Printify credentials" })).toBeVisible();
 });
+
+test("provider connections can save a manual Printify mapping for an unresolved variant", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/provider-connections-bootstrap?mode=manual-review");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.providerConnectionsUrl);
+
+  const manualMappingCard = page.locator("div").filter({ hasText: "Manual mapping variant" }).filter({ hasText: "No Printify SKU match found in the latest sync." }).first();
+  await expect(manualMappingCard).toBeVisible();
+
+  const manualMappingSelect = page.getByLabel("Manual Printify mapping").nth(1);
+  await expect(manualMappingSelect).toBeVisible();
+  await manualMappingSelect.selectOption({ index: 0 });
+  await page.getByRole("button", { name: "Save manual mapping" }).nth(1).click();
+
+  await expect(
+    page.locator("s-banner").getByText(
+      "Printify mapping saved. The selected variant will now use provider-backed POD costs.",
+    ),
+  ).toBeVisible();
+});

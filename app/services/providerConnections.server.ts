@@ -4,7 +4,13 @@ import { validatePrintifyApiKey, PrintifyValidationError } from "./printify.serv
 
 type ProviderDbClient = Pick<
   typeof prisma,
-  "providerConnection" | "providerVariantMapping" | "variant" | "auditLog" | "providerSyncRun"
+  | "providerConnection"
+  | "providerVariantMapping"
+  | "providerCatalogVariant"
+  | "providerCostCache"
+  | "variant"
+  | "auditLog"
+  | "providerSyncRun"
 >;
 
 export type ProviderConnectionSummary = {
@@ -32,12 +38,31 @@ export type ProviderConnectionSummary = {
 export type ProviderConnectionsPageData = {
   totalVariantCount: number;
   variantsWithSkuCount: number;
+  printifyDiagnostics: {
+    localMissingSkuCount: number;
+    localDuplicateSkuCount: number;
+    providerMissingSkuCount: number;
+    providerDuplicateSkuCount: number;
+    providerCatalogVariantCount: number;
+  };
+  printifyCatalogVariants: Array<{
+    id: string;
+    providerProductTitle: string | null;
+    providerVariantTitle: string | null;
+    providerSku: string | null;
+    providerVariantId: string;
+    baseCost: string | null;
+    currency: string;
+    isMapped: boolean;
+    syncedAt: string;
+  }>;
   printifyUnresolvedVariants: Array<{
     variantId: string;
     productTitle: string;
     variantTitle: string;
-    sku: string;
+    sku: string | null;
     reason: string;
+    suggestedCatalogVariantIds: string[];
   }>;
   summaries: ProviderConnectionSummary[];
 };
@@ -56,7 +81,7 @@ export async function getProviderConnectionsPageData(
   shopId: string,
   db: ProviderDbClient = prisma,
 ): Promise<ProviderConnectionsPageData> {
-  const [connections, totalVariantCount, variantsWithSkuCount, variants, printifyMappings] = await Promise.all([
+  const [connections, totalVariantCount, variantsWithSkuCount, variants, printifyMappings, printifyCatalogVariants] = await Promise.all([
     db.providerConnection.findMany({
       where: { shopId },
       select: {
@@ -112,6 +137,29 @@ export async function getProviderConnectionsPageData(
         variantId: true,
         status: true,
         lastSyncError: true,
+        providerSku: true,
+        providerVariantId: true,
+      },
+    }),
+    db.providerCatalogVariant.findMany({
+      where: {
+        shopId,
+        provider: "printify",
+      },
+      orderBy: [
+        { providerProductTitle: "asc" },
+        { providerVariantTitle: "asc" },
+        { providerVariantId: "asc" },
+      ],
+      select: {
+        id: true,
+        providerProductTitle: true,
+        providerVariantTitle: true,
+        providerSku: true,
+        providerVariantId: true,
+        baseCost: true,
+        currency: true,
+        syncedAt: true,
       },
     }),
   ]);
@@ -192,38 +240,71 @@ export async function getProviderConnectionsPageData(
   const printifyMappingByVariantId = new Map(
     printifyMappings.map((mapping) => [mapping.variantId, mapping]),
   );
-  const skuCounts = new Map<string, number>();
+  const localSkuCounts = new Map<string, number>();
+  const providerSkuCounts = new Map<string, number>();
+  const mappedProviderVariantIds = new Set<string>();
 
   for (const variant of variants) {
     const sku = variant.sku?.trim();
     if (!sku) continue;
 
-    skuCounts.set(sku, (skuCounts.get(sku) ?? 0) + 1);
+    localSkuCounts.set(sku, (localSkuCounts.get(sku) ?? 0) + 1);
+  }
+
+  for (const mapping of printifyMappings) {
+    const providerVariantId = mapping.providerVariantId?.trim();
+    if (mapping.status === "mapped" && providerVariantId) {
+      mappedProviderVariantIds.add(providerVariantId);
+    }
+  }
+
+  for (const variant of printifyCatalogVariants) {
+    const sku = variant.providerSku?.trim();
+    if (!sku) continue;
+
+    providerSkuCounts.set(sku, (providerSkuCounts.get(sku) ?? 0) + 1);
   }
 
   const printifyUnresolvedVariants = variants.flatMap((variant) => {
     const sku = variant.sku?.trim();
-    if (!sku) {
-      return [];
-    }
-
     const mapping = printifyMappingByVariantId.get(variant.id);
     if (mapping?.status === "mapped") {
       return [];
     }
 
-    const reason =
-      (skuCounts.get(sku) ?? 0) > 1
-        ? "Duplicate SKU prevents automatic Printify matching for this variant."
-        : mapping?.lastSyncError?.trim() || "No Printify SKU match found in the latest sync.";
+    let reason = mapping?.lastSyncError?.trim() || "No Printify SKU match found in the latest sync.";
+    if (!sku) {
+      reason = "This variant is missing a Shopify SKU, so it cannot be auto-matched. Manual mapping is required for provider-backed POD costs.";
+    } else if ((localSkuCounts.get(sku) ?? 0) > 1) {
+      reason = "Duplicate Shopify SKU prevents automatic Printify matching for this variant.";
+    } else if ((providerSkuCounts.get(sku) ?? 0) > 1) {
+      reason = "Multiple Printify variants share this SKU, so the match needs merchant review.";
+    }
+
+    const suggestedCatalogVariantIds = printifyCatalogVariants
+      .filter((catalogVariant) => {
+        if (mappedProviderVariantIds.has(catalogVariant.providerVariantId)) {
+          return false;
+        }
+
+        const providerSku = catalogVariant.providerSku?.trim() || null;
+        if (!sku || !providerSku) {
+          return true;
+        }
+
+        return providerSku === sku;
+      })
+      .slice(0, 25)
+      .map((catalogVariant) => catalogVariant.id);
 
     return [
       {
         variantId: variant.id,
         productTitle: variant.product.title,
         variantTitle: variant.title,
-        sku,
+        sku: sku ?? null,
         reason,
+        suggestedCatalogVariantIds,
       },
     ];
   });
@@ -231,6 +312,24 @@ export async function getProviderConnectionsPageData(
   return {
     totalVariantCount,
     variantsWithSkuCount,
+    printifyDiagnostics: {
+      localMissingSkuCount: totalVariantCount - variantsWithSkuCount,
+      localDuplicateSkuCount: Array.from(localSkuCounts.values()).filter((count) => count > 1).length,
+      providerMissingSkuCount: printifyCatalogVariants.filter((variant) => !variant.providerSku?.trim()).length,
+      providerDuplicateSkuCount: Array.from(providerSkuCounts.values()).filter((count) => count > 1).length,
+      providerCatalogVariantCount: printifyCatalogVariants.length,
+    },
+    printifyCatalogVariants: printifyCatalogVariants.map((variant) => ({
+      id: variant.id,
+      providerProductTitle: variant.providerProductTitle,
+      providerVariantTitle: variant.providerVariantTitle,
+      providerSku: variant.providerSku,
+      providerVariantId: variant.providerVariantId,
+      baseCost: variant.baseCost?.toString() ?? null,
+      currency: variant.currency,
+      isMapped: mappedProviderVariantIds.has(variant.providerVariantId),
+      syncedAt: variant.syncedAt.toISOString(),
+    })),
     printifyUnresolvedVariants,
     summaries,
   };
@@ -391,4 +490,154 @@ export async function disconnectProviderConnection(
       },
     },
   });
+}
+
+export async function savePrintifyManualMapping(
+  input: {
+    shopId: string;
+    variantId: string;
+    catalogVariantId: string;
+  },
+  db: ProviderDbClient = prisma,
+): Promise<{ mappingId: string }> {
+  const [connection, variant, catalogVariant] = await Promise.all([
+    db.providerConnection.findUnique({
+      where: {
+        shopId_provider: {
+          shopId: input.shopId,
+          provider: "printify",
+        },
+      },
+      select: {
+        id: true,
+        status: true,
+      },
+    }),
+    db.variant.findFirst({
+      where: {
+        shopId: input.shopId,
+        id: input.variantId,
+      },
+      select: {
+        id: true,
+        shopId: true,
+      },
+    }),
+    db.providerCatalogVariant.findFirst({
+      where: {
+        shopId: input.shopId,
+        id: input.catalogVariantId,
+      },
+      select: {
+        id: true,
+        shopId: true,
+        connectionId: true,
+        provider: true,
+        providerProductId: true,
+        providerProductTitle: true,
+        providerVariantId: true,
+        providerVariantTitle: true,
+        providerSku: true,
+        baseCost: true,
+        currency: true,
+        sourceUpdatedAt: true,
+        syncedAt: true,
+      },
+    }),
+  ]);
+
+  if (!connection) {
+    throw new Response("Printify connection not found.", { status: 404 });
+  }
+
+  if (!variant || variant.shopId !== input.shopId) {
+    throw new Response("Variant not found.", { status: 404 });
+  }
+
+  if (
+    !catalogVariant ||
+    catalogVariant.shopId !== input.shopId ||
+    catalogVariant.connectionId !== connection.id ||
+    catalogVariant.provider !== "printify"
+  ) {
+    throw new Response("Printify catalog variant not found.", { status: 404 });
+  }
+
+  const mapping = await db.providerVariantMapping.upsert({
+    where: {
+      connectionId_variantId: {
+        connectionId: connection.id,
+        variantId: variant.id,
+      },
+    },
+    update: {
+      provider: "printify",
+      status: "mapped",
+      providerProductId: catalogVariant.providerProductId,
+      providerProductTitle: catalogVariant.providerProductTitle,
+      providerVariantId: catalogVariant.providerVariantId,
+      providerVariantTitle: catalogVariant.providerVariantTitle,
+      providerSku: catalogVariant.providerSku,
+      matchMethod: "manual",
+      lastCostSyncedAt: catalogVariant.syncedAt,
+      lastSyncError: null,
+    },
+    create: {
+      shopId: input.shopId,
+      connectionId: connection.id,
+      variantId: variant.id,
+      provider: "printify",
+      status: "mapped",
+      providerProductId: catalogVariant.providerProductId,
+      providerProductTitle: catalogVariant.providerProductTitle,
+      providerVariantId: catalogVariant.providerVariantId,
+      providerVariantTitle: catalogVariant.providerVariantTitle,
+      providerSku: catalogVariant.providerSku,
+      matchMethod: "manual",
+      lastCostSyncedAt: catalogVariant.syncedAt,
+      lastSyncError: null,
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  if (catalogVariant.baseCost) {
+    await db.providerCostCache.createMany({
+      data: [
+        {
+          mappingId: mapping.id,
+          costLineType: "base_fulfillment",
+          description:
+            catalogVariant.providerVariantTitle ??
+            catalogVariant.providerProductTitle ??
+            "Printify fulfillment cost",
+          amount: catalogVariant.baseCost,
+          currency: catalogVariant.currency,
+          syncedAt: catalogVariant.syncedAt,
+          sourceUpdatedAt: catalogVariant.sourceUpdatedAt,
+          staleReason: null,
+        },
+      ],
+    });
+  }
+
+  await db.auditLog.create({
+    data: {
+      shopId: input.shopId,
+      entity: "ProviderVariantMapping",
+      entityId: mapping.id,
+      action: "PRINTIFY_MAPPING_SAVED",
+      actor: "merchant",
+      payload: {
+        provider: "printify",
+        variantId: input.variantId,
+        providerVariantId: catalogVariant.providerVariantId,
+        providerSku: catalogVariant.providerSku,
+        matchMethod: "manual",
+      },
+    },
+  });
+
+  return { mappingId: mapping.id };
 }

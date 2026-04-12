@@ -51,6 +51,7 @@ describe("providerSync.server", () => {
       .mockResolvedValueOnce(undefined);
     const updateConnection = vi.fn().mockResolvedValue(undefined);
     const upsertMapping = vi.fn().mockResolvedValue({ id: "mapping_1" });
+    const upsertCatalogVariant = vi.fn().mockResolvedValue({ id: "catalog_variant_1" });
     const updateManyMappings = vi.fn().mockResolvedValue({ count: 0 });
     const createManyCostCache = vi.fn().mockResolvedValue({ count: 1 });
     const createAudit = vi.fn().mockResolvedValue(undefined);
@@ -130,6 +131,9 @@ describe("providerSync.server", () => {
         upsert: upsertMapping,
         updateMany: updateManyMappings,
       },
+      providerCatalogVariant: {
+        upsert: upsertCatalogVariant,
+      },
       providerCostCache: {
         createMany: createManyCostCache,
       },
@@ -170,6 +174,40 @@ describe("providerSync.server", () => {
           providerVariantId: "9001",
           providerSku: "SKU-READY-001",
           matchMethod: "sku",
+        }),
+      }),
+    );
+    expect(upsertCatalogVariant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          connectionId_providerVariantId: {
+            connectionId: "connection_1",
+            providerVariantId: "9001",
+          },
+        },
+        update: expect.objectContaining({
+          providerProductId: "prod_1",
+          providerSku: "SKU-READY-001",
+          providerProductTitle: "Fixture Tee",
+          providerVariantTitle: "Black / M",
+          blueprintId: "10",
+          printProviderId: "20",
+          currency: "USD",
+          provider: "printify",
+          shopId: "fixture.myshopify.com",
+        }),
+        create: expect.objectContaining({
+          connectionId: "connection_1",
+          providerProductId: "prod_1",
+          providerVariantId: "9001",
+          providerSku: "SKU-READY-001",
+          providerProductTitle: "Fixture Tee",
+          providerVariantTitle: "Black / M",
+          blueprintId: "10",
+          printProviderId: "20",
+          currency: "USD",
+          provider: "printify",
+          shopId: "fixture.myshopify.com",
         }),
       }),
     );
@@ -246,6 +284,9 @@ describe("providerSync.server", () => {
       providerVariantMapping: {
         upsert: vi.fn(),
         updateMany: vi.fn(),
+      },
+      providerCatalogVariant: {
+        upsert: vi.fn(),
       },
       providerCostCache: {
         createMany: vi.fn(),

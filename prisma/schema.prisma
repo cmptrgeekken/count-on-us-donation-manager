@@ -294,6 +294,7 @@ model ProviderConnection {
   updatedAt            DateTime @updatedAt
 
   mappings ProviderVariantMapping[]
+  catalogVariants ProviderCatalogVariant[]
   syncRuns ProviderSyncRun[]
 
   @@unique([shopId, provider])
@@ -325,6 +326,31 @@ model ProviderVariantMapping {
   @@unique([connectionId, variantId])
   @@index([shopId, provider])
   @@index([variantId])
+}
+
+model ProviderCatalogVariant {
+  id                   String             @id @default(cuid())
+  shopId               String
+  connectionId         String
+  connection           ProviderConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  provider             String
+  providerProductId    String
+  providerProductTitle String?
+  providerVariantId    String
+  providerVariantTitle String?
+  providerSku          String?
+  blueprintId          String?
+  printProviderId      String?
+  baseCost             Decimal?           @db.Decimal(10, 2)
+  currency             String             @default("USD")
+  sourceUpdatedAt      DateTime?
+  syncedAt             DateTime
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@unique([connectionId, providerVariantId])
+  @@index([shopId, provider])
+  @@index([shopId, providerSku])
 }
 
 model ProviderCostCache {

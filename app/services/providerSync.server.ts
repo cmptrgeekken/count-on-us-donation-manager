@@ -6,7 +6,14 @@ import { listPrintifyProducts, validatePrintifyApiKey } from "./printify.server"
 
 type SyncDbClient = Pick<
   typeof prisma,
-  "shop" | "providerConnection" | "providerSyncRun" | "auditLog" | "variant" | "providerVariantMapping" | "providerCostCache"
+  | "shop"
+  | "providerConnection"
+  | "providerSyncRun"
+  | "auditLog"
+  | "variant"
+  | "providerVariantMapping"
+  | "providerCatalogVariant"
+  | "providerCostCache"
 >;
 
 type JobSender = Pick<typeof jobQueue, "send">;
@@ -216,6 +223,55 @@ export async function runProviderSync(
     });
 
     const syncedAt = new Date();
+
+    await Promise.all(
+      printifyVariants.map((providerVariant) =>
+        db.providerCatalogVariant.upsert({
+          where: {
+            connectionId_providerVariantId: {
+              connectionId: connection.id,
+              providerVariantId: providerVariant.variantId,
+            },
+          },
+          update: {
+            shopId: run.shopId,
+            provider: connection.provider,
+            providerProductId: providerVariant.productId,
+            providerProductTitle: providerVariant.productTitle,
+            providerVariantTitle: providerVariant.variantTitle,
+            providerSku: normalizeSku(providerVariant.sku),
+            blueprintId: providerVariant.blueprintId,
+            printProviderId: providerVariant.printProviderId,
+            baseCost:
+              typeof providerVariant.cost === "number"
+                ? centsToDecimal(providerVariant.cost)
+                : null,
+            currency: shopCurrency,
+            sourceUpdatedAt: providerVariant.productUpdatedAt,
+            syncedAt,
+          },
+          create: {
+            shopId: run.shopId,
+            connectionId: connection.id,
+            provider: connection.provider,
+            providerProductId: providerVariant.productId,
+            providerProductTitle: providerVariant.productTitle,
+            providerVariantId: providerVariant.variantId,
+            providerVariantTitle: providerVariant.variantTitle,
+            providerSku: normalizeSku(providerVariant.sku),
+            blueprintId: providerVariant.blueprintId,
+            printProviderId: providerVariant.printProviderId,
+            baseCost:
+              typeof providerVariant.cost === "number"
+                ? centsToDecimal(providerVariant.cost)
+                : null,
+            currency: shopCurrency,
+            sourceUpdatedAt: providerVariant.productUpdatedAt,
+            syncedAt,
+          },
+        }),
+      ),
+    );
 
     const mappingResults = await Promise.all(
       matchedPairs.map(({ localVariantId, providerVariant }) =>
