@@ -5,7 +5,7 @@ import { useLoaderData } from "@remix-run/react";
 
 const ASSET_ROOT = path.resolve(process.cwd(), "extensions/count-on-us-product-widget");
 
-type FixtureMode = "default" | "mixed-no-cause" | "no-donation";
+type FixtureMode = "default" | "mixed-no-cause" | "no-donation" | "duplicate-product";
 type FixtureLine = {
   productId: string;
   variantId: string;
@@ -218,6 +218,204 @@ function buildFixturePayload(mode: FixtureMode) {
     };
   }
 
+  if (mode === "duplicate-product") {
+    return {
+      lines: [
+        {
+          productId: "gid://shopify/Product/1",
+          variantId: "gid://shopify/ProductVariant/1",
+          quantity: 2,
+          lineSubtotal: 40,
+        },
+        {
+          productId: "gid://shopify/Product/2",
+          variantId: "gid://shopify/ProductVariant/2",
+          quantity: 1,
+          lineSubtotal: 15,
+        },
+        {
+          productId: "gid://shopify/Product/1",
+          variantId: "gid://shopify/ProductVariant/4",
+          quantity: 1,
+          lineSubtotal: 34,
+        },
+      ],
+      payloads: {
+        "gid://shopify/Product/1": {
+          productId: "gid://shopify/Product/1",
+          visible: true,
+          variants: [
+            {
+              variantId: "gid://shopify/ProductVariant/1",
+              price: "40.00",
+              currencyCode: "USD",
+              laborCost: "6.00",
+              materialLines: [{ name: "Paper", lineCost: "1.50" }],
+              equipmentLines: [{ name: "Press", lineCost: "0.75" }],
+              shippingMaterialLines: [{ name: "Mailer", lineCost: "0.40" }],
+              podCostTotal: "0.00",
+              mistakeBufferAmount: "0.00",
+              shopifyFees: {
+                processingRate: "2.90",
+                processingFlatFee: "0.30",
+                managedMarketsRate: "0.00",
+                managedMarketsApplicable: false,
+              },
+              causes: [
+                {
+                  causeId: "cause-1",
+                  name: "Neighborhood Arts",
+                  iconUrl: null,
+                  donationPercentage: "100.00",
+                  estimatedDonationAmount: "20.73",
+                  donationCurrencyCode: "USD",
+                  donationLink: "https://example.com/neighborhood-arts",
+                },
+              ],
+              taxReserve: {
+                suppressed: false,
+                estimatedRate: "25.00",
+                estimatedAmount: "6.91",
+              },
+              reconciliation: {
+                estimatedTotal: "40.00",
+                allocatedDonations: "20.73",
+                retainedByShop: "0.00",
+                labor: "6.00",
+                materials: "3.00",
+                equipment: "1.50",
+                packaging: "0.40",
+                pod: "0.00",
+                mistakeBuffer: "0.00",
+                shopifyFees: "1.46",
+                taxReserve: "6.91",
+                remainder: "0.00",
+              },
+            },
+            {
+              variantId: "gid://shopify/ProductVariant/4",
+              price: "34.00",
+              currencyCode: "USD",
+              laborCost: "4.00",
+              materialLines: [{ name: "Cotton", lineCost: "4.50" }],
+              equipmentLines: [{ name: "Press", lineCost: "1.00" }],
+              shippingMaterialLines: [{ name: "Mailer", lineCost: "0.40" }],
+              podCostTotal: "0.00",
+              mistakeBufferAmount: "0.00",
+              shopifyFees: {
+                processingRate: "2.90",
+                processingFlatFee: "0.30",
+                managedMarketsRate: "0.00",
+                managedMarketsApplicable: false,
+              },
+              causes: [
+                {
+                  causeId: "cause-1",
+                  name: "Neighborhood Arts",
+                  iconUrl: null,
+                  donationPercentage: "60.00",
+                  estimatedDonationAmount: "10.68",
+                  donationCurrencyCode: "USD",
+                  donationLink: "https://example.com/neighborhood-arts",
+                },
+                {
+                  causeId: "cause-2",
+                  name: "Community Library",
+                  iconUrl: null,
+                  donationPercentage: "40.00",
+                  estimatedDonationAmount: "7.12",
+                  donationCurrencyCode: "USD",
+                  donationLink: null,
+                },
+              ],
+              taxReserve: {
+                suppressed: false,
+                estimatedRate: "25.00",
+                estimatedAmount: "5.93",
+              },
+              reconciliation: {
+                estimatedTotal: "34.00",
+                allocatedDonations: "17.80",
+                retainedByShop: "0.00",
+                labor: "4.00",
+                materials: "4.50",
+                equipment: "1.00",
+                packaging: "0.40",
+                pod: "0.00",
+                mistakeBuffer: "0.00",
+                shopifyFees: "1.29",
+                taxReserve: "5.93",
+                remainder: "0.00",
+              },
+            },
+          ],
+        },
+        "gid://shopify/Product/2": {
+          productId: "gid://shopify/Product/2",
+          visible: true,
+          variants: [
+            {
+              variantId: "gid://shopify/ProductVariant/2",
+              price: "15.00",
+              currencyCode: "USD",
+              laborCost: "2.00",
+              materialLines: [{ name: "Ink", lineCost: "2.00" }],
+              equipmentLines: [{ name: "Printer", lineCost: "1.25" }],
+              shippingMaterialLines: [{ name: "Box", lineCost: "0.60" }],
+              podCostTotal: "0.00",
+              mistakeBufferAmount: "0.00",
+              shopifyFees: {
+                processingRate: "2.90",
+                processingFlatFee: "0.30",
+                managedMarketsRate: "0.00",
+                managedMarketsApplicable: false,
+              },
+              causes: [
+                {
+                  causeId: "cause-1",
+                  name: "Neighborhood Arts",
+                  iconUrl: null,
+                  donationPercentage: "50.00",
+                  estimatedDonationAmount: "3.15",
+                  donationCurrencyCode: "USD",
+                  donationLink: "https://example.com/neighborhood-arts",
+                },
+                {
+                  causeId: "cause-2",
+                  name: "Community Library",
+                  iconUrl: null,
+                  donationPercentage: "50.00",
+                  estimatedDonationAmount: "3.16",
+                  donationCurrencyCode: "USD",
+                  donationLink: null,
+                },
+              ],
+              taxReserve: {
+                suppressed: false,
+                estimatedRate: "25.00",
+                estimatedAmount: "2.10",
+              },
+              reconciliation: {
+                estimatedTotal: "15.00",
+                allocatedDonations: "6.31",
+                retainedByShop: "0.00",
+                labor: "2.00",
+                materials: "2.00",
+                equipment: "1.25",
+                packaging: "0.60",
+                pod: "0.00",
+                mistakeBuffer: "0.00",
+                shopifyFees: "0.74",
+                taxReserve: "2.10",
+                remainder: "0.00",
+              },
+            },
+          ],
+        },
+      },
+    };
+  }
+
   return {
     lines: [
       {
@@ -357,7 +555,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const rawMode = url.searchParams.get("mode");
   const mode: FixtureMode =
-    rawMode === "no-donation" ? "no-donation" : rawMode === "mixed-no-cause" ? "mixed-no-cause" : "default";
+    rawMode === "no-donation"
+      ? "no-donation"
+      : rawMode === "mixed-no-cause"
+        ? "mixed-no-cause"
+        : rawMode === "duplicate-product"
+          ? "duplicate-product"
+          : "default";
 
   const [css, script] = await Promise.all([
     readFile(path.join(ASSET_ROOT, "assets", "donation-widget.css"), "utf8"),
@@ -420,7 +624,19 @@ export default function CartDonationSummaryFixtureRoute() {
                 visible: payload.visible,
                 totalLineItemCount: payload.variants[0]?.materialLines?.length ?? 0,
               }
-            : payload;
+            : (() => {
+                const requestedVariantId = parsedUrl.searchParams.get("variantId");
+                if (!requestedVariantId) {
+                  return payload;
+                }
+
+                const matchingVariant = payload.variants.find((variant) => variant.variantId === requestedVariantId);
+                return {
+                  ...payload,
+                  variants: matchingVariant ? [matchingVariant] : [],
+                  visible: payload.visible && Boolean(matchingVariant),
+                };
+              })();
 
         return new Response(JSON.stringify({ ok: true, data }), {
           status: 200,

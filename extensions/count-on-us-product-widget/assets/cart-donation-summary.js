@@ -138,6 +138,24 @@
     "a[href*=\"/products/\"]",
     "h1, h2, h3, h4, h5, h6",
   ];
+  const CART_LINE_QUANTITY_FIELD_SELECTORS = [
+    'input[name="updates[]"]',
+    'input[name^="updates"]',
+    'select[name="updates[]"]',
+    'select[name^="updates"]',
+  ];
+  const CART_LINE_CONTROL_SELECTORS = [
+    ...CART_LINE_QUANTITY_FIELD_SELECTORS,
+    'button[name="plus"]',
+    'button[name="minus"]',
+    '[data-quantity-button]',
+    '[data-qty-button]',
+    'button[aria-label*="remove" i]',
+    '[data-cart-remove]',
+    'a[href*="/cart/change"]',
+    "cart-remove-button",
+    "quantity-popover",
+  ];
 
   const setContainerVisibility = (container, visible) => {
     if (container.dataset.countOnUsDesignMode === "true") {
@@ -182,6 +200,9 @@
     return document;
   };
 
+  const toElementArray = (nodeList) =>
+    Array.from(nodeList).filter((node) => node instanceof HTMLElement);
+
   const hasCartLineSignals = (container) => {
     if (!(container instanceof HTMLElement)) return false;
 
@@ -223,30 +244,25 @@
 
   const findCartLineContainers = (container) => {
     const searchRoot = getCartSearchRoot(container);
-    const quantityControls = Array.from(
-      searchRoot.querySelectorAll(
-        [
-          'input[name="updates[]"]',
-          'input[name^="updates"]',
-          'select[name="updates[]"]',
-          'select[name^="updates"]',
-          'button[name="plus"]',
-          'button[name="minus"]',
-          '[data-quantity-button]',
-          '[data-qty-button]',
-          'button[aria-label*="remove" i]',
-          '[data-cart-remove]',
-          'a[href*="/cart/change"]',
-          "cart-remove-button",
-          "quantity-popover",
-        ].join(", "),
-      ),
+    const quantityFields = toElementArray(
+      searchRoot.querySelectorAll(CART_LINE_QUANTITY_FIELD_SELECTORS.join(", ")),
+    );
+    const matchedFromFields = quantityFields
+      .map((control) => control.closest(CART_LINE_CONTAINER_SELECTORS.join(", ")))
+      .filter(
+        (lineContainer, index, array) =>
+          lineContainer instanceof HTMLElement &&
+          hasCartLineSignals(lineContainer) &&
+          array.indexOf(lineContainer) === index,
+      );
+
+    if (matchedFromFields.length) return matchedFromFields;
+
+    const quantityControls = toElementArray(
+      searchRoot.querySelectorAll(CART_LINE_CONTROL_SELECTORS.join(", ")),
     );
     const matched = quantityControls
-      .map((control) => {
-        if (!(control instanceof HTMLElement)) return null;
-        return control.closest(CART_LINE_CONTAINER_SELECTORS.join(", "));
-      })
+      .map((control) => control.closest(CART_LINE_CONTAINER_SELECTORS.join(", ")))
       .filter(
         (lineContainer, index, array) =>
           lineContainer instanceof HTMLElement &&
