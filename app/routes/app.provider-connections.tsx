@@ -186,7 +186,6 @@ export default function ProviderConnectionsPage() {
   const syncFetcher = useFetcher<{ ok: boolean; message: string }>();
   const disconnectFetcher = useFetcher<{ ok: boolean; message: string }>();
   const statusRef = useRef<HTMLDivElement>(null);
-  const saveFormRef = useRef<HTMLFormElement>(null);
   const printify = summaries.find((summary: (typeof summaries)[number]) => summary.provider === "printify");
   const printful = summaries.find((summary: (typeof summaries)[number]) => summary.provider === "printful");
 
@@ -198,6 +197,28 @@ export default function ProviderConnectionsPage() {
     disconnectFetcher.data ??
     syncFetcher.data ??
     (saveFetcher.data?.ok ? saveFetcher.data : null);
+
+  function submitPrintifyCredentials() {
+    const trimmedApiKey = printifyApiKey.trim();
+    if (!trimmedApiKey) {
+      setPrintifyFormError("Printify API key is required.");
+      return;
+    }
+
+    setPrintifyFormError(null);
+    const formData = new FormData();
+    formData.append("intent", "save-printify-credentials");
+    formData.append("displayName", printifyDisplayName);
+    formData.append("apiKey", trimmedApiKey);
+    saveFetcher.submit(formData, { method: "post" });
+  }
+
+  function submitPrintifySync() {
+    const formData = new FormData();
+    formData.append("intent", "refresh-provider");
+    formData.append("provider", "printify");
+    syncFetcher.submit(formData, { method: "post" });
+  }
 
   return (
     <>
@@ -362,20 +383,12 @@ export default function ProviderConnectionsPage() {
             ) : null}
 
             <saveFetcher.Form
-              ref={saveFormRef}
               method="post"
               onSubmit={(event) => {
-                const trimmedApiKey = printifyApiKey.trim();
-                if (!trimmedApiKey) {
-                  event.preventDefault();
-                  setPrintifyFormError("Printify API key is required.");
-                  return;
-                }
-
-                setPrintifyFormError(null);
+                event.preventDefault();
+                submitPrintifyCredentials();
               }}
             >
-              <input type="hidden" name="intent" value="save-printify-credentials" />
               <div style={{ display: "grid", gap: "0.75rem" }}>
                 <div style={{ display: "grid", gap: "0.35rem" }}>
                   <label htmlFor="printify-display-name">Shop label</label>
@@ -439,14 +452,7 @@ export default function ProviderConnectionsPage() {
                     type="button"
                     disabled={saveFetcher.state !== "idle"}
                     onClick={() => {
-                      const trimmedApiKey = printifyApiKey.trim();
-                      if (!trimmedApiKey) {
-                        setPrintifyFormError("Printify API key is required.");
-                        return;
-                      }
-
-                      setPrintifyFormError(null);
-                      saveFormRef.current?.requestSubmit();
+                      submitPrintifyCredentials();
                     }}
                     style={{
                       appearance: "none",
@@ -464,13 +470,25 @@ export default function ProviderConnectionsPage() {
                     {printify?.configured ? "Update Printify credentials" : "Save Printify credentials"}
                   </button>
                   {printify?.status === "validated" || printify?.status === "sync_failed" ? (
-                    <syncFetcher.Form method="post">
-                      <input type="hidden" name="intent" value="refresh-provider" />
-                      <input type="hidden" name="provider" value="printify" />
-                      <s-button type="submit" variant="secondary" disabled={syncFetcher.state !== "idle"}>
-                        Sync Printify catalog
-                      </s-button>
-                    </syncFetcher.Form>
+                    <button
+                      type="button"
+                      disabled={syncFetcher.state !== "idle"}
+                      onClick={submitPrintifySync}
+                      style={{
+                        appearance: "none",
+                        border: "1px solid var(--p-color-border, #d2d5d8)",
+                        borderRadius: "999px",
+                        padding: "0.7rem 1.1rem",
+                        background: "var(--p-color-bg-surface, #fff)",
+                        color: "var(--p-color-text, #303030)",
+                        font: "inherit",
+                        fontWeight: 600,
+                        cursor: syncFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                        opacity: syncFetcher.state !== "idle" ? 0.6 : 1,
+                      }}
+                    >
+                      Sync Printify catalog
+                    </button>
                   ) : null}
                 </div>
               </div>

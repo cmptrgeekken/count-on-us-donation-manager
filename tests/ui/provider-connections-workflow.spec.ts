@@ -24,6 +24,11 @@ test("provider connections can save and disconnect Printify credentials", async 
   await expect(page.getByRole("button", { name: "Sync Printify catalog" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Disconnect Printify" })).toBeVisible();
 
+  await page.getByRole("button", { name: "Sync Printify catalog" }).click();
+  await expect(
+    page.getByText("Printify sync queued. This refreshes account state, SKU matches, and cached POD costs.").last(),
+  ).toBeVisible();
+
   await page.getByRole("button", { name: "Disconnect Printify" }).click();
 
   await expect(page.getByText("Printify disconnected.").last()).toBeVisible();
