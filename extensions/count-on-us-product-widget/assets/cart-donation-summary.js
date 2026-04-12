@@ -242,40 +242,43 @@
     return hasProductIdentity && hasCartControls;
   };
 
-  const findCartLineContainers = (container) => {
+  const countQuantityFields = (container) =>
+    container instanceof HTMLElement
+      ? container.querySelectorAll(CART_LINE_QUANTITY_FIELD_SELECTORS.join(", ")).length
+      : 0;
+
+  const findLineContainerForControl = (control, searchRoot) => {
+    if (!(control instanceof HTMLElement)) return null;
+
+    const boundary = searchRoot instanceof HTMLElement ? searchRoot : document.body;
+    const candidates = [];
+    let current = control.parentElement;
+
+    while (current instanceof HTMLElement) {
+      if (current.matches(CART_LINE_CONTAINER_SELECTORS.join(", ")) && hasCartLineSignals(current)) {
+        candidates.push(current);
+      }
+      if (current === boundary) break;
+      current = current.parentElement;
+    }
+
+    if (!candidates.length) return null;
+
+    const singleFieldCandidate = candidates.find((candidate) => countQuantityFields(candidate) === 1);
+    return singleFieldCandidate ?? candidates[0];
+  };
+
+  const findCartLineControls = (container) => {
     const searchRoot = getCartSearchRoot(container);
     const quantityFields = toElementArray(
       searchRoot.querySelectorAll(CART_LINE_QUANTITY_FIELD_SELECTORS.join(", ")),
     );
-    const matchedFromFields = quantityFields
-      .map((control) => control.closest(CART_LINE_CONTAINER_SELECTORS.join(", ")))
-      .filter(
-        (lineContainer, index, array) =>
-          lineContainer instanceof HTMLElement &&
-          hasCartLineSignals(lineContainer) &&
-          array.indexOf(lineContainer) === index,
-      );
-
-    if (matchedFromFields.length) return matchedFromFields;
+    if (quantityFields.length) return quantityFields;
 
     const quantityControls = toElementArray(
       searchRoot.querySelectorAll(CART_LINE_CONTROL_SELECTORS.join(", ")),
     );
-    const matched = quantityControls
-      .map((control) => control.closest(CART_LINE_CONTAINER_SELECTORS.join(", ")))
-      .filter(
-        (lineContainer, index, array) =>
-          lineContainer instanceof HTMLElement &&
-          hasCartLineSignals(lineContainer) &&
-          array.indexOf(lineContainer) === index,
-      );
-
-    if (matched.length) return matched;
-
-    return Array.from(searchRoot.querySelectorAll(CART_LINE_CONTAINER_SELECTORS.join(", ")))
-      .filter((lineContainer) => lineContainer instanceof HTMLElement)
-      .filter((lineContainer) => hasCartLineSignals(lineContainer))
-      .filter((lineContainer, index, array) => array.indexOf(lineContainer) === index);
+    return quantityControls;
   };
 
   const findAnnotationTarget = (container) => {
@@ -297,17 +300,23 @@
   let ignoreAnnotationMutationsUntil = 0;
 
   const annotateCartLines = (entries, container) => {
-    const containers = findCartLineContainers(container);
-    if (!containers.length) return;
+    const searchRoot = getCartSearchRoot(container);
+    const controls = findCartLineControls(container);
+    if (!controls.length) return;
+
+    const resolvedContainers = controls
+      .map((control) => findLineContainerForControl(control, searchRoot))
+      .filter((lineContainer) => lineContainer instanceof HTMLElement);
 
     ignoreAnnotationMutationsUntil = Date.now() + 250;
-    containers.forEach((cartLineContainer) => {
+    resolvedContainers.forEach((cartLineContainer, index, array) => {
       if (!(cartLineContainer instanceof HTMLElement)) return;
+      if (array.indexOf(cartLineContainer) !== index) return;
       cartLineContainer.querySelectorAll("[data-count-on-us-cart-annotation]").forEach((annotation) => annotation.remove());
     });
 
     entries.forEach(({ payload }, index) => {
-      const cartLineContainer = containers[index];
+      const cartLineContainer = resolvedContainers[index];
       if (!(cartLineContainer instanceof HTMLElement) || !payload) return;
       const variant = payload.variants[0] || null;
       if (!variant || !variant.causes.length) return;
