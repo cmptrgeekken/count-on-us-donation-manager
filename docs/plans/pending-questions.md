@@ -59,10 +59,16 @@ It is intentionally lightweight so decisions can be reviewed later without block
 ### Cart donation summary surface breadth
 
 - `#64` adds a cart-page app block for the donation summary modal.
+- `#93` now tracks the follow-up work for future-proof cart-line annotation matching and cart-drawer compatibility.
 - We should decide whether the long-term storefront expectation is:
   - cart template support only
   - a separate cart drawer-compatible integration surface
   - or both
+- Current recommended implementation hierarchy:
+  - cart-page app block as the primary supported surface
+  - cart-drawer support when the active theme exposes a usable target
+  - app-embed / DOM-enhancement fallback for compatible themes
+  - documented unsupported cases when no stable cart-line or drawer anchor is available
 - That decision affects whether we keep the current block as-is or factor the modal trigger/summary logic into a more reusable storefront bundle later.
 
 ### Public donation receipts URL shape
