@@ -233,23 +233,29 @@ export async function resolveCosts(
       equipmentLines: { include: { equipment: true, templateLine: true } },
     },
   });
-
+  const {
+    podCost,
+    podLines,
+    podCostEstimated,
+    podCostMissing,
+  } = podCostOverride ?? await resolvePodCosts(shopId, variantId, db);
   // No config — return all zeros (valid, not configured yet)
   if (!config) {
+    const totalCost = podCost;
     return {
       laborCost: ZERO,
       materialCost: ZERO,
       packagingCost: ZERO,
       equipmentCost: ZERO,
       mistakeBufferAmount: ZERO,
-      podCost: ZERO,
-      podLines: [],
-      podCostEstimated: false,
-      podCostMissing: false,
-      totalCost: ZERO,
+      podCost,
+      podLines,
+      podCostEstimated,
+      podCostMissing,
+      totalCost,
       materialLines: [],
       equipmentLines: [],
-      ...(mode === "snapshot" ? { netContribution: salePrice.neg() } : {}),
+      ...(mode === "snapshot" ? { netContribution: salePrice.sub(totalCost) } : {}),
     };
   }
 
@@ -453,14 +459,6 @@ export async function resolveCosts(
 
     return line;
   });
-
-  // Step 4: POD
-  const {
-    podCost,
-    podLines,
-    podCostEstimated,
-    podCostMissing,
-  } = podCostOverride ?? await resolvePodCosts(shopId, variantId, db);
 
   // Step 5: Packaging rule — max cost among shipping material lines (ADR-003)
   const shippingLineCosts = resolvedMaterialLines

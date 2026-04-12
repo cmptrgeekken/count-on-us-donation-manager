@@ -492,6 +492,56 @@ describe("resolveCosts shipping material uses costing", () => {
 });
 
 describe("resolveCosts provider cache support", () => {
+  it("includes cached POD costs even when no manual variant cost config exists", async () => {
+    const syncedAt = new Date("2026-04-11T14:00:00Z");
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "snapshot",
+      createDb(
+        null,
+        undefined,
+        [
+          {
+            provider: "printify",
+            providerVariantId: "pv-1",
+            status: "mapped",
+            connection: {
+              status: "validated",
+            },
+            costLines: [
+              {
+                costLineType: "base",
+                description: "Base production cost",
+                amount: decimal("8.50"),
+                currency: "USD",
+                syncedAt,
+                createdAt: syncedAt,
+              },
+              {
+                costLineType: "shipping",
+                description: "Shipping estimate",
+                amount: decimal("4.25"),
+                currency: "USD",
+                syncedAt,
+                createdAt: syncedAt,
+              },
+            ],
+          },
+        ],
+      ),
+    );
+
+    expect(result.materialLines).toEqual([]);
+    expect(result.equipmentLines).toEqual([]);
+    expect(result.podCost.toString()).toBe("12.75");
+    expect(result.podLines).toHaveLength(2);
+    expect(result.totalCost.toString()).toBe("12.75");
+    expect(result.netContribution?.toString()).toBe("37.25");
+  });
+
   it("includes the latest cached POD lines from validated provider mappings", async () => {
     const config = {
       laborMinutes: null,

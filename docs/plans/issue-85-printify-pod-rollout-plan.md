@@ -20,9 +20,61 @@ What is still stubbed or incomplete:
 - No provider catalog sync runs today.
 - No usable provider mapping workflow exists yet.
 - `ProviderCostCache` is not being populated from a real provider sync.
-- `CostEngine` still resolves `podCost` as zero.
 - Snapshot creation does not perform a real live POD fetch before transaction open.
 - Provider state is not operationally observable beyond configured/not configured metadata.
+
+## Current Status Checklist
+
+### Done
+
+- [x] Printify credentials can be saved and validated
+- [x] Provider Connections shows Printify connection state
+- [x] Provider Connections shows token added date
+- [x] Provider Connections shows estimated token expiry
+- [x] Provider Connections shows unhealthy / sync-failed credential state
+- [x] Manual Printify sync can be triggered from the admin
+- [x] Sync pulls Printify catalog data
+- [x] Unique SKU overlap matching is implemented
+- [x] Cached POD fulfillment costs are stored locally
+- [x] Admin cost resolution can consume cached POD costs
+- [x] Snapshot creation attempts live Printify cost fetch before cache fallback
+- [x] Products list shows POD mapping coverage
+- [x] Variants list shows POD mapping presence
+- [x] Variant Detail shows provider mapping metadata
+- [x] Variant Detail shows cached provider cost lines
+- [x] Variant Detail preview includes a POD cost row
+
+### Working, But Needs Validation
+
+- [~] POD costs in Variant Detail are only useful when the variant has an active mapping with cached cost lines
+- [~] Storefront widget payload path includes POD cost fields
+- [~] Storefront reconciliation math includes POD cost inputs server-side
+- [~] Storefront widgets should display POD cost rows when POD is non-zero
+- [~] Sync/error UX is substantially improved, but still needs real-merchant validation with live Printify data
+- [~] Unique-SKU happy path appears implemented, but we still need stronger confidence around edge cases and mixed catalogs
+- [~] Variants without a manual `VariantCostConfig` now still resolve cached POD costs, but this path still needs live-storefront validation
+
+### Not Built Yet
+
+- [ ] Manual provider-to-Shopify variant mapping UI
+- [ ] Merchant workflow for resolving duplicate SKU collisions in-app
+- [ ] Merchant workflow for handling variants with no SKU in-app
+- [ ] Rich provider troubleshooting diagnostics
+- [ ] Multi-shop Printify selection flow
+- [ ] Clear provider-side shipping-cost import strategy
+- [ ] Full storefront confidence that mapped variants always surface non-zero POD costs correctly
+- [ ] Broader provider support beyond the current Printify tranche
+- [ ] Final documentation/ADR treatment for all POD tradeoffs and edge cases
+
+### Open Questions
+
+- [ ] Should provider-side shipping estimates be included in the first POD cost model?
+- [ ] How strongly should we warn merchants about duplicate/missing SKUs before manual mapping exists?
+- [ ] How should tax reserve interact with POD-related contribution math once issue `#82` is addressed?
+
+### Recently Resolved
+
+- [x] Variants with active provider mappings but no manual `VariantCostConfig` were falling through the early zero-cost return in `CostEngine`, which suppressed cached POD costs in Variant Detail and storefront payloads
 
 ## Goal
 
