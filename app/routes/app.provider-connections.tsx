@@ -161,6 +161,25 @@ function formatTimestamp(value: string | null) {
   return new Date(value).toLocaleString();
 }
 
+function formatEstimatedExpiry(value: string | null) {
+  if (!value) return "Not available";
+
+  const expiry = new Date(value);
+  const now = new Date();
+  const diffMs = expiry.getTime() - now.getTime();
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 0) {
+    return `${expiry.toLocaleDateString()} (estimated expired)`;
+  }
+
+  if (diffDays === 0) {
+    return `${expiry.toLocaleDateString()} (estimated today)`;
+  }
+
+  return `${expiry.toLocaleDateString()} (estimated in ${diffDays} day${diffDays === 1 ? "" : "s"})`;
+}
+
 export default function ProviderConnectionsPage() {
   const { totalVariantCount, variantsWithSkuCount, printifyUnresolvedVariants, summaries } = useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string }>();
@@ -202,8 +221,9 @@ export default function ProviderConnectionsPage() {
             </s-text>
             <s-banner tone="info">
               <s-text>
-                Current scope: validate Printify credentials, auto-match variants by SKU, and cache provider fulfillment costs.
-                Manual mapping and richer provider diagnostics still land in follow-on slices.
+                Current scope: validate Printify credentials, import Printify SKUs, auto-match unique SKU overlaps, and
+                cache provider fulfillment costs. Shopify variants that are not fulfilled through Printify can remain
+                unmapped and continue using manual cost configuration.
               </s-text>
             </s-banner>
             {saveErrorMessage ? (
@@ -235,7 +255,10 @@ export default function ProviderConnectionsPage() {
             </div>
           </div>
           <div style={{ marginTop: "0.75rem" }}>
-            <s-text>Auto-match will depend on clean SKU coverage. Variants without SKUs will stay unmapped until corrected.</s-text>
+            <s-text>
+              SKU coverage only affects automatic provider matching. Variants without SKUs can still stay manual; add or
+              clean up SKUs when you want Printify-backed costs to sync automatically.
+            </s-text>
           </div>
         </s-section>
 
@@ -265,6 +288,14 @@ export default function ProviderConnectionsPage() {
                 <div>{printify?.unmappedVariantCount ?? variantsWithSkuCount}</div>
               </div>
               <div>
+                <strong>Token added</strong>
+                <div>{formatTimestamp(printify?.credentialUpdatedAt ?? null)}</div>
+              </div>
+              <div>
+                <strong>Estimated expiry</strong>
+                <div>{formatEstimatedExpiry(printify?.credentialExpiresAt ?? null)}</div>
+              </div>
+              <div>
                 <strong>Validated</strong>
                 <div>{formatTimestamp(printify?.lastValidatedAt ?? null)}</div>
               </div>
@@ -291,6 +322,14 @@ export default function ProviderConnectionsPage() {
                 <s-text>{printify.lastValidationError}</s-text>
               </s-banner>
             ) : null}
+            {printify?.status === "sync_failed" ? (
+              <s-banner tone="critical">
+                <s-text>
+                  Printify credentials may no longer be working. Reconnect the token if this keeps failing, especially if the
+                  estimated expiry date has passed.
+                </s-text>
+              </s-banner>
+            ) : null}
             {printify?.lastSyncError ? (
               <s-banner tone="warning">
                 <s-text>{printify.lastSyncError}</s-text>
@@ -303,14 +342,15 @@ export default function ProviderConnectionsPage() {
             ) : null}
             {printify?.latestSyncRunStatus === "completed" && printifyUnresolvedVariants.length === 0 ? (
               <s-banner tone="success">
-                <s-text>All sync-eligible variants are currently matched to Printify.</s-text>
+                <s-text>All uniquely matchable SKU overlaps are currently mapped to Printify.</s-text>
               </s-banner>
             ) : null}
             {printify?.latestSyncRunStatus === "completed" && printifyUnresolvedVariants.length > 0 ? (
               <s-banner tone="warning">
                 <s-text>
                   {printifyUnresolvedVariants.length} variant{printifyUnresolvedVariants.length === 1 ? "" : "s"} still
-                  need review before they can use provider-backed POD costs.
+                  could not be auto-matched to Printify. Review these only if you expect them to use provider-backed POD
+                  costs.
                 </s-text>
               </s-banner>
             ) : null}
@@ -388,6 +428,12 @@ export default function ProviderConnectionsPage() {
                   Credentials are encrypted before persistence. Saving here now validates the API key and records the current
                   Printify account metadata.
                 </s-text>
+                <s-banner tone="info">
+                  <s-text>
+                    Required Printify token scopes for the current rollout: <code>shops.read</code> and <code>products.read</code>.
+                    Printify personal access tokens currently expire after 1 year.
+                  </s-text>
+                </s-banner>
                 <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
                   <button
                     type="button"
@@ -417,7 +463,7 @@ export default function ProviderConnectionsPage() {
                   >
                     {printify?.configured ? "Update Printify credentials" : "Save Printify credentials"}
                   </button>
-                  {printify?.status === "validated" ? (
+                  {printify?.status === "validated" || printify?.status === "sync_failed" ? (
                     <syncFetcher.Form method="post">
                       <input type="hidden" name="intent" value="refresh-provider" />
                       <input type="hidden" name="provider" value="printify" />

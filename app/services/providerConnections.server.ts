@@ -15,6 +15,8 @@ export type ProviderConnectionSummary = {
   displayName: string | null;
   providerAccountName: string | null;
   credentialHint: string | null;
+  credentialUpdatedAt: string | null;
+  credentialExpiresAt: string | null;
   lastValidatedAt: string | null;
   lastValidationError: string | null;
   lastSyncedAt: string | null;
@@ -64,6 +66,8 @@ export async function getProviderConnectionsPageData(
         displayName: true,
         providerAccountName: true,
         credentialHint: true,
+        credentialUpdatedAt: true,
+        credentialExpiresAt: true,
         lastValidatedAt: true,
         lastValidationError: true,
         lastSyncedAt: true,
@@ -123,6 +127,8 @@ export async function getProviderConnectionsPageData(
       displayName: connectionMap.get("printful")?.displayName ?? null,
       providerAccountName: connectionMap.get("printful")?.providerAccountName ?? null,
       credentialHint: connectionMap.get("printful")?.credentialHint ?? null,
+      credentialUpdatedAt: toIsoString(connectionMap.get("printful")?.credentialUpdatedAt),
+      credentialExpiresAt: toIsoString(connectionMap.get("printful")?.credentialExpiresAt),
       lastValidatedAt: toIsoString(connectionMap.get("printful")?.lastValidatedAt),
       lastValidationError: connectionMap.get("printful")?.lastValidationError ?? null,
       lastSyncedAt: toIsoString(connectionMap.get("printful")?.lastSyncedAt),
@@ -142,6 +148,8 @@ export async function getProviderConnectionsPageData(
       displayName: connectionMap.get("printify")?.displayName ?? null,
       providerAccountName: connectionMap.get("printify")?.providerAccountName ?? null,
       credentialHint: connectionMap.get("printify")?.credentialHint ?? null,
+      credentialUpdatedAt: toIsoString(connectionMap.get("printify")?.credentialUpdatedAt),
+      credentialExpiresAt: toIsoString(connectionMap.get("printify")?.credentialExpiresAt),
       lastValidatedAt: toIsoString(connectionMap.get("printify")?.lastValidatedAt),
       lastValidationError: connectionMap.get("printify")?.lastValidationError ?? null,
       lastSyncedAt: toIsoString(connectionMap.get("printify")?.lastSyncedAt),
@@ -206,7 +214,7 @@ export async function getProviderConnectionsPageData(
 
     const reason =
       (skuCounts.get(sku) ?? 0) > 1
-        ? "Duplicate SKU blocks automatic Printify matching."
+        ? "Duplicate SKU prevents automatic Printify matching for this variant."
         : mapping?.lastSyncError?.trim() || "No Printify SKU match found in the latest sync.";
 
     return [
@@ -231,13 +239,13 @@ export async function getProviderConnectionsPageData(
 function getPrintifyNote(status: string | undefined) {
   switch (status) {
     case "validated":
-      return "Printify credentials have been validated. Run a sync to refresh SKU matches and cached POD fulfillment costs.";
+      return "Printify credentials have been validated. Run a sync to import Printify SKUs, auto-match unique overlaps, and refresh cached POD fulfillment costs.";
     case "sync_failed":
       return "The most recent Printify sync failed. Credential state is preserved, and manual cost fallbacks remain active where configured.";
     case "configured":
       return "Printify credentials are stored, but have not been validated yet.";
     default:
-      return "Connect Printify to validate credentials, auto-match variants by SKU, and cache POD fulfillment costs.";
+      return "Connect Printify to import provider SKUs, auto-match unique SKU overlaps, and cache POD fulfillment costs for mapped variants.";
   }
 }
 
@@ -273,6 +281,8 @@ export async function savePrintifyConnection(
   const credentialsEncrypted = encryptProviderCredential(apiKey);
   const credentialHint = maskApiKey(apiKey);
   const validatedAt = new Date();
+  const credentialExpiresAt = new Date(validatedAt);
+  credentialExpiresAt.setFullYear(credentialExpiresAt.getFullYear() + 1);
 
   const connection = await db.providerConnection.upsert({
     where: {
@@ -289,6 +299,8 @@ export async function savePrintifyConnection(
       providerAccountName: validatedConnection.primaryShop?.title ?? null,
       credentialsEncrypted,
       credentialHint,
+      credentialUpdatedAt: validatedAt,
+      credentialExpiresAt,
       lastValidatedAt: validatedAt,
       lastValidationError: null,
       lastSyncError: null,
@@ -303,6 +315,8 @@ export async function savePrintifyConnection(
       providerAccountName: validatedConnection.primaryShop?.title ?? null,
       credentialsEncrypted,
       credentialHint,
+      credentialUpdatedAt: validatedAt,
+      credentialExpiresAt,
       lastValidatedAt: validatedAt,
       lastValidationError: null,
       lastSyncError: null,

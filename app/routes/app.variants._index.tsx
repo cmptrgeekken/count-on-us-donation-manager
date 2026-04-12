@@ -25,6 +25,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       include: {
         product: { select: { id: true, title: true } },
         costConfig: { select: { id: true, productionTemplateId: true, productionTemplate: { select: { name: true } } } },
+        providerMappings: {
+          where: { status: "mapped" },
+          orderBy: [{ lastCostSyncedAt: "desc" }, { updatedAt: "desc" }],
+          select: {
+            provider: true,
+            lastCostSyncedAt: true,
+          },
+        },
       },
     }),
     prisma.product.findMany({
@@ -50,6 +58,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       price: v.price.toString(),
       hasConfig: v.costConfig !== null,
       templateName: v.costConfig?.productionTemplate?.name ?? null,
+      mappedProviders: Array.from(new Set(v.providerMappings.map((mapping) => mapping.provider))),
+      latestProviderSyncAt: v.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? null,
     })),
     products: products.map((p) => ({ id: p.id, title: p.title })),
     templates: templates.map((t) => ({ id: t.id, name: t.name })),
@@ -120,7 +130,13 @@ type VariantRow = {
   price: string;
   hasConfig: boolean;
   templateName: string | null;
+  mappedProviders: string[];
+  latestProviderSyncAt: string | null;
 };
+
+function formatProviderLabel(provider: string) {
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
 
 export default function VariantsPage() {
   const { variants, products, templates, filterProductId, filterConfigured } = useLoaderData<typeof loader>();
@@ -430,6 +446,7 @@ export default function VariantsPage() {
                   <s-table-header listSlot="secondary">SKU</s-table-header>
                   <s-table-header listSlot="labeled" format="currency">Price</s-table-header>
                   <s-table-header listSlot="secondary">Template</s-table-header>
+                  <s-table-header listSlot="secondary">POD</s-table-header>
                   <s-table-header listSlot="inline">Status</s-table-header>
                   <s-table-header>Actions</s-table-header>
                 </s-table-header-row>
@@ -451,9 +468,26 @@ export default function VariantsPage() {
                       <s-table-cell>{formatMoney(variant.price)}</s-table-cell>
                       <s-table-cell>{variant.templateName ?? "—"}</s-table-cell>
                       <s-table-cell>
-                        <s-badge tone={variant.hasConfig ? "success" : "enabled"}>
-                          {variant.hasConfig ? "Configured" : "Not configured"}
-                        </s-badge>
+                        {variant.mappedProviders.length > 0 ? (
+                          <div style={{ display: "grid", gap: "0.2rem" }}>
+                            <strong>{variant.mappedProviders.map(formatProviderLabel).join(", ")}</strong>
+                            <s-text color="subdued">
+                              {variant.latestProviderSyncAt
+                                ? `Last synced ${new Date(variant.latestProviderSyncAt).toLocaleString()}`
+                                : "Mapped"}
+                            </s-text>
+                          </div>
+                        ) : (
+                          <s-text color="subdued">Manual / none</s-text>
+                        )}
+                      </s-table-cell>
+                      <s-table-cell>
+                        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                          <s-badge tone={variant.hasConfig ? "success" : "enabled"}>
+                            {variant.hasConfig ? "Configured" : "Not configured"}
+                          </s-badge>
+                          {variant.mappedProviders.length > 0 ? <s-badge tone="info">POD mapped</s-badge> : null}
+                        </div>
                       </s-table-cell>
                       <s-table-cell>
                         <Link to={`/app/variants/${variant.id}`}>

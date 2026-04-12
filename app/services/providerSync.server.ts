@@ -45,7 +45,7 @@ export async function queueProviderSyncRun(
     throw new Response("Provider connection not found.", { status: 404 });
   }
 
-  if (input.provider === "printify" && connection.status !== "validated") {
+  if (input.provider === "printify" && connection.status !== "validated" && connection.status !== "sync_failed") {
     throw new Response("Validate Printify credentials before running provider refresh.", { status: 409 });
   }
 
@@ -357,6 +357,9 @@ export async function runProviderSync(
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown provider sync failure";
+    const isCredentialFailure =
+      error instanceof Error &&
+      error.name === "PrintifyValidationError";
 
     await db.providerSyncRun.update({
       where: { id: run.id },
@@ -370,6 +373,8 @@ export async function runProviderSync(
     await db.providerConnection.update({
       where: { id: run.connectionId },
       data: {
+        status: "sync_failed",
+        lastValidationError: isCredentialFailure ? message : null,
         lastSyncError: message,
       },
     });

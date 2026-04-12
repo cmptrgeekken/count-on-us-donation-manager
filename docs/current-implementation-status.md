@@ -5,8 +5,8 @@ Use this document as the practical snapshot of what is implemented in the repo t
 This file is intentionally lightweight and operational. It should summarize reality, not restate full product requirements or phase specs.
 
 **Project:** Count On Us  
-**Date:** April 10, 2026  
-**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is functionally implemented, including reporting periods, disbursements, receipts, tax true-up, exports, audit log browsing, analytical recalculation, and rolling cause payables. Phase 5 foundations are also now present in the repo: storefront product/cart blocks, public receipts, post-purchase donation surfaces, and the setup wizard are implemented. The main product gap that still cuts across storefront, reporting, and Provider Connections is POD/provider completion: Printify credentials now validate successfully, manual sync runs now auto-match unique SKUs and cache base POD fulfillment costs, preview-mode cost resolution now consumes cached POD inputs, and snapshot creation now attempts a live provider fetch before falling back to cache. Manual mapping and richer provider diagnostics are still pending.
+**Date:** April 11, 2026  
+**Summary:** Phase 1, Phase 2, and Phase 3 are complete. Phase 4 is functionally implemented, including reporting periods, disbursements, receipts, tax true-up, exports, audit log browsing, analytical recalculation, and rolling cause payables. Phase 5 foundations are also now present in the repo: storefront product/cart blocks, public receipts, post-purchase donation surfaces, and the setup wizard are implemented. The main product gap that still cuts across storefront, reporting, and Provider Connections is POD/provider completion: Printify credentials now validate successfully, manual sync runs now auto-match unique SKUs and cache base POD fulfillment costs, preview-mode cost resolution now consumes cached POD inputs, snapshot creation now attempts a live provider fetch before falling back to cache, Provider Connections shows token lifecycle/health, and the Products/Variants admin screens now expose POD mapping visibility. Manual mapping and richer provider diagnostics are still pending.
 
 ---
 
@@ -155,7 +155,8 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 ### Phase 5 Current Gaps
 
 - [~] POD/provider completion
-  Provider Connections is no longer a placeholder page. Printify credentials validate before save, sync runs record real mapping/cache counts, cached base POD fulfillment costs now flow into preview-mode cost resolution, and snapshot creation now attempts a live Printify refresh before cache fallback. Manual mapping and broader provider diagnostics are still pending.
+  Provider Connections is no longer a placeholder page. Printify credentials validate before save, sync runs record real mapping/cache counts, cached base POD fulfillment costs now flow into preview-mode cost resolution, snapshot creation now attempts a live Printify refresh before cache fallback, token-added / estimated-expiry metadata is visible in the admin, and product/variant admin pages now show POD mapping status plus cached provider cost lines on variant detail. Manual mapping and broader provider diagnostics are still pending.
+  Current Printify setup expectation: merchants need a personal access token with at least `shops.read` and `products.read`.
 - [~] Storefront hardening
   Product/cart surfaces are live, but batching, theme-boundary hardening, and accessibility/comprehension cleanup remain open follow-on work.
 

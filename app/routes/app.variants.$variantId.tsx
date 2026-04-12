@@ -100,6 +100,27 @@ type TemplateEquipmentOverrideLine = {
   hasOverride: boolean;
 };
 
+type SerializedProviderCostLine = {
+  costLineType: string;
+  description: string | null;
+  amount: string;
+  currency: string;
+  syncedAt: string;
+};
+
+type SerializedProviderMapping = {
+  id: string;
+  provider: string;
+  status: string;
+  matchMethod: string | null;
+  providerProductTitle: string | null;
+  providerVariantTitle: string | null;
+  providerSku: string | null;
+  connectionStatus: string;
+  lastCostSyncedAt: string | null;
+  latestCostLines: SerializedProviderCostLine[];
+};
+
 function buildCountMap<T extends string>(values: T[]) {
   const counts = new Map<T, number>();
 
@@ -153,6 +174,10 @@ function serializeVariantEquipmentLine(
   };
 }
 
+function formatProviderName(provider: string) {
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
 const variantDraftSchema = z.object({
   productionTemplateId: z.string().nullable().optional(),
   shippingTemplateId: z.string().nullable().optional(),
@@ -201,6 +226,19 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     where: { id: variantId, shopId },
     include: {
       product: { select: { title: true } },
+      providerMappings: {
+        orderBy: [{ updatedAt: "desc" }],
+        include: {
+          connection: {
+            select: {
+              status: true,
+            },
+          },
+          costLines: {
+            orderBy: [{ syncedAt: "desc" }, { createdAt: "desc" }],
+          },
+        },
+      },
       costConfig: {
         include: {
           productionTemplate: {
@@ -344,6 +382,34 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       .map(serializeVariantEquipmentLine);
   }
 
+  const serializedProviderMappings: SerializedProviderMapping[] = variant.providerMappings.map((mapping) => {
+    const latestSyncedAt = mapping.costLines[0]?.syncedAt ?? null;
+    const latestCostLines = latestSyncedAt
+      ? mapping.costLines
+          .filter((line) => line.syncedAt.getTime() === latestSyncedAt.getTime())
+          .map((line) => ({
+            costLineType: line.costLineType,
+            description: line.description ?? null,
+            amount: line.amount.toString(),
+            currency: line.currency,
+            syncedAt: line.syncedAt.toISOString(),
+          }))
+      : [];
+
+    return {
+      id: mapping.id,
+      provider: mapping.provider,
+      status: mapping.status,
+      matchMethod: mapping.matchMethod ?? null,
+      providerProductTitle: mapping.providerProductTitle ?? null,
+      providerVariantTitle: mapping.providerVariantTitle ?? null,
+      providerSku: mapping.providerSku ?? null,
+      connectionStatus: mapping.connection.status,
+      lastCostSyncedAt: mapping.lastCostSyncedAt?.toISOString() ?? null,
+      latestCostLines,
+    };
+  });
+
   return Response.json({
     variant: {
       id: variant.id,
@@ -351,6 +417,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       title: variant.title,
       sku: variant.sku ?? "",
       price: variant.price.toString(),
+      providerMappings: serializedProviderMappings,
     },
     shopDefaults: {
       defaultLaborRate: shop?.defaultLaborRate?.toString() ?? "",
@@ -1225,6 +1292,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         materialCost: result.materialCost.toFixed(2),
         packagingCost: result.packagingCost.toFixed(2),
         equipmentCost: result.equipmentCost.toFixed(2),
+        podCost: result.podCost.toFixed(2),
+        podCostEstimated: result.podCostEstimated,
+        podCostMissing: result.podCostMissing,
         mistakeBufferAmount: result.mistakeBufferAmount.toFixed(2),
         totalCost: result.totalCost.toFixed(2),
       },
@@ -1304,7 +1374,21 @@ export default function VariantDetailPage() {
   const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment } =
     useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
-  const previewFetcher = useFetcher<{ ok: boolean; message: string; preview?: Record<string, string> }>();
+  const previewFetcher = useFetcher<{
+    ok: boolean;
+    message: string;
+    preview?: {
+      laborCost: string;
+      materialCost: string;
+      packagingCost: string;
+      equipmentCost: string;
+      podCost: string;
+      podCostEstimated: boolean;
+      podCostMissing: boolean;
+      mistakeBufferAmount: string;
+      totalCost: string;
+    };
+  }>();
   const revalidator = useRevalidator();
 
   const { formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
@@ -1647,6 +1731,90 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">SKU: {variant.sku || "-"}</Text>
               <Text as="p" variant="bodyMd" tone="subdued">Price: {formatMoney(variant.price)}</Text>
             </InlineStack>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="400">
+            <BlockStack gap="100">
+              <InlineStack gap="200" blockAlign="center">
+                <Text as="h2" variant="headingMd">Provider mappings</Text>
+                {variant.providerMappings.length > 0 ? (
+                  <Badge tone="info">
+                    {variant.providerMappings.length} active mapping{variant.providerMappings.length === 1 ? "" : "s"}
+                  </Badge>
+                ) : null}
+              </InlineStack>
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Provider mappings are optional. Automatic Printify matching only happens when a Shopify variant and a
+                provider variant share a unique SKU.
+              </Text>
+            </BlockStack>
+            <Divider />
+            {variant.providerMappings.length === 0 ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                No provider mapping is saved for this variant yet. Manual cost configuration remains in effect unless you
+                choose to map this variant through a POD provider.
+              </Text>
+            ) : (
+              <BlockStack gap="400">
+                {variant.providerMappings.map((mapping: SerializedProviderMapping) => (
+                  <BlockStack key={mapping.id} gap="200">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <InlineStack gap="200" blockAlign="center">
+                        <Text as="p" variant="bodyMd" fontWeight="semibold">{formatProviderName(mapping.provider)}</Text>
+                        <Badge tone={mapping.status === "mapped" ? "success" : "warning"}>
+                          {mapping.status === "mapped" ? "Mapped" : mapping.status}
+                        </Badge>
+                        <Badge tone={mapping.connectionStatus === "validated" ? "info" : "warning"}>
+                          {mapping.connectionStatus === "validated" ? "Connection healthy" : "Connection needs review"}
+                        </Badge>
+                      </InlineStack>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        {mapping.lastCostSyncedAt
+                          ? `Costs synced ${new Date(mapping.lastCostSyncedAt).toLocaleString()}`
+                          : "No cached provider costs yet"}
+                      </Text>
+                    </InlineStack>
+
+                    <BlockStack gap="100">
+                      {mapping.providerProductTitle ? (
+                        <Text as="p" variant="bodyMd">Provider product: {mapping.providerProductTitle}</Text>
+                      ) : null}
+                      {mapping.providerVariantTitle ? (
+                        <Text as="p" variant="bodyMd">Provider variant: {mapping.providerVariantTitle}</Text>
+                      ) : null}
+                      {mapping.providerSku ? (
+                        <Text as="p" variant="bodyMd">Provider SKU: {mapping.providerSku}</Text>
+                      ) : null}
+                      {mapping.matchMethod ? (
+                        <Text as="p" variant="bodyMd" tone="subdued">
+                          Match method: {mapping.matchMethod === "sku" ? "Unique SKU match" : mapping.matchMethod}
+                        </Text>
+                      ) : null}
+                    </BlockStack>
+
+                    {mapping.latestCostLines.length > 0 ? (
+                      <BlockStack gap="100">
+                        <Text as="h3" variant="headingSm">Latest cached POD costs</Text>
+                        {mapping.latestCostLines.map((line) => (
+                          <InlineStack key={`${mapping.id}-${line.costLineType}-${line.description ?? "line"}`} align="space-between">
+                            <Text as="p" variant="bodyMd">
+                              {line.description ?? line.costLineType}
+                            </Text>
+                            <Text as="p" variant="bodyMd">{formatMoney(line.amount)}</Text>
+                          </InlineStack>
+                        ))}
+                      </BlockStack>
+                    ) : (
+                      <Text as="p" variant="bodyMd" tone="subdued">
+                        No cached POD costs have been stored for this mapping yet.
+                      </Text>
+                    )}
+                  </BlockStack>
+                ))}
+              </BlockStack>
+            )}
           </BlockStack>
         </Card>
 
@@ -2078,6 +2246,14 @@ export default function VariantDetailPage() {
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Equipment</Text>
                   <Text as="p" variant="bodyMd">{formatMoney(preview.equipmentCost)}</Text>
+                </InlineStack>
+                <InlineStack align="space-between">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text as="p" variant="bodyMd">POD fulfillment</Text>
+                    {preview.podCostEstimated ? <Badge tone="info">Cached estimate</Badge> : null}
+                    {preview.podCostMissing ? <Badge tone="warning">Missing cost data</Badge> : null}
+                  </InlineStack>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.podCost)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Mistake buffer</Text>

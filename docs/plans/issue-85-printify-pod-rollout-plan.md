@@ -92,6 +92,16 @@ Principles:
 
 Replace "save credentials" with "validate and save credentials".
 
+Current token requirements for this tranche:
+
+- Printify personal access token with at least:
+  - `shops.read`
+  - `products.read`
+- These scopes cover the two API surfaces we currently use:
+  - `GET /v1/shops.json` for validation and shop discovery
+  - `GET /v1/shops/{shop_id}/products.json` for sync, SKU matching, and cached POD cost import
+- Printify personal access tokens currently expire after 1 year, so reconnect/rotation guidance should be part of merchant support docs
+
 Planned behavior:
 
 - merchant submits Printify API key

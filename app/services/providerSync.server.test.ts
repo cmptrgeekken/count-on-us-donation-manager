@@ -200,4 +200,90 @@ describe("providerSync.server", () => {
       }),
     );
   });
+
+  it("marks the connection unhealthy when Printify credentials stop validating", async () => {
+    vi.stubEnv("PROVIDER_CREDENTIALS_SECRET", "provider-test-secret");
+
+    const updateRun = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+    const updateConnection = vi.fn().mockResolvedValue(undefined);
+    const createAudit = vi.fn().mockResolvedValue(undefined);
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: vi.fn().mockResolvedValue({
+        message: "Unauthorized",
+      }),
+    });
+    const { encryptProviderCredential } = await import("./providerCredentials.server");
+    const db = {
+      shop: {
+        findUnique: vi.fn(),
+      },
+      providerSyncRun: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "run_1",
+          shopId: "fixture.myshopify.com",
+          provider: "printify",
+          connectionId: "connection_1",
+        }),
+        update: updateRun,
+      },
+      providerConnection: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "connection_1",
+          provider: "printify",
+          providerAccountId: "555",
+          providerAccountName: "Validated Shop",
+          credentialsEncrypted: encryptProviderCredential("pk_live_fixture"),
+        }),
+        update: updateConnection,
+      },
+      variant: {
+        findMany: vi.fn(),
+      },
+      providerVariantMapping: {
+        upsert: vi.fn(),
+        updateMany: vi.fn(),
+      },
+      providerCostCache: {
+        createMany: vi.fn(),
+      },
+      auditLog: {
+        create: createAudit,
+      },
+    };
+
+    await expect(
+      runProviderSync(
+        {
+          shopId: "fixture.myshopify.com",
+          runId: "run_1",
+        },
+        db as never,
+        fetchMock as never,
+      ),
+    ).rejects.toMatchObject({
+      message: "Unauthorized",
+    });
+
+    expect(updateConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "connection_1" },
+        data: expect.objectContaining({
+          status: "sync_failed",
+          lastValidationError: "Unauthorized",
+          lastSyncError: "Unauthorized",
+        }),
+      }),
+    );
+    expect(createAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "PROVIDER_SYNC_FAILED",
+        }),
+      }),
+    );
+  });
 });

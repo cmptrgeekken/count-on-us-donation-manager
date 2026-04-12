@@ -22,6 +22,7 @@ It is intentionally lightweight so decisions can be reviewed later without block
     - hard-code USD until provider evidence says otherwise
     - or introduce provider-currency handling before POD costs are considered production-ready
   - whether the first real Printify cache should stay limited to base fulfillment cost, or also import provider-side shipping estimates in the same sync path
+  - once manual mapping exists, whether duplicate/missing-SKU cases should remain lightweight informational cues or escalate into stronger merchant warnings on Provider Connections / Variants
 
 ### `#45` Shopify charge sync completion scope
 

@@ -18,6 +18,8 @@ describe("providerConnections.server", () => {
             displayName: "Fixture Shop",
             providerAccountName: "Fixture Shop",
             credentialHint: "****1234",
+            credentialUpdatedAt: new Date("2026-04-09T16:00:00Z"),
+            credentialExpiresAt: new Date("2027-04-09T16:00:00Z"),
             lastValidatedAt: new Date("2026-04-09T17:00:00Z"),
             lastValidationError: null,
             lastSyncedAt: null,
@@ -79,6 +81,8 @@ describe("providerConnections.server", () => {
     expect(result.variantsWithSkuCount).toBe(4);
     expect(result.summaries.find((summary) => summary.provider === "printify")?.configured).toBe(true);
     expect(result.summaries.find((summary) => summary.provider === "printify")?.status).toBe("validated");
+    expect(result.summaries.find((summary) => summary.provider === "printify")?.credentialUpdatedAt).toBe("2026-04-09T16:00:00.000Z");
+    expect(result.summaries.find((summary) => summary.provider === "printify")?.credentialExpiresAt).toBe("2027-04-09T16:00:00.000Z");
     expect(result.summaries.find((summary) => summary.provider === "printify")?.mappedVariantCount).toBe(3);
     expect(result.summaries.find((summary) => summary.provider === "printify")?.unmappedVariantCount).toBe(1);
     expect(result.summaries.find((summary) => summary.provider === "printify")?.latestCachedCostCount).toBe(3);
@@ -134,6 +138,8 @@ describe("providerConnections.server", () => {
     const upsertArgs = upsert.mock.calls[0]?.[0];
     expect(upsertArgs.update.status).toBe("validated");
     expect(upsertArgs.update.credentialHint).toBe("****1234");
+    expect(upsertArgs.update.credentialUpdatedAt).toBeInstanceOf(Date);
+    expect(upsertArgs.update.credentialExpiresAt).toBeInstanceOf(Date);
     expect(upsertArgs.update.providerAccountId).toBe("1234");
     expect(upsertArgs.update.providerAccountName).toBe("Fixture Shop");
     expect(upsertArgs.update.credentialsEncrypted).not.toContain("pk_live_fixture_printify_key_1234");

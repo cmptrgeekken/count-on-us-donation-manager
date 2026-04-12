@@ -284,6 +284,8 @@ model ProviderConnection {
   providerAccountName  String?
   credentialsEncrypted String?
   credentialHint       String?
+  credentialUpdatedAt  DateTime?
+  credentialExpiresAt  DateTime?
   lastValidatedAt      DateTime?
   lastValidationError  String?
   lastSyncedAt         DateTime?

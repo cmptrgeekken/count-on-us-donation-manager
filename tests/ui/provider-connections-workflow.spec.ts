@@ -10,7 +10,7 @@ test("provider connections can save and disconnect Printify credentials", async 
 
   await expect(page.getByRole("heading", { name: "Provider Connections" })).toBeVisible();
   await expect(page.getByText("Variants with SKU")).toBeVisible();
-  await expect(page.getByText("Connect Printify to validate credentials")).toBeVisible();
+  await expect(page.getByText("Connect Printify to import provider SKUs")).toBeVisible();
 
   await page.getByLabel("Shop label").fill("Fixture Printify Shop");
   await page.getByLabel("API key").fill("pk_live_fixture_printify_key_1234");
