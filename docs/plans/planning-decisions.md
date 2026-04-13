@@ -18,10 +18,20 @@ Decision:
 - For `#97`, target a medium first pass for the bulk editor instead of trying to replace the full variant-detail editing surface in one grid.
 - For `#94`, include both cause name and amount in the packing-slip donation summary.
 - For `#95`, start with mostly read-only Shopify Admin product/variant surfaces plus deep links back into the embedded app.
-- Automated provider sync is the desired long-term behavior, but it should land after the current Printify tranche is stable rather than being forced into the still-settling core flow.
+- For `#85`, scheduled provider sync should ship in the initial Printify tranche alongside manual sync rather than being deferred.
+
+Additional `#85` rollout defaults:
+
+- disconnect should preserve historical audit/snapshot truth while disabling future active provider-backed cost use
+- unresolved provider variants should fall back to manual costs, but with explicit merchant-facing informational messaging
+- if one Printify credential can access multiple provider shops, the merchant should choose which single shop to bind for the first tranche
+- provider-side shipping remains deferred for the first tranche because it is shipment-level and too easy to double-count
+- POD should remain secondary for reviewer/demo guidance until storefront hardening issues land
+- provider cost currency assumptions can stay provisional/documented for the first tranche instead of blocking rollout
 
 Related:
 
+- `#85`
 - `#94`
 - `#95`
 - `#96`

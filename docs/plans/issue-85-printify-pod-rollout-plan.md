@@ -434,7 +434,7 @@ These should be answered before schema and service work goes too far:
 1. Should disconnecting Printify delete mappings and cache rows immediately, or preserve them as inactive history?
 2. What minimum provider metadata do we need to support manual mapping cleanly?
 3. Should unmapped variants always fall back to manual costs silently, or surface a stronger merchant warning when a provider is configured but a variant is unresolved?
-4. Do we need provider-sync scheduling in this issue, or is manual sync plus reusable job infrastructure enough for the first tranche?
+4. How should scheduled provider sync be included in the first tranche without turning the rollout into a full observability/retry redesign?
 5. Should reviewer/demo guidance treat POD as in-scope immediately after this issue, or only after `#88` and `#90` land?
 
 ## Recommended Decisions
@@ -503,23 +503,28 @@ Suggested wording model:
 - “Using manual cost configuration; provider mapping not yet resolved”
 - “Provider connected, but this variant is not currently receiving provider-backed POD costs”
 
-### 4. Manual sync plus reusable job infrastructure is enough for the first tranche
+### 4. Scheduled sync should ship in the first tranche alongside manual sync
 
 Recommendation:
 
-- `#85` should include manual sync plus the underlying queued job infrastructure
-- scheduled recurring sync should be treated as a follow-on enhancement unless it falls out naturally once the job primitives exist
+- `#85` should include both manual sync and scheduled recurring sync
+- the same underlying queued job infrastructure should power both paths
+- scheduled sync should stay intentionally modest in scope:
+  - one sane default cadence
+  - clear last-run / next-run visibility
+  - basic failure surfacing
+  - no attempt to build a full scheduler control panel in this tranche
 
 Why:
 
-- manual sync is enough to validate the end-to-end provider story
-- it reduces moving parts while we are still learning the provider API and mapping model
-- it keeps the first tranche focused on correctness instead of completeness theater
+- merchants should not have to remember to refresh provider costs by hand for the integration to feel production-meaningful
+- cached POD costs become much more trustworthy if they can refresh automatically from the start
+- the additional scope is justified because sync freshness is part of the core merchant promise, not just an operational convenience
 
 Important caveat:
 
-- the schema and job design should still anticipate scheduled sync later
-- we should not hard-code assumptions that make automation difficult in the next pass
+- this should not become a full sync-orchestration platform
+- keep scheduling opinionated and implementation-simple so the tranche stays focused on correctness
 
 ### 6. Provider-side shipping remains deferred for the first tranche
 
@@ -564,7 +569,7 @@ Unless we explicitly override them, this plan assumes:
 - provider history is preserved, but active linkage is removed or deactivated
 - manual mapping stores enough product/variant metadata to be merchant-usable
 - unresolved variants fall back to manual costs with explicit merchant warnings
-- `#85` ships manual sync and reusable job infrastructure, not necessarily scheduled sync
+- `#85` ships both manual sync and scheduled recurring sync on the same job foundation
 - provider-side shipping remains deferred until a clearer shipment-level model is chosen
 - POD stays out of the primary reviewer path until the storefront hardening follow-ons land
 

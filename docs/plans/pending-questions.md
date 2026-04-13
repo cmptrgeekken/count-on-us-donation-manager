@@ -9,19 +9,11 @@ Resolved decisions and rationale have been moved to [docs/plans/planning-decisio
 ### `#85` Printify rollout breaking-change readiness
 
 - `#85` has a dedicated implementation plan in [docs/plans/issue-85-printify-pod-rollout-plan.md](issue-85-printify-pod-rollout-plan.md).
+- Direction is now documented in:
+  - [docs/plans/issue-85-printify-pod-rollout-plan.md](issue-85-printify-pod-rollout-plan.md)
+  - [docs/plans/planning-decisions.md](./planning-decisions.md)
 - Still to confirm:
-  - whether disconnecting a provider should remove mappings/cache immediately or preserve historical linkage
-  - whether manual sync is enough for the first tranche or whether scheduled sync must land in the same issue
-  - whether unmapped provider variants should silently fall back to manual cost config or raise a stronger merchant warning
-  - whether POD becomes reviewer-facing immediately after `#85`, or only after follow-on storefront/doc hardening
-  - how we want to handle Printify credentials that can access multiple provider shops:
-    - automatically bind to the first accessible shop for the first tranche
-    - prompt the merchant to choose one shop before mapping/sync
-    - or allow syncing multiple Printify shops into one Shopify shop
-  - how we want to treat Printify product costs that arrive as cents without an explicit currency field:
-    - assume shop currency for first-tranche estimates
-    - hard-code USD until provider evidence says otherwise
-    - or introduce provider-currency handling before POD costs are considered production-ready
+  - how tax reserve should interact with POD-related contribution math once issue `#82` is addressed
 
 ### `#61` Demo-store review scope
 
