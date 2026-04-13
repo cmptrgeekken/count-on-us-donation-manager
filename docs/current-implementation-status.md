@@ -149,6 +149,8 @@ These are useful next items, but they are no longer blockers for closing Phase 3
   Merchant toggle, email service, and snapshot-triggered worker are implemented.
 - [~] App Proxy donation receipts page
   A public app-proxy receipts page is implemented.
+- [ ] Public storefront transparency page
+  A broader Shopify Page plus widget experience for public donation reporting, receipts, donations made, and donations pending is planned but not yet implemented. This follow-on is now tracked in `#99`.
 - [~] Full setup wizard
   First-run dashboard wizard and persistent checklist are implemented. Some steps remain intentionally manual because there is no reliable truth source yet.
 

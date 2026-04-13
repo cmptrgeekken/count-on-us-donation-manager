@@ -40,26 +40,25 @@ It is intentionally lightweight so decisions can be reviewed later without block
 ### `#45` Shopify charge sync completion scope
 
 - The core Shopify Payments charge sync service, jobs, and reporting integration appear to be implemented already.
-- It is not yet clear whether `#45` still needs:
-  - a merchant-facing manual sync or troubleshooting control surface
-  - additional reporting visibility beyond what already exists
-  - or simply issue/status cleanup plus final validation
+- Current direction: treat `#45` as a validation-first completion issue rather than assuming it needs a broader UX expansion.
+- Only add follow-up work if focused validation shows a real remaining gap in:
+  - merchant-facing manual sync / retry controls
+  - reporting visibility for imported charges
+  - troubleshooting for payout/charge association failures
 
 ### Country-aware tax guidance rollout
 
 - `#75` exists for exploring country-aware tax estimation guidance.
-- The near-term question is whether the first implementation should be:
-  - curated links and presets for a small country set
-  - a country-to-guidance mapping driven by shop locale/country
-  - or a broader settings architecture that can grow into localized tax help later
+- Current direction: start with curated links and presets for a small country set.
+- Defer broader locale-driven guidance mapping or larger settings architecture until the first curated-country pass proves useful.
 
 ### Storefront widget localization and fee detail depth
 
 - The `#53` widget endpoint currently returns donation and tax estimate values in shop currency.
 - Managed Markets fee data is currently a placeholder and not yet storefront-aware.
-- The follow-up decision is whether:
-  - customer-currency donation conversion and Managed Markets applicability should be completed in the endpoint itself
-  - or whether those should land with the Theme App Extension work that consumes the endpoint
+- Current direction:
+  - Managed Markets applicability and fee logic should be handled server-side because it affects snapshot/reporting truth, not just storefront display.
+  - Customer-currency conversion should stay in the theme layer because it is display-only and should not alter the underlying financial record.
 
 ### Theme App Extension preload strategy
 
@@ -67,16 +66,14 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - fetch lightweight metadata immediately
   - eager-fetch the full payload on page load for low-line products
   - wait until first open for high-line products
-- The follow-up decision is whether this is an acceptable practical interpretation of the preload/lazy ADR, or whether we want to revisit the architecture to pursue a truer page-render-time preload path later.
+- Current direction: accept the current metadata-first strategy as the practical near-term interpretation of the preload/lazy ADR.
+- Only revisit the architecture if real storefront performance or theme behavior shows a meaningful problem.
 
 ### Cart donation summary surface breadth
 
 - `#64` adds a cart-page app block for the donation summary modal.
 - `#93` now tracks the follow-up work for future-proof cart-line annotation matching and cart-drawer compatibility.
-- We should decide whether the long-term storefront expectation is:
-  - cart template support only
-  - a separate cart drawer-compatible integration surface
-  - or both
+- Current direction: long-term storefront expectation is both cart-page and cart-drawer support.
 - Current recommended implementation hierarchy:
   - cart-page app block as the primary supported surface
   - cart-drawer support when the active theme exposes a usable target
@@ -86,9 +83,83 @@ It is intentionally lightweight so decisions can be reviewed later without block
 
 ### Public donation receipts URL shape
 
+- `#99` now tracks the broader public storefront transparency page, disclosure controls, and route-shape follow-up.
+- `#99` now also has a dedicated implementation plan in [docs/plans/issue-99-public-transparency-page-plan.md](issue-99-public-transparency-page-plan.md).
 - `#57` uses the current app proxy base path, so the public receipts page lives at `/apps/count-on-us/donation-receipts`.
 - Older product/docs language still sometimes implies a shorter `/apps/donation-receipts` path.
-- We should decide whether the current proxy base is the long-term canonical storefront URL, or whether we want a broader app-proxy path cleanup later and accept the migration/install constraints that come with it.
+- Current direction: the customer-facing storefront experience should be a normal Shopify Page with an app widget, not a raw app-proxy page as the primary UX.
+- The app-proxy route should be treated as implementation detail and deep-link infrastructure rather than the main storefront surface.
+- We also need to account for a broader public-facing donations/reporting widget, not only receipt browsing:
+  - donation receipts/download history
+  - public-facing breakdown of costs
+  - donations made
+  - donations still pending disbursement
+- Because that storefront page may grow beyond receipts alone, we should revisit whether the backing app-proxy path should stay receipts-specific or move to a more generic donations/reporting route when implementation begins.
+- Recommended storefront shape:
+  - merchant creates a normal Shopify Page such as `Donation Receipts`, `Impact`, or `Transparency`
+  - app widget renders the public donations/transparency experience inside that page
+  - app proxy remains the backing data/download surface and optional deep-link target for specific receipt views
+- Recommended product framing:
+  - this is no longer just a "receipt page" question
+  - it is a broader public transparency surface that can grow to include receipts, donation status, and reporting summaries without exposing internal merchant-only finance tools
+- Proposed public widget sections:
+  - overview summary:
+    - total donations made
+    - total donations pending disbursement
+    - optionally last updated date / reporting period coverage
+  - cause summary:
+    - donations made by cause
+    - donations pending by cause
+  - receipt browser:
+    - date
+    - cause
+    - amount
+    - receipt/download action when a public receipt exists
+  - transparency report:
+    - display-safe cost and reserve breakdowns at the level the merchant chooses to share
+- Current direction for disclosure controls:
+  - use a two-layer model
+  - shop-level settings define the maximum public disclosure allowed for this shop
+  - widget-level settings control which approved sections/details are shown on a specific storefront page placement
+  - widget-level settings must not be able to exceed the shop-level maximum
+- Suggested control split:
+  - shop-level public transparency policy:
+    - whether public transparency surfaces are enabled
+    - maximum disclosure tier (`minimal`, `standard`, `detailed`)
+    - whether public receipts are allowed
+    - whether pending disbursement totals are allowed
+  - widget-level presentation controls:
+    - page/widget title and intro copy
+    - whether to show overview totals
+    - whether to show receipts/history
+    - whether to show cause breakdowns
+    - whether to show public cost/transparency breakdowns
+    - selected disclosure tier, constrained by the shop-level maximum
+- Why this split currently feels right:
+  - disclosure is partly policy and partly presentation
+  - merchants may want different public pages to show different subsets of the same approved transparency data
+  - central guardrails reduce the risk of over-disclosure from an individual widget placement
+- Suggested levels:
+  - minimal:
+    - donations made
+    - donations pending
+    - receipt list only
+  - standard:
+    - minimal plus cause-by-cause totals
+    - high-level cost categories such as materials, equipment, packaging, fees, and tax reserve
+  - detailed:
+    - standard plus more granular line breakdowns that are still display-safe
+    - intended for merchants who want a stronger transparency story without exposing internal purchase-price math or admin-only reporting data
+- Guardrails for any public reporting widget:
+  - never expose raw internal financial records or admin-only reporting surfaces directly
+  - only expose display-safe aggregates approved for storefront use
+  - do not leak material purchase prices, hidden margins, or internal audit-only identifiers
+  - keep "pending disbursement" wording explicit so customers understand these are committed-but-not-yet-disbursed amounts rather than completed donations
+- Follow-up implementation implication:
+  - if this broader transparency widget lands, the backing proxy path should likely become more generic than `donation-receipts`, for example a donations/transparency route with receipts as one subsection rather than the entire contract
+- Recommended implementation framing:
+  - treat this as a dedicated public transparency feature, not as a small extension of the current public receipts page
+  - give it its own issue/backlog track so receipts, public reporting, and disclosure controls can be designed together
 
 ### Post-purchase estimate parity for discounted orders
 
