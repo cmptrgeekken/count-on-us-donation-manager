@@ -164,26 +164,71 @@ It is intentionally lightweight so decisions can be reviewed later without block
 ### Post-purchase estimate parity for discounted orders
 
 - `#55` currently bases pending order estimates on Shopify Admin order line discounted totals before the authoritative snapshot exists.
-- We should confirm whether that is the desired customer-facing approximation, or whether we want tighter parity work later around discounts, shipping allocation, and any order-level adjustments that may cause the confirmed snapshot to differ slightly from the early estimate.
+- Current direction: treat the pre-snapshot customer-facing value as a close-enough estimate rather than trying to fully reproduce final ledger truth before snapshot creation.
+- The product promise should be:
+  - customer-facing pending-order values are directionally reliable and not misleading
+  - final authoritative donation truth is established at snapshot time
+- We should only invest in tighter parity where:
+  - the mismatch is customer-visible
+  - it appears in common discount scenarios
+  - and it can be improved without duplicating the full snapshot accounting model in the estimate path
+- Related packaging/shipping implication:
+  - the PRD currently assumes a one-package max-cost estimate for storefront/pre-fulfillment calculations and explicitly treats true cartonization as future work
+  - actual package truth after fulfillment is already tracked in `#41`, which is the right home for multi-package fulfillment costing and reconciliation against Shopify package usage
+  - near-term estimate behavior can stay heuristic/close-enough while `#41` handles the future shift from estimated package assumptions to actual fulfilled package truth
 
 ### Post-purchase email provider depth and branding
 
 - `#56` selects a pragmatic transport abstraction with `log` and `resend` drivers so the flow is shippable without forcing a provider SDK install in development.
-- We should still decide:
-  - whether Resend is the long-term production default
-  - whether merchants need a configurable `from` address in-app
-  - how much store branding (logo/colors/name treatment) must be present before we consider the donation email production-complete
+- Current direction:
+  - keep `log` as the development/local driver
+  - treat `resend` as the near-term production default
+  - do not pull multi-provider email support into this tranche unless a concrete production need appears
+- Sender identity direction:
+  - do not require merchant-configurable `from` addresses in the first production-complete pass
+  - prefer a stable app-controlled sender identity for reliability
+  - if we need merchant-controlled reply behavior later, explore `reply-to` before full custom sender-domain support
+- Branding direction:
+  - the email should be store-aware and intentional, but not fully theme-customizable
+  - minimum acceptable branding should include:
+    - merchant/store name
+    - clear donation summary framing
+    - readable mobile-friendly layout
+    - accessible heading/content hierarchy
+    - links to public receipts/transparency surfaces when enabled
+  - logo support is useful if it is easy to source reliably, but full visual theme customization should be deferred
+- Product-positioning guardrail:
+  - treat the email primarily as a trustworthy donation summary / follow-up communication
+  - do not frame it as a legal or tax receipt unless the underlying workflow/data truly supports that claim
 
 ### Setup wizard truth sources for currently manual steps
 
+- `#100` now tracks follow-up research into whether Managed Markets enablement / activation timing can be detected reliably enough for wizard automation.
 - `#58` derives most setup completion directly from shop data, but a few steps are still manual:
   - Managed Markets enable date review
   - POD provider connection review
   - storefront widget placement in Theme Editor
-- We should decide whether future iterations should replace those manual completions with:
-  - real saved Settings state for Managed Markets
-  - actual provider connection state
-  - Theme App Extension/theme-placement detection, if Shopify makes that feasible
+- Current direction:
+  - prefer saved app state when the truth is merchant acknowledgement/review
+  - prefer actual system state when the app has a durable integration/source-of-truth signal
+  - keep steps manual when Shopify/theme truth is not reliably observable
+- Managed Markets direction:
+  - if the shop `createdAt` date is after the October 14, 2025 Managed Markets cutoff, and Managed Markets is enabled, we can safely infer the shop uses the post-cutoff pricing model
+  - if the shop was created on or before October 14, 2025, creation date alone is not enough because Shopify's rule is based on when Managed Markets was originally applied for / activated
+  - for older stores, keep using saved merchant confirmation until Shopify exposes a reliable activation-date signal
+  - Managed Markets "enabled" status itself still needs a trustworthy detection source before this step can become fully automatic; generic Markets state is not enough to treat Managed Markets as definitively detected
+  - until a reliable Shopify signal is confirmed, treat Managed Markets enablement as merchant-confirmed rather than auto-detected
+  - follow-up research should verify whether Shopify exposes a dependable Managed Markets enabled / activation-date signal that we can safely use later
+- POD provider connection direction:
+  - move this step toward actual provider connection state
+  - completion should be automatic when a valid provider connection exists
+  - a future refinement could distinguish `connected` from `connected and synced`
+- Theme/widget placement direction:
+  - keep manual for now
+  - only automate if Shopify provides a dependable placement signal
+  - partial detection, if added later, should be assistive rather than authoritative
+- Future refinement worth considering:
+  - support distinct wizard states such as `not started`, `detected/configured`, and `confirmed`, rather than forcing every step into a simple incomplete/complete binary
 
 ### Demo-store review scope
 
@@ -191,6 +236,40 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - Which dev store is the canonical review store?
   - Is POD provider review in scope for App Store reviewers or intentionally excluded?
   - Which theme should be treated as the primary reviewer theme once the widget is enabled?
+- Current direction:
+  - choose one canonical review store and document its exact shop name
+  - choose one canonical OS 2.0 reviewer theme and build the walkthrough around that theme
+  - keep POD out of the primary App Store reviewer path for now
+  - treat POD/provider flows as a secondary demo path until storefront/provider hardening is further along
+- Environment direction:
+  - prefer a remote hosted review environment over a developer workstation as the canonical reviewer/demo environment
+  - local development remains the right place for active implementation and exploratory testing, but not for the official review path
+  - the canonical review environment should be:
+    - stable
+    - remotely reachable without relying on a local machine being online
+    - seeded/resettable
+    - pinned to a known branch or release-candidate state
+- Why a remote review environment is preferred:
+  - better availability and less operational drift than DNS-routing traffic through a local PC
+  - less risk that local experiments or incomplete changes leak into the reviewer path
+  - easier to document as the single source of truth for screenshots, walkthroughs, and QA
+- Cost-conscious hosting options worth exploring for the canonical review environment:
+  - Railway Hobby:
+    - low entry cost (`$5/month`, with the subscription counting toward usage)
+    - easy for app-style deployments
+    - attractive if we want a lightweight always-on review instance
+  - Fly.io shared CPU:
+    - very low baseline cost for a small always-on app (for example, shared-CPU presets can be only a few dollars per month depending on RAM/region)
+    - good fit if we are comfortable with a slightly more infra-oriented setup
+  - Render:
+    - simple app deployment UX
+    - worth exploring if we value operational simplicity over the absolute lowest spend
+  - Google Cloud Run:
+    - attractive for low/variable traffic because of pay-per-use pricing and free tier
+    - better fit if we are comfortable owning a bit more cloud configuration
+- Current recommendation:
+  - start by evaluating Railway Hobby, Fly.io shared CPU, and Cloud Run as the likely best cost/effort tradeoffs
+  - only use a local machine as the canonical review path if remote hosting overhead would materially slow current progress
 
 ### App Store listing final fields
 
@@ -200,6 +279,10 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - privacy policy URL
   - DPA request path
   - response-time commitment wording
+- Supporting draft content now exists for later refinement and legal review:
+  - [docs/legal/privacy-policy-draft.md](../legal/privacy-policy-draft.md)
+  - [docs/legal/dpa-request-page-draft.md](../legal/dpa-request-page-draft.md)
+  - [docs/legal/dpa-template-draft.md](../legal/dpa-template-draft.md)
 
 ### Technical audit blockers to resolve
 
