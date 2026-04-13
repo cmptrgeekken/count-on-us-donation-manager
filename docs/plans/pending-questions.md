@@ -241,6 +241,11 @@ It is intentionally lightweight so decisions can be reviewed later without block
   - choose one canonical OS 2.0 reviewer theme and build the walkthrough around that theme
   - keep POD out of the primary App Store reviewer path for now
   - treat POD/provider flows as a secondary demo path until storefront/provider hardening is further along
+- Recommended default reviewer baseline:
+  - use `Dawn` as the canonical reviewer theme
+  - treat other themes as secondary compatibility validation rather than the primary review path
+  - use one canonical seeded dev store with the exact shop name documented in the review materials
+  - use a remote hosted review environment pinned to a known review/release-candidate state rather than a local workstation
 - Environment direction:
   - prefer a remote hosted review environment over a developer workstation as the canonical reviewer/demo environment
   - local development remains the right place for active implementation and exploratory testing, but not for the official review path
@@ -286,17 +291,50 @@ It is intentionally lightweight so decisions can be reviewed later without block
 
 ### Technical audit blockers to resolve
 
+- `#101` now tracks the follow-up implementation work for compliance webhook handling and customer-data minimization.
 - `#59` identified three immediate submission-readiness blockers from repo inspection:
   - `compliance_topics` are not present in the active app TOML configs
   - privacy policy URL is still undefined in submission docs
   - DPA request path is still undefined in submission docs
-- We should decide whether each of those becomes its own tracked blocker issue or is resolved directly in the Phase 6 branch before wider submission review.
+- Current direction:
+  - keep these bundled under `#59` as explicit submission-readiness checklist blockers rather than splitting them into additional issues for now
+  - resolve them directly in the Phase 6/submission-hardening work unless one unexpectedly expands in scope
+- Recommended `compliance_topics` set for the active app TOML configs:
+  - `customers/data_request`
+  - `customers/redact`
+  - `shop/redact`
+- These should be configured via the TOML `compliance_topics` field rather than treated as ordinary operational webhook topics.
+- Practical implication:
+  - config/TOML work still needs to be paired with real webhook handling behavior for all three required compliance topics, not only declaration in config
+- Current implementation note on customer-linked data:
+  - the app appears intentionally low-PII in its primary reporting domain models
+  - however, it is not truly zero-PII today
+  - likely customer-linked data surfaces that compliance work should account for include:
+    - customer email passed into post-purchase email jobs
+    - customer email persisted today in `AuditLog.payload` for `POST_PURCHASE_EMAIL_SENT`
+    - uploaded receipt files, which may contain personal data depending on merchant uploads
+    - Shopify session records for merchant/staff users
+- Compliance follow-up implication:
+  - `customers/redact` and `customers/data_request` work should start from an explicit inventory of these stored customer-linked data surfaces
+  - post-purchase email audit logging is a likely minimization target because it currently stores the recipient email in audit payloads
 
 ### Final review gating
 
 - `#63` now has a review template, but the final meeting still depends on one remaining missing artifact:
   - execution of the full PRD QA workbook for `#60`
-- We should decide who owns running the workbook end to end and how failures will be recorded:
-  - inline in the workbook
-  - as linked blocking issues
-  - or both
+- Current direction:
+  - treat the QA workbook for `#60` as the execution checklist for the review process
+  - treat `#63` as the final signoff / decision template layered on top of that workbook
+- Ownership direction:
+  - assign one explicit primary owner for running the workbook end to end
+  - supporting participants can help with execution and review, but accountability for completion should stay singular
+- Failure-recording direction:
+  - record failures both inline in the workbook and as linked blocking issues when they are real/actionable
+  - inline notes preserve the execution trail
+  - linked issues ensure failures do not disappear inside a long checklist document
+- Completion direction:
+  - the final review is only complete when:
+    - the workbook has been executed end to end
+    - failures are either fixed or explicitly accepted as non-blocking
+    - blocking issues are linked and resolved
+    - the canonical review store/theme/environment were the ones actually used during the pass
