@@ -71,7 +71,7 @@ What is still stubbed or incomplete:
 
 ### Open Questions
 
-- [ ] How should tax reserve interact with POD-related contribution math once issue `#82` is addressed?
+- [ ] After issue `#82`, what broader tax-reserve policy should apply across deductible cost classes beyond the near-term POD rule documented here?
 
 ### Latest Implementation Notes
 
@@ -80,6 +80,7 @@ What is still stubbed or incomplete:
 - Provider-side shipping is explicitly deferred for the current tranche until we can model it without double-counting against existing packaging/shipping assumptions or blurring shipment-level versus variant-level costs.
 - Provider rollout direction is now explicit: Printify is the current merchant-complete tranche, while future provider work should reuse provider-neutral orchestration seams instead of extending Printify-specific logic indefinitely.
 - Duplicate/missing-SKU cases should remain informational rather than strong warnings or blockers. These mismatches are often deliberate merchant choices rather than operational failures.
+- Printify-style POD charges are treated as merchant-paid fulfillment costs rather than automatic deductions from Shopify payouts, so the near-term tax-reserve model should treat POD as a deductible cost that reduces the estimated taxable base instead of as an additional tax-buffer component.
 
 ### Recently Resolved
 
@@ -224,6 +225,7 @@ Planned behavior:
 Rules to preserve:
 
 - mistake buffer still excludes POD
+- POD should reduce the estimated taxable-profit base rather than being included inside the tax-reserve component itself
 - preview output remains display-safe
 - unmapped variants can still rely on manual cost configuration where applicable
 

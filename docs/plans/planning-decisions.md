@@ -28,6 +28,7 @@ Additional `#85` rollout defaults:
 - provider-side shipping remains deferred for the first tranche because it is shipment-level and too easy to double-count
 - POD should remain secondary for reviewer/demo guidance until storefront hardening issues land
 - provider cost currency assumptions can stay provisional/documented for the first tranche instead of blocking rollout
+- near-term tax-reserve handling should treat POD fulfillment cost as a deductible cost input that reduces the estimated taxable base, not as a separate tax-buffer component
 
 Related:
 

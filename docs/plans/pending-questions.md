@@ -13,7 +13,7 @@ Resolved decisions and rationale have been moved to [docs/plans/planning-decisio
   - [docs/plans/issue-85-printify-pod-rollout-plan.md](issue-85-printify-pod-rollout-plan.md)
   - [docs/plans/planning-decisions.md](./planning-decisions.md)
 - Still to confirm:
-  - how tax reserve should interact with POD-related contribution math once issue `#82` is addressed
+  - the broader post-`#82` tax-reserve policy across deductible cost classes beyond the now-documented near-term POD rule
 
 ### `#61` Demo-store review scope
 
