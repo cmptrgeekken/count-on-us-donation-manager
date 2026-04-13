@@ -66,19 +66,20 @@ What is still stubbed or incomplete:
 - [ ] Clear provider-side shipping-cost import strategy
 - [ ] Full storefront confidence that mapped variants always surface non-zero POD costs correctly
 - [ ] Broader provider support beyond the current Printify tranche
+  Current direction per ADR-010: keep the near-term rollout Printify-first, preserve provider-neutral seams, and treat Printful as the next planned provider rather than an implied current capability.
 - [ ] Final documentation/ADR treatment for all POD tradeoffs and edge cases
 
 ### Open Questions
 
-- [ ] Should provider-side shipping estimates be included in the first POD cost model?
-- [ ] How strongly should we warn merchants about duplicate/missing SKUs before manual mapping exists?
 - [ ] How should tax reserve interact with POD-related contribution math once issue `#82` is addressed?
 
 ### Latest Implementation Notes
 
 - Provider sync now persists a local `ProviderCatalogVariant` cache so manual mapping can work against a stable merchant-visible provider catalog snapshot instead of only transient sync output.
 - Provider Connections now surfaces unresolved variants with manual mapping controls, SKU diagnostics, and cached provider catalog counts.
-- Current first-tranche recommendation remains to defer provider-side shipping import until we can model it without double-counting against existing packaging/shipping assumptions.
+- Provider-side shipping is explicitly deferred for the current tranche until we can model it without double-counting against existing packaging/shipping assumptions or blurring shipment-level versus variant-level costs.
+- Provider rollout direction is now explicit: Printify is the current merchant-complete tranche, while future provider work should reuse provider-neutral orchestration seams instead of extending Printify-specific logic indefinitely.
+- Duplicate/missing-SKU cases should remain informational rather than strong warnings or blockers. These mismatches are often deliberate merchant choices rather than operational failures.
 
 ### Recently Resolved
 
@@ -114,6 +115,7 @@ Related follow-on issues:
 - `#90` storefront accessibility and customer comprehension
 - `#89` docs and setup guidance alignment
 - `#87` App Review blockers
+- `#98` Printful parity and provider-scope follow-up
 
 ## Delivery Strategy
 
@@ -487,13 +489,14 @@ Recommendation:
 
 - unresolved provider variants should continue using manual costs if manual configuration exists
 - they should not silently pretend POD is covered
-- the merchant should see a strong warning in Provider Connections and any relevant admin preview surface that the variant is unresolved and provider-backed POD costs are not active
+- the merchant should see clear informational messaging in Provider Connections and any relevant admin preview surface that the variant is unresolved and provider-backed POD costs are not active
 
 Why:
 
 - this preserves business continuity instead of breaking estimates for partially configured catalogs
 - it stays aligned with the transparency principle by making fallback visible
 - it avoids forcing all-or-nothing provider adoption before the first tranche is useful
+- it reflects the reality that SKU mismatches are often deliberate rather than exceptional failures
 
 Suggested wording model:
 
@@ -517,6 +520,23 @@ Important caveat:
 
 - the schema and job design should still anticipate scheduled sync later
 - we should not hard-code assumptions that make automation difficult in the next pass
+
+### 6. Provider-side shipping remains deferred for the first tranche
+
+Recommendation:
+
+- `#85` should stay limited to provider-backed base fulfillment cost for the current rollout
+- provider-side shipping estimates should not be imported into the active POD cost model yet
+
+Why:
+
+- provider shipping behaves more like shipment/order economics than a simple variant-level production cost
+- importing it now creates meaningful double-counting risk against current packaging/shipping assumptions
+- mixed carts, free-shipping strategies, and provider-side shipping taxes make the modeling ambiguous enough that it deserves its own follow-on pass
+
+Follow-up implication:
+
+- future provider shipping work should likely be modeled as a separate shipment-aware cost decision rather than quietly folded into the current provider base-cost cache
 
 ### 5. POD should become reviewer-facing only after `#88` and `#90`
 
@@ -545,6 +565,7 @@ Unless we explicitly override them, this plan assumes:
 - manual mapping stores enough product/variant metadata to be merchant-usable
 - unresolved variants fall back to manual costs with explicit merchant warnings
 - `#85` ships manual sync and reusable job infrastructure, not necessarily scheduled sync
+- provider-side shipping remains deferred until a clearer shipment-level model is chosen
 - POD stays out of the primary reviewer path until the storefront hardening follow-ons land
 
 ## Exit Criteria

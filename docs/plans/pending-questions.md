@@ -21,9 +21,21 @@ It is intentionally lightweight so decisions can be reviewed later without block
     - assume shop currency for first-tranche estimates
     - hard-code USD until provider evidence says otherwise
     - or introduce provider-currency handling before POD costs are considered production-ready
-  - whether the first real Printify cache should stay limited to base fulfillment cost, or also import provider-side shipping estimates in the same sync path
-  - now that manual mapping exists, whether duplicate/missing-SKU cases should remain lightweight informational cues or escalate into stronger merchant warnings on Provider Connections / Variants
-  - whether provider-side shipping should remain explicitly deferred for the first tranche to avoid double-counting against existing packaging/shipping assumptions, or be modeled in the next POD pass before we call the workflow merchant-complete
+  - now that manual mapping exists, duplicate/missing-SKU cases should remain lightweight informational cues rather than stronger warnings or blockers; mismatches are often deliberate in practice
+  - provider-side shipping is now explicitly deferred for the first tranche so we do not double-count against existing packaging/shipping assumptions before a clearer shipment-level model exists
+
+### PRD scope alignment follow-ups
+
+- `#96` now tracks the missing cause-assignment override hierarchy that the PRD describes beyond product-default assignments.
+- `#97` now tracks the spreadsheet-style bulk variant cost editor that the PRD calls for beyond today's bulk template assignment workflow.
+- `#98` now tracks the unresolved Printful parity / scope question.
+- Current direction: keep the longer-term provider vision broad, but describe the near-term rollout honestly as Printify-first with Printful planned next rather than implied as already supported.
+- Follow-up implication: future provider work should preserve provider-neutral seams instead of letting Printify-specific service logic become the default architecture.
+- Current override-direction for `#96`: narrow near-term implementation scope, keep product-default assignment as the primary path, and prefer tag-based override as the first additional override layer instead of category-based override.
+- Current bulk-editor direction for `#97`: target a medium first pass that covers the most common operational edits without trying to replace the full variant-detail editing surface in one grid.
+- Current packing-slip direction for `#94`: include both cause name and amount in the donation summary rather than only a generic note or cause-name list.
+- Current Shopify Admin native-surface direction for `#95`: start with mostly read-only product/variant surfaces plus deep links back into the embedded app, rather than trying to support inline editing in the first tranche.
+- Current provider-sync direction: automated sync is the desired long-term behavior because it is less obtrusive for merchants, but it should land as the next provider-hardening step once the current Printify tranche is stable rather than being forced into the still-settling core flow.
 
 ### `#45` Shopify charge sync completion scope
 
