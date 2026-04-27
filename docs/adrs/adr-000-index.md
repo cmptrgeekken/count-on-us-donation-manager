@@ -16,6 +16,7 @@ This directory contains Architecture Decision Records (ADRs) for the Shopify Don
 | [ADR-008](adr-008-financial-precision-policy.md) | Financial precision policy | Accepted | April 2026 |
 | [ADR-009](adr-009-cause-payables-and-cross-period-disbursement.md) | Cause payables and cross-period disbursement application | Accepted | April 2026 |
 | [ADR-010](adr-010-provider-rollout-strategy.md) | Provider rollout strategy and provider-neutral integration seams | Accepted | April 2026 |
+| [ADR-011](adr-011-marketing-attribution-transparency.md) | Marketing attribution and customer-facing transparency | Accepted | April 2026 |
 
 ## Dependencies
 
@@ -28,6 +29,7 @@ ADR-001 (Immutable snapshot)
 
 ADR-006 (Bulk migration removal) - no chain dependency; supersedes PRD section 11.6 and Build Plan section 3.9
 ADR-010 (Provider rollout strategy) - guides provider work after ADR-003 and ADR-004 without replacing them
+ADR-011 (Marketing attribution transparency) - extends ADR-003, ADR-004, ADR-009, and ADR-010 for acquisition-cost disclosure
 ```
 
 ## Conventions
