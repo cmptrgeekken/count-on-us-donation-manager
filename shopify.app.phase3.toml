@@ -5,9 +5,6 @@ name = "Count On Us"
 application_url = "https://shopify.mnbecks.com/app"
 embedded = true
 
-[build]
-automatically_update_urls_on_dev = false
-
 [webhooks]
 api_version = "2026-04"
 
@@ -30,6 +27,9 @@ redirect_urls = [
   "https://shopify.mnbecks.com/auth/callback",
   "https://shopify.mnbecks.com/auth/shopify/callback"
 ]
+
+[build]
+automatically_update_urls_on_dev = false
 
 [app_proxy]
 url = "/api/widget"

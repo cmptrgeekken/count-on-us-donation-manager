@@ -1,0 +1,83 @@
+<div
+  class="count-on-us-widget count-on-us-widget--transparency"
+  data-count-on-us-transparency
+  data-count-on-us-design-mode="{{ request.design_mode | json }}"
+  data-proxy-base="/apps/count-on-us"
+  data-disclosure-tier="{{ block.settings.disclosure_tier | escape }}"
+  data-show-overview-totals="{{ block.settings.show_overview_totals | json }}"
+  data-show-cause-summaries="{{ block.settings.show_cause_summaries | json }}"
+  data-show-receipt-history="{{ block.settings.show_receipt_history | json }}"
+>
+  <div class="count-on-us-widget__header">
+    <div class="count-on-us-widget__heading" role="heading" aria-level="2">{{ block.settings.heading | escape }}</div>
+    <div class="count-on-us-widget__description">{{ block.settings.description | escape }}</div>
+  </div>
+
+  <div class="count-on-us-widget__panel" data-count-on-us-transparency-panel>
+    <div class="count-on-us-widget__status">Loading donation transparency details...</div>
+  </div>
+</div>
+
+{% schema %}
+{
+  "name": "Donation transparency",
+  "target": "section",
+  "enabled_on": {
+    "templates": ["page"]
+  },
+  "stylesheet": "donation-widget.css",
+  "javascript": "transparency-page.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Donation transparency"
+    },
+    {
+      "type": "textarea",
+      "id": "description",
+      "label": "Description",
+      "default": "See completed donations, pending disbursements, and public receipt history for this shop."
+    },
+    {
+      "type": "select",
+      "id": "disclosure_tier",
+      "label": "Disclosure tier",
+      "default": "minimal",
+      "options": [
+        {
+          "value": "minimal",
+          "label": "Minimal"
+        },
+        {
+          "value": "standard",
+          "label": "Standard"
+        },
+        {
+          "value": "detailed",
+          "label": "Detailed"
+        }
+      ]
+    },
+    {
+      "type": "checkbox",
+      "id": "show_overview_totals",
+      "label": "Show overview totals",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_cause_summaries",
+      "label": "Show cause summaries",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_receipt_history",
+      "label": "Show receipt history",
+      "default": true
+    }
+  ]
+}
+{% endschema %}

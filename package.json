@@ -3,7 +3,8 @@
   "private": true,
   "scripts": {
     "build": "remix vite:build",
-    "dev": "shopify app dev --tunnel-url https://shopify.mnbecks.com:443",
+    "dev": "npm run dev:db && shopify app dev --tunnel-url https://shopify.mnbecks.com:443",
+    "dev:db": "docker compose up -d db",
     "config:link": "shopify app config link",
     "config:use:local": "shopify app config use shopify.app.toml",
     "config:use:phase3": "shopify app config use shopify.app.phase3.toml",
@@ -45,6 +46,7 @@
     "@remix-run/node": "^2.16.1",
     "@remix-run/react": "^2.16.1",
     "@remix-run/serve": "^2.16.1",
+    "@shopify/polaris": "^12.27.0",
     "@shopify/shopify-app-remix": "^4.1.0",
     "@shopify/shopify-app-session-storage-prisma": "^9.0.0",
     "isbot": "^5.1.0",
