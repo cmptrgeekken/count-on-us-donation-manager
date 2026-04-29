@@ -7,6 +7,8 @@
   data-show-overview-totals="{{ block.settings.show_overview_totals | json }}"
   data-show-cause-summaries="{{ block.settings.show_cause_summaries | json }}"
   data-show-receipt-history="{{ block.settings.show_receipt_history | json }}"
+  data-show-reconciliation="{{ block.settings.show_reconciliation | json }}"
+  data-rollup="{{ block.settings.rollup | escape }}"
 >
   <div class="count-on-us-widget__header">
     <div class="count-on-us-widget__heading" role="heading" aria-level="2">{{ block.settings.heading | escape }}</div>
@@ -77,6 +79,32 @@
       "id": "show_receipt_history",
       "label": "Show receipt history",
       "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_reconciliation",
+      "label": "Show public financial summary",
+      "default": true
+    },
+    {
+      "type": "select",
+      "id": "rollup",
+      "label": "Default rollup",
+      "default": "all",
+      "options": [
+        {
+          "value": "all",
+          "label": "All closed periods"
+        },
+        {
+          "value": "month",
+          "label": "Current month"
+        },
+        {
+          "value": "year",
+          "label": "Current year"
+        }
+      ]
     }
   ]
 }

@@ -313,6 +313,8 @@ export async function buildPendingOrderDonationSummary(
 
     const packagingAllocated =
       orderSubtotal.gt(ZERO) ? packagingCost.mul(resolution.subtotal).div(orderSubtotal) : ZERO;
+    const packagingAllocatedPerUnit =
+      resolution.line.quantity > 0 ? packagingAllocated.div(resolution.line.quantity) : ZERO;
 
     const finalCosts =
       resolution.variantId
@@ -322,16 +324,16 @@ export async function buildPendingOrderDonationSummary(
             resolution.salePrice,
             "snapshot",
             db as Parameters<typeof resolveCosts>[4],
-            packagingAllocated,
+            packagingAllocatedPerUnit,
           )
         : {
             ...resolution.firstPass,
-            packagingCost: packagingAllocated,
+            packagingCost: packagingAllocatedPerUnit,
             totalCost: resolution.firstPass.totalCost
-              .add(packagingAllocated)
+              .add(packagingAllocatedPerUnit)
               .sub(resolution.firstPass.packagingCost),
             netContribution: resolution.salePrice.sub(
-              resolution.firstPass.totalCost.add(packagingAllocated).sub(resolution.firstPass.packagingCost),
+              resolution.firstPass.totalCost.add(packagingAllocatedPerUnit).sub(resolution.firstPass.packagingCost),
             ),
           };
 

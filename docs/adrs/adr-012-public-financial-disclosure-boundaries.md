@@ -18,7 +18,7 @@ The merchant's historical spreadsheet model includes the right level of public i
 - deposited funds
 - sales tax
 - net sales
-- production and operational expense categories
+- production, fulfillment, and required pass-through categories
 - amounts set aside for future costs
 - tax buffer
 - merchant/artist payout categories where applicable
@@ -55,11 +55,13 @@ The public contract should support summary categories such as:
 - labor, assembly, or production work
 - equipment usage or maintenance
 - packaging and shipping materials
-- Shopify shipping or merchant-paid shipping costs when modeled
+- Shopify shipping, merchant-paid postage, or other shipping costs when modeled
 - POD/provider fulfillment costs
 - tax buffer or tax reserve
 - marketing/acquisition reserve
 - merchant-retained amount, artist payout, or other non-donation payout categories when the merchant's public policy includes them
+- donation pool after product costs
+- additional public deductions and reserves
 - net donation pool
 - donations made
 - donations pending disbursement
@@ -73,9 +75,23 @@ Suggested public language:
 - "Marketing/acquisition reserve"
 - "Pending disbursement"
 - "Remaining funds to donate"
-- "Donation pool after costs and reserves"
+- "Donation pool after product costs"
+- "Less fees, taxes, shipping, and reserves"
+- "Public donation pool"
 
 The page should avoid internal accounting terms when customer-facing wording can be clearer.
+
+General business expenses are not public donation-pool deductions by default.
+
+Business expense records are internal tax-supporting and operations-tracking records. They may inform tax reserve calculations or merchant-only reporting, but they should not reduce the public donation pool unless the merchant has explicitly published a donation formula that includes a specific expense category.
+
+Sales tax and shipping/postage are different from general business expenses. Sales tax is collected customer money that is not available for donation, and merchant-paid shipping/postage can be a direct fulfillment cost when the merchant's model tracks it. The public reconciliation should include explicit line items for both, even when the current period amount is unavailable or zero.
+
+The public page should be explicit about the difference between the order-line donation pool and the final public donation pool.
+
+The order-line donation pool, historically represented internally as net contribution, is the amount remaining after product-level costs such as materials, labor, equipment, packaging, POD/provider fulfillment, and mistake buffer. It is useful as a subtotal, but it is not always the final public amount available for donation.
+
+The final public donation pool should subtract the additional public deductions and reserves that are not part of product-level net contribution, including sales tax, payment fees, shipping/postage, tax buffer, and marketing/acquisition reserve when those values are modeled. Detailed public disclosures should show this bridge rather than presenting only one unexplained total.
 
 ### Payout-backed summaries are allowed, raw payout detail is not
 
@@ -168,10 +184,14 @@ Recommended public tier behavior:
 - minimal plus cause-by-cause summaries
 - high-level reconciliation groups:
   - gross sales
+  - sales tax collected
   - fees
   - costs
+  - shipping / postage
   - tax buffer
-  - donation pool
+  - donation pool after product costs
+  - less fees, taxes, shipping, and reserves
+  - public donation pool
   - donated / pending
 
 #### `detailed`
@@ -181,7 +201,7 @@ Recommended public tier behavior:
   - labor / assembly
   - equipment / maintenance
   - packaging / shipping materials
-  - Shopify shipping or merchant-paid shipping costs when modeled
+  - Shopify shipping, merchant-paid postage, or other shipping costs when modeled
   - POD/provider fulfillment
   - Shopify/payment fees
   - app/platform fees when included in the donation formula
@@ -192,6 +212,10 @@ Recommended public tier behavior:
 - cause-level receipt drill-downs with pagination
 
 Detailed does not mean raw. It means more granular aggregate categories.
+
+Detailed public costs still exclude general business expenses by default. Business expenses remain internal unless the merchant's public donation policy intentionally includes a specific expense category.
+
+Detailed public reconciliation must preserve the bridge from product-cost donation pool to final public donation pool. This prevents the internally useful net contribution subtotal from being mistaken for the total amount publicly available for donation.
 
 ### Public contracts must remain separate from admin reporting
 

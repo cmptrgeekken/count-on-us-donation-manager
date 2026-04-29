@@ -15,6 +15,21 @@ type SnapshotLineItemPayload = {
   variant_title?: string | null;
   quantity?: number | string | null;
   price?: string | number | null;
+  total_discount?: string | number | null;
+  discount_allocations?: Array<{
+    amount?: string | number | null;
+    amount_set?: {
+      shop_money?: {
+        amount?: string | number | null;
+      } | null;
+    } | null;
+  }>;
+  discounted_total?: string | number | null;
+  discounted_total_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
 };
 
 type ShopifyOrderPayload = {
@@ -34,6 +49,33 @@ function isUniqueConstraintError(error: unknown) {
 function toDecimal(value: string | number | null | undefined) {
   if (value === null || value === undefined || value === "") return ZERO;
   return new Prisma.Decimal(value);
+}
+
+function getLineDiscount(lineItem: SnapshotLineItemPayload) {
+  if (lineItem.total_discount !== null && lineItem.total_discount !== undefined && lineItem.total_discount !== "") {
+    return toDecimal(lineItem.total_discount);
+  }
+
+  return (lineItem.discount_allocations ?? []).reduce((sum, allocation) => {
+    const amount = allocation.amount ?? allocation.amount_set?.shop_money?.amount;
+    return sum.add(toDecimal(amount));
+  }, ZERO);
+}
+
+function getDiscountedLineSubtotal(lineItem: SnapshotLineItemPayload, quantity: number) {
+  const explicitDiscountedTotal = lineItem.discounted_total ?? lineItem.discounted_total_set?.shop_money?.amount;
+  if (explicitDiscountedTotal !== null && explicitDiscountedTotal !== undefined && explicitDiscountedTotal !== "") {
+    return toDecimal(explicitDiscountedTotal);
+  }
+
+  const undiscountedSubtotal = toDecimal(lineItem.price).mul(quantity);
+  const discountedSubtotal = undiscountedSubtotal.sub(getLineDiscount(lineItem));
+  return discountedSubtotal.isNegative() ? ZERO : discountedSubtotal;
+}
+
+function getDiscountedUnitPrice(lineItem: SnapshotLineItemPayload, quantity: number) {
+  if (quantity <= 0) return ZERO;
+  return getDiscountedLineSubtotal(lineItem, quantity).div(quantity);
 }
 
 function toVariantGid(lineItem: SnapshotLineItemPayload) {
@@ -298,8 +340,8 @@ export async function createSnapshot(
       const variantGid = toVariantGid(lineItem);
       const productGid = toProductGid(lineItem);
       const quantity = Math.max(0, Number(lineItem.quantity ?? 0));
-      const salePrice = toDecimal(lineItem.price);
-      const subtotal = salePrice.mul(quantity);
+      const salePrice = getDiscountedUnitPrice(lineItem, quantity);
+      const subtotal = getDiscountedLineSubtotal(lineItem, quantity);
 
       const variant =
         (variantGid ? variantByGid.get(variantGid) : null) ??
@@ -360,6 +402,8 @@ export async function createSnapshot(
     firstPassResolutions.map(async (line) => {
       const packagingAllocated =
         orderSubtotal.gt(ZERO) ? packagingCost.mul(line.subtotal).div(orderSubtotal) : ZERO;
+      const packagingAllocatedPerUnit =
+        line.quantity > 0 ? packagingAllocated.div(line.quantity) : ZERO;
 
       const finalCosts =
         line.variantId
@@ -369,15 +413,15 @@ export async function createSnapshot(
               line.salePrice,
               "snapshot",
               db,
-              packagingAllocated,
+              packagingAllocatedPerUnit,
               podOverrides.get(line.variantId),
             )
           : {
               ...line.firstPass,
-              packagingCost: packagingAllocated,
-              totalCost: line.firstPass.totalCost.add(packagingAllocated).sub(line.firstPass.packagingCost),
+              packagingCost: packagingAllocatedPerUnit,
+              totalCost: line.firstPass.totalCost.add(packagingAllocatedPerUnit).sub(line.firstPass.packagingCost),
               netContribution: line.salePrice.sub(
-                line.firstPass.totalCost.add(packagingAllocated).sub(line.firstPass.packagingCost),
+                line.firstPass.totalCost.add(packagingAllocatedPerUnit).sub(line.firstPass.packagingCost),
               ),
             };
 

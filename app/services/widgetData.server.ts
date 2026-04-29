@@ -135,6 +135,13 @@ async function loadWidgetProductContext(
   productShopifyId: string,
   db = prisma,
 ): Promise<WidgetProductContext | null> {
+  console.log({
+        shopId,
+        shopifyProductId: productShopifyId,
+        cause: {
+          status: "active",
+        },
+      });
   const [product, causeAssignments, shop, taxOffsetCache] = await Promise.all([
     db.product.findFirst({
       where: { shopId, shopifyId: productShopifyId },
@@ -225,6 +232,7 @@ export async function buildWidgetProductMetadata(
   );
   const deliveryMode = totalLineItemCount < WIDGET_PRELOAD_LINE_THRESHOLD ? "preload" : "lazy";
   const visible = context.causeAssignments.length > 0 && context.product.variants.length > 0;
+  console.log(JSON.stringify(context, undefined, 2));
 
   return {
     productId: context.product.shopifyId,

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
+import { useFetcher, useLoaderData, useNavigate, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db.server";
@@ -464,6 +464,7 @@ export default function ReportingPage() {
   const trueUpFetcher = useFetcher<ReportingActionData>();
   const recalculationFetcher = useFetcher<ReportingActionData>();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const revalidator = useRevalidator();
   const { formatMoney, formatPct, locale } = useAppLocalization();
   const closeDialogRef = useRef<HTMLDialogElement>(null);
@@ -535,7 +536,7 @@ export default function ReportingPage() {
   function setPeriod(periodId: string) {
     const params = new URLSearchParams(searchParams);
     params.set("periodId", periodId);
-    window.location.search = params.toString();
+    navigate(`/app/reporting?${params.toString()}`);
   }
 
   function closePeriod() {

@@ -175,15 +175,15 @@ describe("createSnapshot", () => {
       .mockResolvedValueOnce({
         laborCost: decimal("10"),
         materialCost: decimal("20"),
-        packagingCost: decimal("4"),
+        packagingCost: decimal("2"),
         equipmentCost: decimal("3"),
         mistakeBufferAmount: decimal("2"),
         podCost: decimal("0"),
         podLines: [],
         podCostEstimated: false,
         podCostMissing: false,
-        totalCost: decimal("39"),
-        netContribution: decimal("11"),
+        totalCost: decimal("37"),
+        netContribution: decimal("13"),
         materialLines: [
           {
             materialId: "material-1",
@@ -242,11 +242,11 @@ describe("createSnapshot", () => {
           subtotal: decimal("100"),
           laborCost: decimal("20"),
           materialCost: decimal("40"),
-          packagingCost: decimal("8"),
+          packagingCost: decimal("4"),
           equipmentCost: decimal("6"),
           mistakeBufferAmount: decimal("4"),
-          totalCost: decimal("78"),
-          netContribution: decimal("22"),
+          totalCost: decimal("74"),
+          netContribution: decimal("26"),
           laborMinutes: decimal("6"),
           laborRate: decimal("60"),
         }),
@@ -266,12 +266,96 @@ describe("createSnapshot", () => {
       expect.objectContaining({
         data: [
           expect.objectContaining({
-            amount: decimal("11"),
+            amount: decimal("13"),
           }),
         ],
       }),
     );
     expect(recomputeTaxOffsetCache).toHaveBeenCalled();
+  });
+
+  it("bases snapshots and cause allocations on discounted line totals", async () => {
+    resolveCosts
+      .mockResolvedValueOnce({
+        laborCost: decimal("1"),
+        materialCost: decimal("2"),
+        packagingCost: decimal("0"),
+        equipmentCost: decimal("0"),
+        mistakeBufferAmount: decimal("0"),
+        podCost: decimal("0"),
+        podLines: [],
+        podCostEstimated: false,
+        podCostMissing: false,
+        totalCost: decimal("3"),
+        netContribution: decimal("17"),
+        materialLines: [],
+        equipmentLines: [],
+      })
+      .mockResolvedValueOnce({
+        laborCost: decimal("1"),
+        materialCost: decimal("2"),
+        packagingCost: decimal("0"),
+        equipmentCost: decimal("0"),
+        mistakeBufferAmount: decimal("0"),
+        podCost: decimal("0"),
+        podLines: [],
+        podCostEstimated: false,
+        podCostMissing: false,
+        totalCost: decimal("3"),
+        netContribution: decimal("17"),
+        materialLines: [],
+        equipmentLines: [],
+      });
+
+    const db = createDb();
+
+    await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/discounted",
+        line_items: [
+          {
+            admin_graphql_api_id: "gid://shopify/LineItem/discounted",
+            variant_id: 100,
+            product_id: 200,
+            title: "Wholesale pin",
+            variant_title: "Pin",
+            quantity: 2,
+            price: "50.00",
+            total_discount: "60.00",
+          },
+        ],
+      },
+      db,
+    );
+
+    expect(resolveCosts).toHaveBeenCalledWith(
+      "shop-1",
+      "variant-1",
+      decimal("20"),
+      "snapshot",
+      db,
+      undefined,
+      undefined,
+    );
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          salePrice: decimal("20"),
+          subtotal: decimal("40"),
+          netContribution: decimal("34"),
+        }),
+      }),
+    );
+    expect(db.__spies.causeAllocationCreateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            amount: decimal("17"),
+          }),
+        ],
+      }),
+    );
   });
 
   it("returns the existing snapshot when a concurrent create hits the unique constraint", async () => {

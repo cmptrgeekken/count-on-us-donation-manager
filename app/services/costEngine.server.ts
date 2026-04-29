@@ -467,7 +467,7 @@ export async function resolveCosts(
 
   const computedPackagingCost =
     shippingLineCosts.length > 0
-      ? shippingLineCosts.reduce((max, c) => (c.gt(max) ? c : max), ZERO)
+      ? shippingLineCosts.reduce((sum, c) => sum.add(c), ZERO)
       : ZERO;
 
   const packagingCost =

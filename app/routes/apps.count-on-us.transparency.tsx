@@ -1,9 +1,14 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
-import { buildPublicTransparencyPage, type PublicDisclosureTier } from "../services/publicTransparency.server";
+import {
+  buildPublicTransparencyPage,
+  type PublicDisclosureTier,
+  type PublicTransparencyRollup,
+} from "../services/publicTransparency.server";
 import { authenticatePublicAppProxyRequest } from "../utils/public-auth.server";
 import { checkRateLimit } from "../utils/rate-limit.server";
 
 const disclosureTiers = new Set<PublicDisclosureTier>(["minimal", "standard", "detailed"]);
+const rollups = new Set<PublicTransparencyRollup>(["all", "month", "year", "period"]);
 
 function getClientIpAddress(request: Request) {
   const forwardedFor = request.headers.get("x-forwarded-for");
@@ -16,6 +21,10 @@ function getClientIpAddress(request: Request) {
 
 function parseDisclosureTier(value: string | null): PublicDisclosureTier {
   return value && disclosureTiers.has(value as PublicDisclosureTier) ? (value as PublicDisclosureTier) : "minimal";
+}
+
+function parseRollup(value: string | null): PublicTransparencyRollup {
+  return value && rollups.has(value as PublicTransparencyRollup) ? (value as PublicTransparencyRollup) : "all";
 }
 
 function parseBooleanSetting(value: string | null, fallback: boolean) {
@@ -46,6 +55,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       showOverviewTotals: parseBooleanSetting(url.searchParams.get("showOverviewTotals"), true),
       showReceiptHistory: parseBooleanSetting(url.searchParams.get("showReceiptHistory"), true),
       showCauseSummaries: parseBooleanSetting(url.searchParams.get("showCauseSummaries"), true),
+      showReconciliation: parseBooleanSetting(url.searchParams.get("showReconciliation"), true),
+      rollup: parseRollup(url.searchParams.get("rollup")),
+      month: url.searchParams.get("month") ?? undefined,
+      year: url.searchParams.get("year") ?? undefined,
+      periodId: url.searchParams.get("periodId") ?? undefined,
     },
   });
 

@@ -28,6 +28,8 @@ describe("apps.count-on-us.transparency loader", () => {
       totals: { donationsMade: "0.00", donationsPendingDisbursement: "0.00" },
       causeSummaries: [],
       receipts: [],
+      receiptCauseSummaries: [],
+      reconciliation: null,
       periods: [],
     });
   });
@@ -57,6 +59,11 @@ describe("apps.count-on-us.transparency loader", () => {
         showOverviewTotals: true,
         showReceiptHistory: false,
         showCauseSummaries: true,
+        showReconciliation: true,
+        rollup: "all",
+        month: undefined,
+        year: undefined,
+        periodId: undefined,
       },
     });
     expect(response.status).toBe(200);
@@ -76,6 +83,33 @@ describe("apps.count-on-us.transparency loader", () => {
         showOverviewTotals: true,
         showReceiptHistory: true,
         showCauseSummaries: true,
+        showReconciliation: true,
+        rollup: "all",
+        month: undefined,
+        year: undefined,
+        periodId: undefined,
+      },
+    });
+  });
+
+  it("passes rollup options through to the public contract", async () => {
+    await loader({
+      request: new Request("https://example.com/apps/count-on-us/transparency?rollup=month&month=2026-04&showReconciliation=false"),
+      params: {},
+      context: {},
+    });
+
+    expect(buildPublicTransparencyPage).toHaveBeenCalledWith("fixture-shop.myshopify.com", {
+      presentation: {
+        requestedDisclosureTier: "minimal",
+        showOverviewTotals: true,
+        showReceiptHistory: true,
+        showCauseSummaries: true,
+        showReconciliation: false,
+        rollup: "month",
+        month: "2026-04",
+        year: undefined,
+        periodId: undefined,
       },
     });
   });

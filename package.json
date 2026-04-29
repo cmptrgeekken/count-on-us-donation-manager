@@ -20,6 +20,7 @@
     "prisma:generate:best-effort": "node ./scripts/prisma-generate-best-effort.mjs",
     "seed:dev": "node ./scripts/seed-dev.mjs",
     "seed:demo": "node ./scripts/seed-dev.mjs --preset=demo-store",
+    "seed:import:catalog": "node ./scripts/seed-catalog-import.mjs",
     "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
