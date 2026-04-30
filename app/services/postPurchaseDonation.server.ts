@@ -262,6 +262,13 @@ export async function buildPendingOrderDonationSummary(
               select: { id: true },
             })
           : null;
+      const product =
+        line.productId
+          ? await db.product.findFirst({
+              where: { shopId, shopifyId: line.productId },
+              select: { id: true },
+            })
+          : null;
 
       const firstPass = variant
         ? await resolveCosts(shopId, variant.id, salePrice, "snapshot", db as Parameters<typeof resolveCosts>[4])
@@ -284,6 +291,7 @@ export async function buildPendingOrderDonationSummary(
       return {
         line,
         variantId: variant?.id ?? null,
+        productId: product?.id ?? null,
         salePrice,
         subtotal,
         firstPass,
@@ -309,7 +317,7 @@ export async function buildPendingOrderDonationSummary(
   >();
 
   for (const resolution of firstPassResolutions) {
-    if (!resolution.line.productId) continue;
+    if (!resolution.productId) continue;
 
     const packagingAllocated =
       orderSubtotal.gt(ZERO) ? packagingCost.mul(resolution.subtotal).div(orderSubtotal) : ZERO;
@@ -340,7 +348,7 @@ export async function buildPendingOrderDonationSummary(
     const assignments = await db.productCauseAssignment.findMany({
       where: {
         shopId,
-        shopifyProductId: resolution.line.productId,
+        productId: resolution.productId,
         cause: {
           status: "active",
         },
@@ -367,8 +375,12 @@ export async function buildPendingOrderDonationSummary(
         donationLink: assignment.cause.donationLink ?? null,
         amount: ZERO,
       };
+      const allocationBase = Prisma.Decimal.max(
+        (finalCosts.netContribution ?? ZERO).mul(resolution.line.quantity),
+        ZERO,
+      );
       current.amount = current.amount.add(
-        (finalCosts.netContribution ?? ZERO).mul(resolution.line.quantity).mul(assignment.percentage).div(100),
+        allocationBase.mul(assignment.percentage).div(100),
       );
       causeMap.set(assignment.causeId, current);
     }

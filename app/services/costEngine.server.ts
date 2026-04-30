@@ -6,7 +6,7 @@
  * - Accepts a Prisma client to allow callers to pass a transaction client.
  * - Returns a fully materialised cost structure.
  * - "snapshot" mode: includes netContribution and raw library values.
- * - "preview" mode: display-safe — omits netContribution, purchasePrice, perUnitCost.
+ * - "preview" mode: display-safe at API assembly time — omits netContribution from CostEngine output.
  */
 import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
@@ -22,7 +22,9 @@ export type ResolvedMaterialLine = {
   yield: Prisma.Decimal | null;
   usesPerVariant: Prisma.Decimal | null;
   lineCost: Prisma.Decimal;
-  // snapshot mode only:
+  unitDescription?: string | null;
+  purchaseLink?: string | null;
+  totalUsesPerUnit?: Prisma.Decimal | null;
   purchasePrice?: Prisma.Decimal;
   purchaseQty?: Prisma.Decimal;
   perUnitCost?: Prisma.Decimal;
@@ -34,7 +36,7 @@ export type ResolvedEquipmentLine = {
   minutes: Prisma.Decimal | null;
   uses: Prisma.Decimal | null;
   lineCost: Prisma.Decimal;
-  // snapshot mode only:
+  purchaseLink?: string | null;
   hourlyRate?: Prisma.Decimal | null;
   perUseCost?: Prisma.Decimal | null;
 };
@@ -50,7 +52,7 @@ export type ResolvedPodLine = {
 export type CostResult = {
   laborCost: Prisma.Decimal;
   materialCost: Prisma.Decimal;      // production materials only (before mistake buffer)
-  packagingCost: Prisma.Decimal;     // max shipping material line (ADR-003 packaging rule)
+  packagingCost: Prisma.Decimal;     // sum of shipping material lines in preview; order flows may override
   equipmentCost: Prisma.Decimal;
   mistakeBufferAmount: Prisma.Decimal; // applied to production materials only
   podCost: Prisma.Decimal;
@@ -366,13 +368,14 @@ export async function resolveCosts(
       yield: l.yield_,
       usesPerVariant: l.usesPerVariant,
       lineCost,
+      unitDescription: l.material.unitDescription ?? null,
+      purchaseLink: l.material.purchaseLink ?? null,
+      totalUsesPerUnit: l.material.totalUsesPerUnit,
     };
 
-    if (mode === "snapshot") {
-      line.purchasePrice = l.material.purchasePrice;
-      line.purchaseQty = l.material.purchaseQty;
-      line.perUnitCost = l.material.perUnitCost;
-    }
+    line.purchasePrice = l.material.purchasePrice;
+    line.purchaseQty = l.material.purchaseQty;
+    line.perUnitCost = l.material.perUnitCost;
 
     return line;
   });
@@ -450,17 +453,16 @@ export async function resolveCosts(
       minutes: l.minutes,
       uses: l.uses,
       lineCost,
+      purchaseLink: l.equipment.purchaseLink ?? null,
     };
 
-    if (mode === "snapshot") {
-      line.hourlyRate = l.equipment.hourlyRate;
-      line.perUseCost = l.equipment.perUseCost;
-    }
+    line.hourlyRate = l.equipment.hourlyRate;
+    line.perUseCost = l.equipment.perUseCost;
 
     return line;
   });
 
-  // Step 5: Packaging rule — max cost among shipping material lines (ADR-003)
+  // Step 5: Packaging preview — sum shipping material lines.
   const shippingLineCosts = resolvedMaterialLines
     .filter((l) => l.type === "shipping")
     .map((l) => l.lineCost);

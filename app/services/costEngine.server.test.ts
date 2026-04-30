@@ -293,7 +293,7 @@ describe("resolveCosts shipping material uses costing", () => {
     expect(result.totalCost.toString()).toBe("0.3");
   });
 
-  it("uses the maximum shipping line cost rather than summing shipping lines", async () => {
+  it("sums shipping material lines for preview packaging cost", async () => {
     const flatShippingMaterial = createMaterial({
       id: "box",
       type: "shipping",
@@ -345,8 +345,8 @@ describe("resolveCosts shipping material uses costing", () => {
       createDb(config),
     );
 
-    expect(result.packagingCost.toString()).toBe("4");
-    expect(result.totalCost.toString()).toBe("4");
+    expect(result.packagingCost.toString()).toBe("4.3");
+    expect(result.totalCost.toString()).toBe("4.3");
   });
 
   it("still applies mistake buffer only to production materials when shipping uses lines are present", async () => {

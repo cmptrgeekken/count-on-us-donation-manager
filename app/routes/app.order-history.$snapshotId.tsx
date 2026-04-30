@@ -176,15 +176,17 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           laborRate: line.laborRate?.toString() ?? null,
           podCostEstimated: line.podCostEstimated,
           podCostMissing: line.podCostMissing,
-          materialLines: line.materialLines.map((materialLine) => ({
-            id: materialLine.id,
-            materialName: materialLine.materialName,
-            materialType: materialLine.materialType,
-            costingModel: materialLine.costingModel,
-            quantity: materialLine.quantity.toString(),
-            usesPerVariant: materialLine.usesPerVariant?.toString() ?? null,
-            lineCost: materialLine.lineCost.toString(),
-          })),
+          materialLines: line.materialLines
+            .filter((materialLine) => materialLine.materialType !== "shipping")
+            .map((materialLine) => ({
+              id: materialLine.id,
+              materialName: materialLine.materialName,
+              materialType: materialLine.materialType,
+              costingModel: materialLine.costingModel,
+              quantity: materialLine.quantity.toString(),
+              usesPerVariant: materialLine.usesPerVariant?.toString() ?? null,
+              lineCost: materialLine.lineCost.toString(),
+            })),
           equipmentLines: line.equipmentLines.map((equipmentLine) => ({
             id: equipmentLine.id,
             equipmentName: equipmentLine.equipmentName,
@@ -314,7 +316,6 @@ export default function OrderSnapshotDetailPage() {
                 >
                   <SummaryTile label="Labor" value={formatMoney(line.effectiveLaborCost)} />
                   <SummaryTile label="Materials" value={formatMoney(line.effectiveMaterialCost)} />
-                  <SummaryTile label="Packaging" value={formatMoney(line.effectivePackagingCost)} />
                   <SummaryTile label="Equipment" value={formatMoney(line.effectiveEquipmentCost)} />
                   <SummaryTile label="Buffer" value={formatMoney(line.mistakeBufferAmount)} />
                   <SummaryTile label="Effective total cost" value={formatMoney(line.effectiveTotalCost)} />

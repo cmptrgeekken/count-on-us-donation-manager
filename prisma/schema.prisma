@@ -430,7 +430,9 @@ model ProductCauseAssignment {
   updatedAt        DateTime @updatedAt
 
   @@unique([shopId, shopifyProductId, causeId])
+  @@unique([shopId, productId, causeId])
   @@index([shopId])
+  @@index([shopId, productId])
 }
 
 model OrderSnapshot {

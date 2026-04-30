@@ -13,6 +13,7 @@ export const WIDGET_RATE_LIMIT_PER_MINUTE = 60;
 
 type WidgetProductContext = {
   product: {
+    id: string;
     shopifyId: string;
     variants: Array<{
       id: string;
@@ -49,6 +50,11 @@ function formatMoney(value: Prisma.Decimal) {
   return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2);
 }
 
+function formatDecimal(value: Prisma.Decimal) {
+  const fixed = value.toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP).toFixed();
+  return fixed.includes(".") ? fixed.replace(/0+$/, "").replace(/\.$/, "") : fixed;
+}
+
 function formatPercent(value: Prisma.Decimal | null | undefined) {
   if (!value) return "0.00";
   return value.mul(100).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2);
@@ -56,6 +62,108 @@ function formatPercent(value: Prisma.Decimal | null | undefined) {
 
 function nonNegative(value: Prisma.Decimal) {
   return value.lessThan(ZERO) ? ZERO : value;
+}
+
+function displayUnit(unitDescription: string | null | undefined) {
+  return unitDescription?.trim() || "pc";
+}
+
+function quantityLabel(value: Prisma.Decimal | null | undefined, unit: string) {
+  if (!value) return null;
+  return `${formatDecimal(value)} ${unit}`;
+}
+
+function rateLabel(value: Prisma.Decimal | null | undefined, unit: string) {
+  if (!value) return null;
+  return `$${formatMoney(value)}/${unit}`;
+}
+
+function materialRateDetail(line: {
+  costingModel: string | null;
+  purchasePrice?: Prisma.Decimal;
+  purchaseQty?: Prisma.Decimal;
+  yield: Prisma.Decimal | null;
+  totalUsesPerUnit?: Prisma.Decimal | null;
+  unitDescription?: string | null;
+}) {
+  if (!line.purchasePrice || !line.purchaseQty || line.purchaseQty.lte(ZERO)) return null;
+
+  const unit = displayUnit(line.unitDescription);
+  if (line.costingModel === "yield" && line.yield && line.yield.gt(ZERO)) {
+    return `${formatDecimal(line.yield)} ${unit}/purchase unit @ $${formatMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
+  }
+
+  if (line.costingModel === "uses" && line.totalUsesPerUnit && line.totalUsesPerUnit.gt(ZERO)) {
+    return `${formatDecimal(line.totalUsesPerUnit)} ${unit}/purchase unit @ $${formatMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
+  }
+
+  return `$${formatMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
+}
+
+function displayMaterialLine(line: {
+  name: string;
+  type: string;
+  costingModel: string | null;
+  quantity: Prisma.Decimal;
+  yield: Prisma.Decimal | null;
+  usesPerVariant: Prisma.Decimal | null;
+  lineCost: Prisma.Decimal;
+  unitDescription?: string | null;
+  purchaseLink?: string | null;
+  purchasePrice?: Prisma.Decimal;
+  purchaseQty?: Prisma.Decimal;
+  totalUsesPerUnit?: Prisma.Decimal | null;
+}) {
+  const unit = displayUnit(line.unitDescription);
+  const quantityValue = line.costingModel === "uses" ? line.usesPerVariant : line.quantity;
+  const rateBasis = quantityValue && quantityValue.gt(ZERO) ? line.lineCost.div(quantityValue) : null;
+
+  return {
+    name: line.name,
+    type: line.type,
+    lineCost: formatMoney(line.lineCost),
+    quantity: quantityLabel(quantityValue, unit),
+    quantityValue: quantityValue ? formatDecimal(quantityValue) : null,
+    quantityUnit: unit,
+    quantityParts: quantityValue ? [{ value: formatDecimal(quantityValue), unit }] : [],
+    rate: rateLabel(rateBasis, unit),
+    rateDetail: materialRateDetail(line),
+    purchaseLink: line.purchaseLink ?? null,
+  };
+}
+
+function displayEquipmentLine(line: {
+  name: string;
+  minutes: Prisma.Decimal | null;
+  uses: Prisma.Decimal | null;
+  lineCost: Prisma.Decimal;
+  purchaseLink?: string | null;
+  hourlyRate?: Prisma.Decimal | null;
+  perUseCost?: Prisma.Decimal | null;
+}) {
+  const quantityParts = [
+    quantityLabel(line.minutes, "min"),
+    quantityLabel(line.uses, line.uses?.eq(1) ? "use" : "uses"),
+  ].filter(Boolean);
+  const rateParts = [
+    line.hourlyRate ? `$${formatMoney(line.hourlyRate)}/hr` : null,
+    line.perUseCost ? `$${formatMoney(line.perUseCost)}/use` : null,
+  ].filter(Boolean);
+
+  return {
+    name: line.name,
+    lineCost: formatMoney(line.lineCost),
+    quantity: quantityParts.join(" + ") || null,
+    quantityValue: null,
+    quantityUnit: null,
+    quantityParts: [
+      line.minutes ? { value: formatDecimal(line.minutes), unit: "min" } : null,
+      line.uses ? { value: formatDecimal(line.uses), unit: line.uses.eq(1) ? "use" : "uses" } : null,
+    ].filter((part): part is { value: string; unit: string } => Boolean(part)),
+    rate: rateParts.join(" + ") || null,
+    rateDetail: null,
+    purchaseLink: line.purchaseLink ?? null,
+  };
 }
 
 export type WidgetVariantPayload = {
@@ -67,14 +175,36 @@ export type WidgetVariantPayload = {
     name: string;
     type: string;
     lineCost: string;
+    quantity: string | null;
+    quantityValue: string | null;
+    quantityUnit: string | null;
+    quantityParts: Array<{ value: string; unit: string }>;
+    rate: string | null;
+    rateDetail: string | null;
+    purchaseLink: string | null;
   }>;
   equipmentLines: Array<{
     name: string;
     lineCost: string;
+    quantity: string | null;
+    quantityValue: string | null;
+    quantityUnit: string | null;
+    quantityParts: Array<{ value: string; unit: string }>;
+    rate: string | null;
+    rateDetail: string | null;
+    purchaseLink: string | null;
   }>;
   shippingMaterialLines: Array<{
     name: string;
+    type: string;
     lineCost: string;
+    quantity: string | null;
+    quantityValue: string | null;
+    quantityUnit: string | null;
+    quantityParts: Array<{ value: string; unit: string }>;
+    rate: string | null;
+    rateDetail: string | null;
+    purchaseLink: string | null;
   }>;
   podCostTotal: string;
   mistakeBufferAmount: string;
@@ -135,14 +265,7 @@ async function loadWidgetProductContext(
   productShopifyId: string,
   db = prisma,
 ): Promise<WidgetProductContext | null> {
-  console.log({
-        shopId,
-        shopifyProductId: productShopifyId,
-        cause: {
-          status: "active",
-        },
-      });
-  const [product, causeAssignments, shop, taxOffsetCache] = await Promise.all([
+  const [product, shop, taxOffsetCache] = await Promise.all([
     db.product.findFirst({
       where: { shopId, shopifyId: productShopifyId },
       select: {
@@ -159,29 +282,6 @@ async function loadWidgetProductContext(
                 lineItemCount: true,
               },
             },
-          },
-        },
-      },
-    }),
-    db.productCauseAssignment.findMany({
-      where: {
-        shopId,
-        shopifyProductId: productShopifyId,
-        cause: {
-          status: "active",
-        },
-      },
-      orderBy: [{ percentage: "desc" }, { cause: { name: "asc" } }],
-      select: {
-        causeId: true,
-        percentage: true,
-        cause: {
-          select: {
-            id: true,
-            name: true,
-            is501c3: true,
-            iconUrl: true,
-            donationLink: true,
           },
         },
       },
@@ -206,6 +306,30 @@ async function loadWidgetProductContext(
   if (!product || !shop) {
     return null;
   }
+
+  const causeAssignments = await db.productCauseAssignment.findMany({
+    where: {
+      shopId,
+      productId: product.id,
+      cause: {
+        status: "active",
+      },
+    },
+    orderBy: [{ percentage: "desc" }, { cause: { name: "asc" } }],
+    select: {
+      causeId: true,
+      percentage: true,
+      cause: {
+        select: {
+          id: true,
+          name: true,
+          is501c3: true,
+          iconUrl: true,
+          donationLink: true,
+        },
+      },
+    },
+  });
 
   return {
     product,
@@ -232,7 +356,6 @@ export async function buildWidgetProductMetadata(
   );
   const deliveryMode = totalLineItemCount < WIDGET_PRELOAD_LINE_THRESHOLD ? "preload" : "lazy";
   const visible = context.causeAssignments.length > 0 && context.product.variants.length > 0;
-  console.log(JSON.stringify(context, undefined, 2));
 
   return {
     productId: context.product.shopifyId,
@@ -341,21 +464,11 @@ export async function buildWidgetProductPayload(
         laborCost: formatMoney(laborCost),
         materialLines: costs.materialLines
           .filter((line) => line.type === "production")
-          .map((line) => ({
-            name: line.name,
-            type: line.type,
-            lineCost: formatMoney(line.lineCost),
-          })),
-        equipmentLines: costs.equipmentLines.map((line) => ({
-          name: line.name,
-          lineCost: formatMoney(line.lineCost),
-        })),
+          .map(displayMaterialLine),
+        equipmentLines: costs.equipmentLines.map(displayEquipmentLine),
         shippingMaterialLines: costs.materialLines
           .filter((line) => line.type === "shipping")
-          .map((line) => ({
-            name: line.name,
-            lineCost: formatMoney(line.lineCost),
-          })),
+          .map(displayMaterialLine),
         podCostTotal: formatMoney(podCost),
         mistakeBufferAmount: formatMoney(mistakeBufferAmount),
         shopifyFees: {

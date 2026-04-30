@@ -166,7 +166,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       await tx.productCauseAssignment.deleteMany({
         where: {
           shopId,
-          shopifyProductId: product.shopifyId,
+          OR: [
+            { productId: product.id },
+            { shopifyProductId: product.shopifyId },
+          ],
         },
       });
 

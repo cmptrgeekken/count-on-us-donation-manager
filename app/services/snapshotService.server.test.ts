@@ -81,6 +81,14 @@ function createDb({
       ),
       findFirst: vi.fn().mockResolvedValue(variant),
     },
+    product: {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: "product-1",
+          shopifyId: "gid://shopify/Product/200",
+        },
+      ]),
+    },
     providerVariantMapping: {
       findMany: vi.fn().mockResolvedValue(providerMappings),
     },
@@ -352,6 +360,78 @@ describe("createSnapshot", () => {
         data: [
           expect.objectContaining({
             amount: decimal("17"),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("keeps signed negative snapshot net contribution but clamps cause allocations to zero", async () => {
+    resolveCosts
+      .mockResolvedValueOnce({
+        laborCost: decimal("5"),
+        materialCost: decimal("5"),
+        packagingCost: decimal("0"),
+        equipmentCost: decimal("0"),
+        mistakeBufferAmount: decimal("0"),
+        podCost: decimal("0"),
+        podLines: [],
+        podCostEstimated: false,
+        podCostMissing: false,
+        totalCost: decimal("10"),
+        netContribution: decimal("-9"),
+        materialLines: [],
+        equipmentLines: [],
+      })
+      .mockResolvedValueOnce({
+        laborCost: decimal("5"),
+        materialCost: decimal("5"),
+        packagingCost: decimal("0"),
+        equipmentCost: decimal("0"),
+        mistakeBufferAmount: decimal("0"),
+        podCost: decimal("0"),
+        podLines: [],
+        podCostEstimated: false,
+        podCostMissing: false,
+        totalCost: decimal("10"),
+        netContribution: decimal("-9"),
+        materialLines: [],
+        equipmentLines: [],
+      });
+
+    const db = createDb();
+
+    await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/negative",
+        line_items: [
+          {
+            admin_graphql_api_id: "gid://shopify/LineItem/negative",
+            variant_id: 100,
+            product_id: 200,
+            title: "Wholesale pin",
+            variant_title: "Pin",
+            quantity: 1,
+            price: "1.00",
+          },
+        ],
+      },
+      db,
+    );
+
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          netContribution: decimal("-9"),
+        }),
+      }),
+    );
+    expect(db.__spies.causeAllocationCreateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            amount: decimal("0"),
           }),
         ],
       }),

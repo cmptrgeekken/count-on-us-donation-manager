@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { Prisma, PrismaClient } from "@prisma/client";
 
 const prisma = new PrismaClient();
-const DEFAULT_LABOR_RATE = new Prisma.Decimal("15")
+const DEFAULT_LABOR_RATE = new Prisma.Decimal("15");
 const DEFAULT_MISTAKE_BUFFER = new Prisma.Decimal("0.1");
 
 const EXPECTED_COLLECTIONS = [
@@ -507,33 +507,69 @@ function calculateVariantCosts(variant, indexes, defaultMistakeBuffer, defaultLa
   let materialCost = new Prisma.Decimal(0);
   let packagingCost = new Prisma.Decimal(0);
   let equipmentCost = new Prisma.Decimal(0);
-  let maxShippingMaterialCost = new Prisma.Decimal(0);
+  let shippingMaterialCost = new Prisma.Decimal(0);
+  const resolvedMaterialLines = [];
+  const resolvedEquipmentLines = [];
 
   for (const line of materialLines) {
     const material = indexes.materialsByDedupeKey.get(line.materialDedupeKey);
     if (!material) continue;
     const lineCost = materialLineCost(line, material);
+    resolvedMaterialLines.push({
+      materialDedupeKey: line.materialDedupeKey,
+      materialName: material.name,
+      materialType: material.type,
+      costingModel: material.costingModel,
+      purchasePrice: parseMoney(material.purchasePrice),
+      purchaseQty: parseMoney(material.purchaseQty || 1),
+      perUnitCost: parseMoney(material.perUnitCost),
+      yield_: decimal(line.yield),
+      usesPerVariant: decimal(line.usesPerVariant),
+      quantity: decimal(line.quantity) ?? new Prisma.Decimal(1),
+      lineCost,
+    });
     if (material.type === "shipping") {
-      if (lineCost.gt(maxShippingMaterialCost)) maxShippingMaterialCost = lineCost;
+      shippingMaterialCost = shippingMaterialCost.add(lineCost);
     } else {
       materialCost = materialCost.add(lineCost);
     }
   }
-  packagingCost = maxShippingMaterialCost;
+  packagingCost = shippingMaterialCost;
 
   for (const line of equipmentLines) {
     const equipment = indexes.equipmentByDedupeKey.get(line.equipmentDedupeKey);
     if (!equipment) continue;
-    equipmentCost = equipmentCost.add(equipmentLineCost(line, equipment));
+    const lineCost = equipmentLineCost(line, equipment);
+    resolvedEquipmentLines.push({
+      equipmentDedupeKey: line.equipmentDedupeKey,
+      equipmentName: equipment.name,
+      hourlyRate: decimal(equipment.hourlyRate),
+      perUseCost: decimal(equipment.perUseCost),
+      minutes: decimal(line.minutes),
+      uses: decimal(line.uses),
+      lineCost,
+    });
+    equipmentCost = equipmentCost.add(lineCost);
   }
 
   const laborMinutes = decimal(config?.laborMinutes);
-  const laborRate = decimal(config?.laborRate ?? defaultLaborRate);
+  const laborRate = decimal(defaultLaborRate);
   const laborCost = laborMinutes && laborRate ? laborRate.mul(laborMinutes).div(60) : new Prisma.Decimal(0);
   const mistakeBufferAmount = materialCost.mul(defaultMistakeBuffer);
   const totalCost = materialCost.add(packagingCost).add(equipmentCost).add(laborCost).add(mistakeBufferAmount);
 
-  return { materialCost, packagingCost, equipmentCost, laborCost, mistakeBufferAmount, totalCost, laborMinutes, laborRate };
+  return {
+    materialCost,
+    packagingCost,
+    equipmentCost,
+    laborCost,
+    mistakeBufferAmount,
+    totalCost,
+    laborMinutes,
+    laborRate,
+    materialLines: resolvedMaterialLines,
+    equipmentLines: resolvedEquipmentLines,
+  };
 }
 
 function analyzeTemplateTrends(data, indexes) {
@@ -824,6 +860,8 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
             totalCost: new Prisma.Decimal(0),
             laborMinutes: null,
             laborRate: null,
+            materialLines: [],
+            equipmentLines: [],
           };
 
       preparedLines.push({ lineIndex, lineRow, variant, product, quantity, salePrice, subtotal, costs });
@@ -867,13 +905,55 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
         },
       });
 
+      if (costs.materialLines.length > 0) {
+        const materialRows = costs.materialLines.map((materialLine) => {
+          const isShipping = materialLine.materialType === "shipping";
+          const allocatedShippingCost =
+            isShipping && costs.packagingCost.gt(0)
+              ? materialLine.lineCost.div(costs.packagingCost).mul(packagingAllocated)
+              : new Prisma.Decimal(0);
+          return {
+            snapshotLineId: line.id,
+            materialId: idMaps.materialIds.get(materialLine.materialDedupeKey) ?? null,
+            materialName: materialLine.materialName,
+            materialType: materialLine.materialType,
+            costingModel: materialLine.costingModel,
+            purchasePrice: materialLine.purchasePrice,
+            purchaseQty: materialLine.purchaseQty,
+            perUnitCost: materialLine.perUnitCost,
+            yield_: materialLine.yield_,
+            usesPerVariant: materialLine.usesPerVariant ? materialLine.usesPerVariant.mul(quantity) : null,
+            quantity: isShipping ? materialLine.quantity : materialLine.quantity.mul(quantity),
+            lineCost: isShipping ? allocatedShippingCost : materialLine.lineCost.mul(quantity),
+          };
+        });
+
+        await prisma.orderSnapshotMaterialLine.createMany({ data: materialRows });
+      }
+
+      if (costs.equipmentLines.length > 0) {
+        await prisma.orderSnapshotEquipmentLine.createMany({
+          data: costs.equipmentLines.map((equipmentLine) => ({
+            snapshotLineId: line.id,
+            equipmentId: idMaps.equipmentIds.get(equipmentLine.equipmentDedupeKey) ?? null,
+            equipmentName: equipmentLine.equipmentName,
+            hourlyRate: equipmentLine.hourlyRate,
+            perUseCost: equipmentLine.perUseCost,
+            minutes: equipmentLine.minutes ? equipmentLine.minutes.mul(quantity) : null,
+            uses: equipmentLine.uses ? equipmentLine.uses.mul(quantity) : null,
+            lineCost: equipmentLine.lineCost.mul(quantity),
+          })),
+        });
+      }
+
       const assignments = product ? indexes.assignmentsByProductShopifyId.get(product.shopifyId) ?? [] : [];
       for (const assignment of assignments) {
         const causeId = idMaps.causeIds.get(assignment.causeDedupeKey);
         const cause = data.causes.find((candidate) => candidate._dedupeKey === assignment.causeDedupeKey);
         if (!causeId || !cause) continue;
         const percentage = parseMoney(assignment.percentage);
-        const amount = netContribution.mul(percentage).div(100);
+        const allocationBase = Prisma.Decimal.max(netContribution, new Prisma.Decimal(0));
+        const amount = allocationBase.mul(percentage).div(100);
         await prisma.lineCauseAllocation.create({
           data: {
             shopId,
@@ -962,14 +1042,18 @@ async function importCatalog(data, options) {
       catalogSynced: true,
       wizardStep: 8,
       mistakeBuffer: DEFAULT_MISTAKE_BUFFER,
+      defaultLaborRate: DEFAULT_LABOR_RATE,
     },
   });
-  const defaultLaborRate = shop.laborRate ?? DEFAULT_LABOR_RATE;
+  const defaultLaborRate = shop.defaultLaborRate ?? DEFAULT_LABOR_RATE;
   const defaultMistakeBuffer = shop.mistakeBuffer ?? DEFAULT_MISTAKE_BUFFER;
-  if (shop.mistakeBuffer === null) {
+  if (shop.mistakeBuffer === null || shop.defaultLaborRate === null) {
     await prisma.shop.update({
       where: { shopId },
-      data: { mistakeBuffer: defaultMistakeBuffer },
+      data: {
+        mistakeBuffer: defaultMistakeBuffer,
+        defaultLaborRate,
+      },
     });
   }
 
@@ -1113,12 +1197,16 @@ async function importCatalog(data, options) {
         productionTemplateId: null,
         shippingTemplateId: null,
         laborMinutes: decimal(row.laborMinutes),
+        laborRate: null,
+        mistakeBuffer: null,
         lineItemCount: row.lineItemCount ?? 0,
       },
       update: {
         productionTemplateId: null,
         shippingTemplateId: null,
         laborMinutes: decimal(row.laborMinutes),
+        laborRate: null,
+        mistakeBuffer: null,
         lineItemCount: row.lineItemCount ?? 0,
       },
     });
@@ -1164,29 +1252,41 @@ async function importCatalog(data, options) {
 
   for (const row of data.productCauseAssignments) {
     const productShopifyId = row.productShopifyId || row.shopifyProductId;
-    await prisma.productCauseAssignment.upsert({
+    const productId = productIds.get(productShopifyId);
+    const causeId = causeIds.get(row.causeDedupeKey);
+    if (!productId || !causeId) {
+      throw new Error(`Cannot import product cause assignment ${productShopifyId}: missing product or cause mapping.`);
+    }
+
+    await prisma.productCauseAssignment.deleteMany({
       where: {
-        shopId_shopifyProductId_causeId: {
-          shopId,
-          shopifyProductId: row.shopifyProductId ?? productShopifyId,
-          causeId: causeIds.get(row.causeDedupeKey),
-        },
+        shopId,
+        causeId,
+        OR: [
+          { productId },
+          { shopifyProductId: row.shopifyProductId ?? productShopifyId },
+        ],
       },
-      create: {
+    });
+    await prisma.productCauseAssignment.create({
+      data: {
         shopId,
         shopifyProductId: row.shopifyProductId ?? productShopifyId,
-        productId: productIds.get(productShopifyId),
-        causeId: causeIds.get(row.causeDedupeKey),
-        percentage: decimal(row.percentage),
-      },
-      update: {
-        productId: productIds.get(productShopifyId),
+        productId,
+        causeId,
         percentage: decimal(row.percentage),
       },
     });
   }
 
-  await importCsvFinancials(data, shopId, options, { causeIds }, defaultMistakeBuffer, defaultLaborRate);
+  await importCsvFinancials(
+    data,
+    shopId,
+    options,
+    { causeIds, materialIds, equipmentIds },
+    defaultMistakeBuffer,
+    defaultLaborRate,
+  );
 
   console.log(`Imported catalog export for ${shopId}.`);
   printShopDataCounts(shopId, await shopDataCounts(shopId));

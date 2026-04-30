@@ -37,6 +37,11 @@ describe("buildWidgetProductPayload", () => {
           yield: decimal("20"),
           usesPerVariant: null,
           lineCost: decimal("0.18"),
+          unitDescription: "pc",
+          purchaseLink: "https://example.com/sticker-paper",
+          purchasePrice: decimal("3.60"),
+          purchaseQty: decimal("1"),
+          totalUsesPerUnit: null,
         },
         {
           materialId: "mat-ship",
@@ -47,6 +52,11 @@ describe("buildWidgetProductPayload", () => {
           yield: null,
           usesPerVariant: null,
           lineCost: decimal("0.15"),
+          unitDescription: "pc",
+          purchaseLink: "https://example.com/mailer",
+          purchasePrice: decimal("0.15"),
+          purchaseQty: decimal("1"),
+          totalUsesPerUnit: null,
         },
       ],
       equipmentLines: [
@@ -56,6 +66,9 @@ describe("buildWidgetProductPayload", () => {
           minutes: decimal("2"),
           uses: null,
           lineCost: decimal("0.03"),
+          purchaseLink: "https://example.com/printer",
+          hourlyRate: decimal("0.90"),
+          perUseCost: null,
         },
       ],
     });
@@ -140,18 +153,40 @@ describe("buildWidgetProductPayload", () => {
         name: "Sticker Paper",
         type: "production",
         lineCost: "0.18",
+        quantity: "1 pc",
+        quantityValue: "1",
+        quantityUnit: "pc",
+        quantityParts: [{ value: "1", unit: "pc" }],
+        rate: "$0.18/pc",
+        rateDetail: "20 pc/purchase unit @ $3.60/purchase unit",
+        purchaseLink: "https://example.com/sticker-paper",
       },
     ]);
     expect(result?.variants[0].shippingMaterialLines).toEqual([
       {
         name: "Mailer",
+        type: "shipping",
         lineCost: "0.15",
+        quantity: "1 pc",
+        quantityValue: "1",
+        quantityUnit: "pc",
+        quantityParts: [{ value: "1", unit: "pc" }],
+        rate: "$0.15/pc",
+        rateDetail: "$0.15/purchase unit",
+        purchaseLink: "https://example.com/mailer",
       },
     ]);
     expect(result?.variants[0].equipmentLines).toEqual([
       {
         name: "Printer",
         lineCost: "0.03",
+        quantity: "2 min",
+        quantityValue: null,
+        quantityUnit: null,
+        quantityParts: [{ value: "2", unit: "min" }],
+        rate: "$0.90/hr",
+        rateDetail: null,
+        purchaseLink: "https://example.com/printer",
       },
     ]);
 

@@ -332,6 +332,27 @@ export async function createSnapshot(
   const variantByGid = new Map(
     variants.map((variant: { id: string; shopifyId: string }) => [variant.shopifyId, variant]),
   );
+  const productGids = Array.from(
+    new Set(lineItems.map((lineItem) => toProductGid(lineItem)).filter((productGid): productGid is string => Boolean(productGid))),
+  );
+  const products =
+    db.product?.findMany && productGids.length > 0
+      ? await db.product.findMany({
+          where: {
+            shopId,
+            shopifyId: {
+              in: productGids,
+            },
+          },
+          select: {
+            id: true,
+            shopifyId: true,
+          },
+        })
+      : [];
+  const productByGid = new Map(
+    products.map((product: { id: string; shopifyId: string }) => [product.shopifyId, product]),
+  );
   const initialVariantIds = variants.map((variant: { id: string }) => variant.id);
   const podOverrides = await fetchSnapshotPodOverrides(shopId, initialVariantIds, db, fetchImpl);
 
@@ -427,8 +448,9 @@ export async function createSnapshot(
 
       let allocations: SnapshotResolution["allocations"] = [];
       if (line.productGid) {
+        const product = productByGid.get(line.productGid);
         const productAssignments = await db.productCauseAssignment.findMany({
-          where: { shopId, shopifyProductId: line.productGid },
+          where: { shopId, productId: product?.id ?? "__missing_product__" },
           include: {
             cause: {
               select: { id: true, name: true, is501c3: true },
@@ -436,12 +458,13 @@ export async function createSnapshot(
           },
         });
 
+        const allocationBase = Prisma.Decimal.max(finalCosts.netContribution!.mul(line.quantity), ZERO);
         allocations = productAssignments.map((assignment: any) => ({
           causeId: assignment.causeId,
           causeName: assignment.cause.name,
           is501c3: assignment.cause.is501c3,
           percentage: assignment.percentage,
-          amount: finalCosts.netContribution!.mul(line.quantity).mul(assignment.percentage).div(100),
+          amount: allocationBase.mul(assignment.percentage).div(100),
         }));
       }
 

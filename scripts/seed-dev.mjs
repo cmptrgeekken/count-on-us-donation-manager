@@ -699,8 +699,9 @@ async function seed(shopId, options) {
       });
 
       const causeSplit = faker.number.int({ min: 55, max: 85 });
-      const primaryAllocation = netContribution.mul(decimal(causeSplit)).div(decimal(100));
-      const secondaryAllocation = netContribution.sub(primaryAllocation);
+      const allocationBase = Prisma.Decimal.max(netContribution, decimal(0));
+      const primaryAllocation = allocationBase.mul(decimal(causeSplit)).div(decimal(100));
+      const secondaryAllocation = allocationBase.sub(primaryAllocation);
 
       const allocations = [
         { cause: causes[0], percentage: causeSplit, amount: primaryAllocation },
