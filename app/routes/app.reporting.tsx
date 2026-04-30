@@ -59,6 +59,20 @@ type AllocationRow = {
   allocated: string;
   disbursed: string;
   remaining: string;
+  details: Array<{
+    kind: "order_line" | "true_up";
+    label: string | null;
+    orderSnapshotId?: string;
+    shopifyOrderId?: string;
+    orderNumber: string | null;
+    shopifyLineItemId?: string;
+    productTitle?: string;
+    variantTitle?: string;
+    quantity?: number;
+    grossLineAmount: string | null;
+    netContributionAmount: string | null;
+    allocatedAmount: string;
+  }>;
 };
 
 type ChargeRow = {
@@ -597,6 +611,7 @@ export default function ReportingPage() {
           allocated: allocation.allocated,
           disbursed: allocation.disbursed,
           remaining: remaining.toString(),
+          details: allocation.details ?? [],
         };
       })
     : [];
@@ -830,6 +845,10 @@ export default function ReportingPage() {
                   <s-text color="subdued">{formatMoney(summary.track1.totalNetContribution)}</s-text>
                 </div>
                 <div>
+                  <strong>Sales tax collected</strong>
+                  <s-text color="subdued">{formatMoney(summary.track1.salesTaxCollected ?? "0")}</s-text>
+                </div>
+                <div>
                   <strong>Shopify charges</strong>
                   <s-text color="subdued">{formatMoney(summary.track1.shopifyCharges)}</s-text>
                 </div>
@@ -870,15 +889,61 @@ export default function ReportingPage() {
                     <s-table-cell></s-table-cell>
                   </s-table-row>
                 ) : (
-                  allocationRows.map((allocation) => (
+                  allocationRows.flatMap((allocation) => [
                     <s-table-row key={allocation.causeId}>
                       <s-table-cell>{allocation.causeName}</s-table-cell>
                       <s-table-cell>{allocation.is501c3 ? "Yes" : "No"}</s-table-cell>
                       <s-table-cell>{formatMoney(allocation.allocated)}</s-table-cell>
                       <s-table-cell>{formatMoney(allocation.disbursed)}</s-table-cell>
                       <s-table-cell>{formatMoney(allocation.remaining)}</s-table-cell>
-                    </s-table-row>
-                  ))
+                    </s-table-row>,
+                    <s-table-row key={`${allocation.causeId}-details`}>
+                      <s-table-cell>
+                        <div style={{ display: "grid", gap: "0.45rem", paddingBlock: "0.25rem" }}>
+                          <strong>Contributing order lines</strong>
+                          {allocation.details.length === 0 ? (
+                            <s-text color="subdued">No line-level allocation detail is available for this cause.</s-text>
+                          ) : (
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "minmax(25rem, 3fr) minmax(7rem, 1fr) minmax(7rem, 1fr)",
+                                gap: "0.5rem 1rem",
+                                alignItems: "start",
+                              }}
+                            >
+                              <strong>Order / line item</strong>
+                              <strong>Gross</strong>
+                              <strong>Allocated</strong>
+                              {allocation.details.map((detail, detailIndex) => (
+                                <div
+                                  key={`${allocation.causeId}-${detail.kind}-${detail.orderSnapshotId ?? "adjustment"}-${detail.shopifyLineItemId ?? detailIndex}`}
+                                  style={{ display: "contents" }}
+                                >
+                                  <span>
+                                    {detail.kind === "true_up" ? (
+                                      detail.label ?? "Allocation adjustment"
+                                    ) : (
+                                      <>
+                                        {(detail.orderNumber ?? detail.shopifyOrderId)} · {detail.productTitle}
+                                        {detail.variantTitle ? ` / ${detail.variantTitle}` : ""} · Qty {detail.quantity}
+                                      </>
+                                    )}
+                                  </span>
+                                  <span>{detail.grossLineAmount ? formatMoney(detail.grossLineAmount) : "--"}</span>
+                                  <span>{formatMoney(detail.allocatedAmount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                    </s-table-row>,
+                  ])
                 )}
               </s-table-body>
             </s-table>

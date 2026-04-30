@@ -244,7 +244,7 @@ export async function buildPublicTransparencyPage(
   const scopedEndDate =
     rollupRange?.endDate ?? scopedPeriods.reduce<Date | null>((latest, period) => (!latest || period.endDate > latest ? period.endDate : latest), null);
 
-  const [snapshotLines, shopifyChargeTransactions] =
+  const [snapshotLines, orderSnapshots, shopifyChargeTransactions] =
     scopedStartDate && scopedEndDate
       ? await Promise.all([
           db.orderSnapshotLine.findMany({
@@ -277,6 +277,18 @@ export async function buildPublicTransparencyPage(
               },
             },
           }),
+          db.orderSnapshot.findMany({
+            where: {
+              shopId,
+              createdAt: {
+                gte: scopedStartDate,
+                lt: scopedEndDate,
+              },
+            },
+            select: {
+              salesTaxCollected: true,
+            },
+          }),
           db.shopifyChargeTransaction.findMany({
             where: {
               shopId,
@@ -297,7 +309,7 @@ export async function buildPublicTransparencyPage(
             },
           }),
         ])
-      : [[], []];
+      : [[], [], []];
 
   const causeTotals = new Map<string, { causeId: string; causeName: string; donated: number; pending: number }>();
   const receiptCauseTotals = new Map<
@@ -305,7 +317,13 @@ export async function buildPublicTransparencyPage(
     { causeId: string; causeName: string; donated: number; feesCovered: number; receiptCount: number }
   >();
   const receipts: PublicReceiptRow[] = [];
-  const periodRows = [];
+  const periodRows: Array<{
+    id: string;
+    startDate: string;
+    endDate: string;
+    donationsMade: string;
+    pendingRaw: number;
+  }> = [];
   let totalDonated = 0;
   let totalPending = 0;
 
@@ -383,7 +401,7 @@ export async function buildPublicTransparencyPage(
       startDate: period.startDate.toISOString(),
       endDate: period.endDate.toISOString(),
       donationsMade: formatMoneyValue(periodDonated),
-      donationsPendingDisbursement: showPending ? formatMoneyValue(periodPending) : "0.00",
+      pendingRaw: periodPending,
     });
   }
 
@@ -430,7 +448,7 @@ export async function buildPublicTransparencyPage(
         : 0,
     ),
   );
-  const salesTaxCollected = 0;
+  const salesTaxCollected = sumValues(orderSnapshots, (snapshot) => snapshot.salesTaxCollected);
   const taxBuffer = 0;
   const marketingReserve = 0;
   const productCosts =
@@ -440,9 +458,9 @@ export async function buildPublicTransparencyPage(
     packagingCost +
     podCost +
     mistakeBuffer;
-  const donationPoolAfterProductCosts = grossSales - productCosts;
+  const salesAfterCollectedTax = grossSales - salesTaxCollected;
+  const donationPoolAfterProductCosts = salesAfterCollectedTax - productCosts;
   const additionalPublicDeductions =
-    salesTaxCollected +
     shippingPostage +
     shopifyFees +
     platformFees +
@@ -457,6 +475,9 @@ export async function buildPublicTransparencyPage(
     taxBuffer +
     marketingReserve;
   const publicDonationPool = grossSales - publicCostsAndReserves;
+  const remainingFundsToDonate = Math.max(publicDonationPool - totalDonated, 0);
+  const displayPendingTotal = showPending ? Math.min(totalPending, remainingFundsToDonate) : 0;
+  const pendingScale = totalPending > 0 ? displayPendingTotal / totalPending : 0;
 
   return {
     metadata: {
@@ -471,7 +492,7 @@ export async function buildPublicTransparencyPage(
     },
     totals: {
       donationsMade: presentation.showOverviewTotals ? formatMoneyValue(totalDonated) : "0.00",
-      donationsPendingDisbursement: showPending ? formatMoneyValue(totalPending) : "0.00",
+      donationsPendingDisbursement: formatMoneyValue(displayPendingTotal),
     },
     causeSummaries: showCauseSummary
       ? Array.from(causeTotals.values())
@@ -480,7 +501,7 @@ export async function buildPublicTransparencyPage(
             causeId: cause.causeId,
             causeName: cause.causeName,
             donationsMade: formatMoneyValue(cause.donated),
-            donationsPendingDisbursement: showPending ? formatMoneyValue(cause.pending) : "0.00",
+            donationsPendingDisbursement: showPending ? formatMoneyValue(cause.pending * pendingScale) : "0.00",
           }))
       : [],
     receipts,
@@ -499,14 +520,16 @@ export async function buildPublicTransparencyPage(
     reconciliation: showReconciliation
       ? {
           summary: {
-            orderCount: snapshotLines.length,
+            orderCount: orderSnapshots.length,
             itemCount,
             grossSales: formatMoneyValue(grossSales),
+            salesTaxCollected: formatMoneyValue(salesTaxCollected),
             donationPoolAfterProductCosts: formatMoneyValue(donationPoolAfterProductCosts),
             additionalPublicDeductions: formatMoneyValue(additionalPublicDeductions),
             netDonationPool: formatMoneyValue(publicDonationPool),
             donationsMade: formatMoneyValue(totalDonated),
-            donationsPendingDisbursement: showPending ? formatMoneyValue(totalPending) : "0.00",
+            remainingFundsToDonate: formatMoneyValue(remainingFundsToDonate),
+            donationsPendingDisbursement: formatMoneyValue(displayPendingTotal),
           },
           sections: [
             {
@@ -535,23 +558,31 @@ export async function buildPublicTransparencyPage(
             {
               title: "Donation outcome",
               rows: [
-                buildMoneyRow("Donation pool after product costs", donationPoolAfterProductCosts, "positive"),
-                buildMoneyRow("Less fees, taxes, shipping, and reserves", additionalPublicDeductions, "negative"),
+                buildMoneyRow("Sales after collected tax", salesAfterCollectedTax, "positive"),
+                buildMoneyRow("Donation pool after sales tax and product costs", donationPoolAfterProductCosts, "positive"),
+                buildMoneyRow("Less fees, shipping, and reserves", additionalPublicDeductions, "negative"),
                 buildMoneyRow("Public donation pool", publicDonationPool, "positive"),
                 buildMoneyRow("Donations made", totalDonated, "positive"),
-                buildMoneyRow("Remaining funds to donate", showPending ? totalPending : 0, "neutral"),
+                buildMoneyRow("Remaining funds to donate", remainingFundsToDonate, "neutral"),
               ],
             },
           ],
           notes: [
             "Summaries are aggregated for public transparency and do not expose raw orders, payout IDs, transaction rows, or internal notes.",
-            "Sales tax, shipping/postage, tax buffer, and marketing reserve rows appear as public categories even when no configured amount is available for this period yet.",
-            "The product-cost donation pool is shown separately from the final public donation pool so payment fees, taxes, shipping/postage, and public reserves can be reconciled.",
+            "Sales tax collected is an order-level pass-through amount and is deducted separately from the donation pool.",
+            "Tax buffer is an estimated income/self-employment tax reserve, not collected sales tax.",
+            "The product-cost donation pool is shown separately from the final public donation pool so payment fees, shipping/postage, and public reserves can be reconciled without double-subtracting product costs.",
             "General business expenses are internal tax-supporting records and are not deducted from the public donation pool by default.",
           ],
         }
       : null,
-    periods: periodRows,
+    periods: periodRows.map((period) => ({
+      id: period.id,
+      startDate: period.startDate,
+      endDate: period.endDate,
+      donationsMade: period.donationsMade,
+      donationsPendingDisbursement: showPending ? formatMoneyValue(period.pendingRaw * pendingScale) : "0.00",
+    })),
     hasPublicActivity: scopedPeriods.length > 0,
   };
 }

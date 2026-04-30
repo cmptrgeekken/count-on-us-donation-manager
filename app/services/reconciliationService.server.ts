@@ -8,6 +8,9 @@ type AdminContext = {
 type ReconciliationOrderNode = {
   id: string;
   name: string | null;
+  currentTotalTaxSet?: {
+    shopMoney?: { amount?: string | null } | null;
+  } | null;
 };
 
 type ReconciliationLineItemNode = {
@@ -37,6 +40,11 @@ const RECONCILIATION_ORDERS_QUERY = `#graphql
         node {
           id
           name
+          currentTotalTaxSet {
+            shopMoney {
+              amount
+            }
+          }
         }
       }
     }
@@ -203,6 +211,11 @@ export async function runReconciliation(
         {
           admin_graphql_api_id: order.id,
           name: order.name,
+          current_total_tax_set: {
+            shop_money: {
+              amount: order.currentTotalTaxSet?.shopMoney?.amount ?? "0",
+            },
+          },
           line_items: lineItems.map((node) => ({
             admin_graphql_api_id: node.id,
             variant_id: node.variant?.id ?? null,

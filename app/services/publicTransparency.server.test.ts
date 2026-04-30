@@ -55,6 +55,13 @@ describe("buildPublicTransparencyPage", () => {
           },
         ]),
       },
+      orderSnapshot: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            salesTaxCollected: { toString: () => "4.00", valueOf: () => 4 },
+          },
+        ]),
+      },
       shopifyChargeTransaction: {
         findMany: vi.fn().mockResolvedValue([
           {
@@ -94,6 +101,9 @@ describe("buildPublicTransparencyPage", () => {
     });
     expect(JSON.stringify(result.reconciliation)).toContain("Sales tax collected");
     expect(JSON.stringify(result.reconciliation)).toContain("Shipping / postage");
+    expect(JSON.stringify(result.reconciliation)).toContain("Tax buffer");
+    expect(JSON.stringify(result.reconciliation)).toContain("Less fees, shipping, and reserves");
+    expect(JSON.stringify(result.reconciliation)).not.toContain("Less fees, taxes, shipping, and reserves");
     expect(JSON.stringify(result.reconciliation)).not.toContain("Business expenses");
     expect(result).toEqual({
       metadata: {
@@ -154,10 +164,12 @@ describe("buildPublicTransparencyPage", () => {
           orderCount: 1,
           itemCount: 2,
           grossSales: "50.00",
-          donationPoolAfterProductCosts: "32.75",
+          salesTaxCollected: "4.00",
+          donationPoolAfterProductCosts: "28.75",
           additionalPublicDeductions: "2.25",
-          netDonationPool: "30.50",
+          netDonationPool: "26.50",
           donationsMade: "15.00",
+          remainingFundsToDonate: "11.50",
           donationsPendingDisbursement: "5.00",
         },
         sections: expect.any(Array),
@@ -182,6 +194,9 @@ describe("buildPublicTransparencyPage", () => {
         findMany: vi.fn().mockResolvedValue([]),
       },
       orderSnapshotLine: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      orderSnapshot: {
         findMany: vi.fn().mockResolvedValue([]),
       },
       shopifyChargeTransaction: {
@@ -224,6 +239,9 @@ describe("buildPublicTransparencyPage", () => {
       orderSnapshotLine: {
         findMany: vi.fn(),
       },
+      orderSnapshot: {
+        findMany: vi.fn(),
+      },
       shopifyChargeTransaction: {
         findMany: vi.fn(),
       },
@@ -258,5 +276,6 @@ describe("buildPublicTransparencyPage", () => {
       hasPublicActivity: false,
     });
     expect(db.orderSnapshotLine.findMany).not.toHaveBeenCalled();
+    expect(db.orderSnapshot.findMany).not.toHaveBeenCalled();
   });
 });

@@ -443,6 +443,7 @@ model OrderSnapshot {
   origin         String   @default("webhook")
   periodId       String?
   period         ReportingPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  salesTaxCollected Decimal @default(0) @db.Decimal(10, 2)
   createdAt      DateTime @default(now())
 
   lines OrderSnapshotLine[]

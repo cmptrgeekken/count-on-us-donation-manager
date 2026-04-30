@@ -1,0 +1,2 @@
+ALTER TABLE "OrderSnapshot"
+ADD COLUMN "salesTaxCollected" DECIMAL(10,2) NOT NULL DEFAULT 0;

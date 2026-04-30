@@ -227,6 +227,7 @@ describe("createSnapshot", () => {
       {
         admin_graphql_api_id: "gid://shopify/Order/1",
         name: "#1001",
+        current_total_tax: "8.25",
         line_items: [
           {
             admin_graphql_api_id: "gid://shopify/LineItem/10",
@@ -243,6 +244,13 @@ describe("createSnapshot", () => {
     );
 
     expect(result).toEqual({ created: true, snapshotId: "snapshot-1" });
+    expect(db.__spies.orderSnapshotCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          salesTaxCollected: decimal("8.25"),
+        }),
+      }),
+    );
     expect(db.__spies.orderSnapshotLineCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

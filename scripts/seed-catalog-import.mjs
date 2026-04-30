@@ -1,6 +1,15 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Prisma, PrismaClient } from "@prisma/client";
+import {
+  createOrderLineResolver,
+  loadOrderLineMap,
+  mergePendingOrderLineMappings,
+  normalizeOrderLineText,
+  saveOrderLineMap,
+  summarizeOrderLineMatching,
+} from "./seed-order-line-matching.mjs";
 
 const prisma = new PrismaClient();
 const DEFAULT_LABOR_RATE = new Prisma.Decimal("15");
@@ -33,6 +42,9 @@ function parseArgs() {
     replaceCatalog: false,
     replaceFinancials: false,
     normalizeProductStatus: false,
+    orderLineMap: null,
+    interactiveOrderLineMap: false,
+    fuzzyOrderLineMatching: true,
   };
 
   for (const arg of process.argv.slice(2)) {
@@ -42,12 +54,16 @@ function parseArgs() {
     if (arg === "--replace-catalog") result.replaceCatalog = true;
     if (arg === "--replace-financials") result.replaceFinancials = true;
     if (arg === "--normalize-product-status") result.normalizeProductStatus = true;
+    if (arg === "--interactive-order-line-map") result.interactiveOrderLineMap = true;
+    if (arg === "--fuzzy-order-line-matching") result.fuzzyOrderLineMatching = true;
+    if (arg === "--no-fuzzy-order-line-matching") result.fuzzyOrderLineMatching = false;
     if (arg.startsWith("--file=")) result.file = arg.slice("--file=".length).trim();
     if (arg.startsWith("--orders-csv=")) result.ordersCsv = arg.slice("--orders-csv=".length).trim();
     if (arg.startsWith("--charges-csv=")) result.chargesCsv = arg.slice("--charges-csv=".length).trim();
     if (arg.startsWith("--payment-transactions-csv=")) result.paymentTransactionsCsv = arg.slice("--payment-transactions-csv=".length).trim();
     if (arg.startsWith("--shop=")) result.shopId = arg.slice("--shop=".length).trim();
     if (arg.startsWith("--shop-domain=")) result.shopDomain = arg.slice("--shop-domain=".length).trim();
+    if (arg.startsWith("--order-line-map=")) result.orderLineMap = arg.slice("--order-line-map=".length).trim();
   }
 
   if (!result.shopDomain && result.shopId) {
@@ -65,6 +81,10 @@ function parseArgs() {
 
   if (!result.file) {
     throw new Error("Pass --file=/path/to/shopify-prisma-staging-export_v2.json");
+  }
+
+  if (!result.orderLineMap && result.ordersCsv) {
+    result.orderLineMap = join(dirname(result.ordersCsv), "order-line-map.json");
   }
 
   return result;
@@ -140,6 +160,47 @@ function parseMoney(value) {
   return new Prisma.Decimal(String(value).replace(/[$,']/g, "") || 0);
 }
 
+function firstNonZeroMoney(row, headers) {
+  for (const header of headers) {
+    const amount = parseMoney(row?.[header]);
+    if (!amount.equals(0)) return amount;
+  }
+  return new Prisma.Decimal(0);
+}
+
+function sumMoney(row, headers) {
+  return headers.reduce((sum, header) => sum.add(parseMoney(row?.[header])), new Prisma.Decimal(0));
+}
+
+function orderSalesTax(order) {
+  const headerTax = firstNonZeroMoney(order.header, [
+    "Taxes",
+    "Tax",
+    "Total Tax",
+    "Total tax",
+    "Tax Amount",
+    "Total Tax Amount",
+    "Sales Tax",
+  ]);
+  if (!headerTax.equals(0)) return headerTax;
+
+  return order.lines.reduce(
+    (sum, line) =>
+      sum.add(
+        sumMoney(line, [
+          "Lineitem tax",
+          "Lineitem Tax",
+          "Lineitem taxes",
+          "Tax 1 Value",
+          "Tax 2 Value",
+          "Tax 3 Value",
+          "Tax Value",
+        ]),
+      ),
+    new Prisma.Decimal(0),
+  );
+}
+
 function parseInteger(value, fallback = 0) {
   const parsed = Number.parseInt(String(value ?? "").replace(/[^0-9-]/g, ""), 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -167,7 +228,7 @@ function monthRange(monthKey) {
 }
 
 function normalizeText(value) {
-  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return normalizeOrderLineText(value);
 }
 
 function redactChargeDescription(description) {
@@ -633,6 +694,10 @@ function groupOrderRows(rows) {
   return Array.from(orders.entries()).map(([name, value]) => ({ name, ...value }));
 }
 
+function isCanceledOrder(order) {
+  return Boolean(order.header?.["Cancelled at"]?.trim());
+}
+
 function buildOrderLineDiscounts(order) {
   const lineGrossCents = order.lines.map((lineRow) => {
     if (normalizeText(lineRow["Lineitem name"]) === "tip") return 0;
@@ -691,6 +756,43 @@ function financialAnalysis(options) {
   };
 }
 
+async function analyzeOrderLineMatching(data, options) {
+  const orderRows = parseCsvFile(options.ordersCsv);
+  if (orderRows.length === 0) return;
+
+  const indexes = buildCatalogIndexes(data);
+  const resolver = createOrderLineResolver({
+    indexes,
+    orderLineMap: loadOrderLineMap(options.orderLineMap),
+    fuzzyEnabled: options.fuzzyOrderLineMatching,
+    interactive: options.interactiveOrderLineMap,
+  });
+
+  try {
+    for (const order of groupOrderRows(orderRows)) {
+      if (!order.header || isCanceledOrder(order)) continue;
+      for (const lineRow of order.lines) {
+        if (normalizeText(lineRow["Lineitem name"]) === "tip") continue;
+        await resolver.resolve(lineRow["Lineitem name"], {
+          quantity: parseInteger(lineRow["Lineitem quantity"], 1),
+        });
+      }
+    }
+  } finally {
+    await resolver.close();
+  }
+
+  console.log("\nOrder line catalog matching:");
+  for (const line of summarizeOrderLineMatching(resolver.stats)) {
+    console.log(line);
+  }
+  if (resolver.pendingMappings.size > 0) {
+    console.log(
+      `- ${resolver.pendingMappings.size} mapping(s) would be saved to ${options.orderLineMap} during a non-dry run.`,
+    );
+  }
+}
+
 function periodKeyForOrder(order, transactionsByOrder) {
   const transaction = transactionsByOrder.get(order.name);
   if (transaction?.["Payout Date"]) return monthKeyFromDate(transaction["Payout Date"]);
@@ -731,9 +833,18 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
   if (orderRows.length === 0 && charges.length === 0 && transactions.length === 0) return;
 
   const indexes = buildCatalogIndexes(data);
+  const orderLineMap = loadOrderLineMap(options.orderLineMap);
+  const orderLineResolver = createOrderLineResolver({
+    indexes,
+    orderLineMap,
+    fuzzyEnabled: options.fuzzyOrderLineMatching,
+    interactive: options.interactiveOrderLineMap,
+  });
   const periodsByMonth = new Map();
   const allocationsByPeriodCause = new Map();
   const transactionsByOrder = new Map();
+  let importedOrderCount = 0;
+  let skippedCanceledOrderCount = 0;
 
   for (const transaction of transactions) {
     if (transaction.Order && !transactionsByOrder.has(transaction.Order)) {
@@ -809,9 +920,23 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
 
   for (const order of groupOrderRows(orderRows)) {
     if (!order.header) continue;
+    const shopifyOrderId = syntheticGid("Order", order.header.Id || order.name);
+
+    if (isCanceledOrder(order)) {
+      skippedCanceledOrderCount += 1;
+      await prisma.orderSnapshot.deleteMany({
+        where: {
+          shopId,
+          shopifyOrderId,
+          origin: "csv_import",
+        },
+      });
+      continue;
+    }
+
     const period = await ensurePeriod(periodsByMonth, shopId, periodKeyForOrder(order, transactionsByOrder));
     const createdAt = date(order.header["Created at"]);
-    const shopifyOrderId = syntheticGid("Order", order.header.Id || order.name);
+    const salesTaxCollected = orderSalesTax(order);
     const snapshot = await prisma.orderSnapshot.upsert({
       where: { shopId_shopifyOrderId: { shopId, shopifyOrderId } },
       create: {
@@ -819,12 +944,14 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
         shopifyOrderId,
         orderNumber: order.name,
         origin: "csv_import",
+        salesTaxCollected,
         createdAt,
         periodId: period.id,
       },
       update: {
         orderNumber: order.name,
         origin: "csv_import",
+        salesTaxCollected,
         createdAt,
         periodId: period.id,
       },
@@ -841,7 +968,9 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
     for (let lineIndex = 0; lineIndex < order.lines.length; lineIndex += 1) {
       const lineRow = order.lines[lineIndex];
       if (normalizeText(lineRow["Lineitem name"]) === "tip") continue;
-      const variant = resolveVariantForOrderLine(lineRow["Lineitem name"], indexes);
+      const variant = await orderLineResolver.resolve(lineRow["Lineitem name"], {
+        quantity: parseInteger(lineRow["Lineitem quantity"], 1),
+      });
       const product = variant ? indexes.productsByShopifyId.get(variant.productShopifyId) : null;
       const quantity = parseInteger(lineRow["Lineitem quantity"], 1);
       const grossSubtotal = parseMoney(lineRow["Lineitem price"]).mul(quantity);
@@ -978,6 +1107,26 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
         allocationsByPeriodCause.set(allocationKey, current);
       }
     }
+    importedOrderCount += 1;
+  }
+
+  await orderLineResolver.close();
+
+  const touchedPeriodIds = new Set(Array.from(periodsByMonth.values()).map((period) => period.id));
+  for (const existingAllocation of await prisma.causeAllocation.findMany({
+    where: {
+      shopId,
+      periodId: { in: Array.from(touchedPeriodIds) },
+    },
+    select: {
+      id: true,
+      periodId: true,
+      causeId: true,
+    },
+  })) {
+    if (!allocationsByPeriodCause.has(`${existingAllocation.periodId}:${existingAllocation.causeId}`)) {
+      await prisma.causeAllocation.delete({ where: { id: existingAllocation.id } });
+    }
   }
 
   for (const allocation of allocationsByPeriodCause.values()) {
@@ -1001,8 +1150,17 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
   }
 
   console.log(
-    `Imported ${groupOrderRows(orderRows).length} orders, ${charges.length} Shopify charge rows, and ${transactions.length} payment transaction rows for ${shopId}.`,
+    `Imported ${importedOrderCount} orders, skipped ${skippedCanceledOrderCount} canceled orders, ${charges.length} Shopify charge rows, and ${transactions.length} payment transaction rows for ${shopId}.`,
   );
+  console.log("\nOrder line catalog matching:");
+  for (const line of summarizeOrderLineMatching(orderLineResolver.stats)) {
+    console.log(line);
+  }
+  if (orderLineResolver.pendingMappings.size > 0) {
+    const nextOrderLineMap = mergePendingOrderLineMappings(orderLineMap, orderLineResolver.pendingMappings);
+    saveOrderLineMap(options.orderLineMap, nextOrderLineMap);
+    console.log(`Saved ${orderLineResolver.pendingMappings.size} order line mapping(s) to ${options.orderLineMap}.`);
+  }
 }
 
 async function importCatalog(data, options) {
@@ -1025,7 +1183,10 @@ async function importCatalog(data, options) {
   if (validation.errors.length > 0) {
     throw new Error(`Import validation failed with ${validation.errors.length} error(s).`);
   }
-  if (options.dryRun) return;
+  if (options.dryRun) {
+    await analyzeOrderLineMatching(data, options);
+    return;
+  }
 
   const shop = await prisma.shop.upsert({
     where: { shopId },

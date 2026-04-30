@@ -36,6 +36,18 @@ type ShopifyOrderPayload = {
   admin_graphql_api_id?: string;
   name?: string | null;
   order_number?: string | number | null;
+  total_tax?: string | number | null;
+  current_total_tax?: string | number | null;
+  total_tax_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
+  current_total_tax_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
   line_items?: SnapshotLineItemPayload[];
 };
 
@@ -76,6 +88,15 @@ function getDiscountedLineSubtotal(lineItem: SnapshotLineItemPayload, quantity: 
 function getDiscountedUnitPrice(lineItem: SnapshotLineItemPayload, quantity: number) {
   if (quantity <= 0) return ZERO;
   return getDiscountedLineSubtotal(lineItem, quantity).div(quantity);
+}
+
+function getOrderSalesTax(order: ShopifyOrderPayload) {
+  return toDecimal(
+    order.current_total_tax ??
+      order.current_total_tax_set?.shop_money?.amount ??
+      order.total_tax ??
+      order.total_tax_set?.shop_money?.amount,
+  );
 }
 
 function toVariantGid(lineItem: SnapshotLineItemPayload) {
@@ -302,10 +323,21 @@ export async function createSnapshot(
 
   const existing = await db.orderSnapshot.findFirst({
     where: { shopId, shopifyOrderId },
-    select: { id: true },
+    select: { id: true, salesTaxCollected: true },
   });
 
   if (existing) {
+    const salesTaxCollected = getOrderSalesTax(order);
+    if (
+      salesTaxCollected.greaterThan(ZERO) &&
+      new Prisma.Decimal(existing.salesTaxCollected ?? ZERO).equals(ZERO) &&
+      typeof db.orderSnapshot.update === "function"
+    ) {
+      await db.orderSnapshot.update({
+        where: { id: existing.id },
+        data: { salesTaxCollected },
+      });
+    }
     return { created: false, snapshotId: existing.id };
   }
 
@@ -485,6 +517,7 @@ export async function createSnapshot(
           shopifyOrderId,
           orderNumber: order.name ?? order.order_number?.toString() ?? null,
           origin,
+          salesTaxCollected: getOrderSalesTax(order),
         },
       });
 

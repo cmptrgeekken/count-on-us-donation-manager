@@ -8,6 +8,21 @@ import { normalizeTaxDeductionMode } from "./taxReserve.server";
 const ZERO = new Prisma.Decimal(0);
 const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
 
+type CauseAllocationDetail = {
+  kind: "order_line" | "true_up";
+  label?: string;
+  orderSnapshotId?: string;
+  shopifyOrderId?: string;
+  orderNumber?: string | null;
+  shopifyLineItemId?: string;
+  productTitle?: string;
+  variantTitle?: string;
+  quantity?: number;
+  grossLineAmount?: Prisma.Decimal;
+  netContributionAmount?: Prisma.Decimal;
+  allocatedAmount: Prisma.Decimal;
+};
+
 function addAllocation(
   allocations: Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>,
   allocation: { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal },
@@ -48,7 +63,7 @@ function computeAdjustedAllocationAmount({
 export type ReportingSummaryResult = Awaited<ReturnType<typeof buildReportingSummary>>;
 
 function floorCurrency(value: Prisma.Decimal) {
-  return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
+  return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 }
 
 export async function buildReportingSummary(shopId: string, requestedPeriodId?: string | null, db = prisma) {
@@ -76,7 +91,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
 
   const selectedPeriod = periods.find((period) => period.id === requestedPeriodId) ?? periods[0];
 
-  const [shop, snapshotLines, closedAllocations, expensesSummary, chargesSummary, charges, disbursements, taxTrueUps, carryForwardTrueUps, activeCauses, outstandingAllocations] =
+  const [shop, snapshotLines, orderTaxSummary, closedAllocations, expensesSummary, chargesSummary, charges, disbursements, taxTrueUps, carryForwardTrueUps, activeCauses, outstandingAllocations] =
     await Promise.all([
       db.shop.findUnique({
         where: { shopId },
@@ -96,12 +111,34 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           },
         },
         select: {
+          shopifyLineItemId: true,
+          productTitle: true,
+          variantTitle: true,
+          quantity: true,
+          subtotal: true,
           netContribution: true,
+          snapshot: {
+            select: {
+              id: true,
+              shopifyOrderId: true,
+              orderNumber: true,
+            },
+          },
           adjustments: { select: { netContribAdj: true } },
           causeAllocations: {
             select: { causeId: true, causeName: true, is501c3: true, amount: true },
           },
         },
+      }),
+      db.orderSnapshot.aggregate({
+        where: {
+          shopId,
+          createdAt: {
+            gte: selectedPeriod.startDate,
+            lt: selectedPeriod.endDate,
+          },
+        },
+        _sum: { salesTaxCollected: true },
       }),
       db.causeAllocation.findMany({
         where: {
@@ -274,11 +311,13 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
     ]);
 
   const allocationMap = new Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>();
+  const allocationDetailMap = new Map<string, CauseAllocationDetail[]>();
   let totalNetContribution = ZERO;
 
   for (const line of snapshotLines) {
     const adjustmentTotal = line.adjustments.reduce((sum, adj) => sum.add(adj.netContribAdj), ZERO);
-    totalNetContribution = totalNetContribution.add(line.netContribution).add(adjustmentTotal);
+    const adjustedLineNetContribution = line.netContribution.add(adjustmentTotal);
+    totalNetContribution = totalNetContribution.add(adjustedLineNetContribution);
 
     for (const allocation of line.causeAllocations) {
       const adjusted = computeAdjustedAllocationAmount({
@@ -293,10 +332,27 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         is501c3: allocation.is501c3,
         allocated: adjusted,
       });
+
+      const details = allocationDetailMap.get(allocation.causeId) ?? [];
+      details.push({
+        kind: "order_line",
+        orderSnapshotId: line.snapshot.id,
+        shopifyOrderId: line.snapshot.shopifyOrderId,
+        orderNumber: line.snapshot.orderNumber ?? null,
+        shopifyLineItemId: line.shopifyLineItemId,
+        productTitle: line.productTitle,
+        variantTitle: line.variantTitle,
+        quantity: line.quantity,
+        grossLineAmount: line.subtotal,
+        netContributionAmount: adjustedLineNetContribution,
+        allocatedAmount: adjusted,
+      });
+      allocationDetailMap.set(allocation.causeId, details);
     }
   }
 
   const expenseTotal = expensesSummary._sum.amount ?? ZERO;
+  const salesTaxCollected = orderTaxSummary._sum.salesTaxCollected ?? ZERO;
   const shopifyCharges = chargesSummary._sum.amount ?? ZERO;
   const useClosedAllocations = selectedPeriod.status === "CLOSED" && closedAllocations.length > 0;
   let allocationRows = useClosedAllocations
@@ -330,6 +386,13 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         const existing = allocationMapWithCarryForward.get(redistribution.causeId);
         if (existing) {
           existing.allocated = existing.allocated.add(redistribution.amount);
+          const details = allocationDetailMap.get(redistribution.causeId) ?? [];
+          details.push({
+            kind: "true_up",
+            label: "Tax true-up redistribution",
+            allocatedAmount: redistribution.amount,
+          });
+          allocationDetailMap.set(redistribution.causeId, details);
           continue;
         }
 
@@ -340,6 +403,13 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           allocated: redistribution.amount,
           disbursed: ZERO,
         });
+        allocationDetailMap.set(redistribution.causeId, [
+          {
+            kind: "true_up",
+            label: "Tax true-up redistribution",
+            allocatedAmount: redistribution.amount,
+          },
+        ]);
       }
     }
 
@@ -490,6 +560,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       },
       track1: {
         totalNetContribution: totalNetContribution.toString(),
+        salesTaxCollected: salesTaxCollected.toString(),
         shopifyCharges: shopifyCharges.toString(),
         donationPool: totalNetContribution.sub(shopifyCharges).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
         taxTrueUpSurplusApplied: carryForwardSurplus.toString(),
@@ -500,6 +571,20 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           is501c3: allocation.is501c3,
           allocated: allocation.allocated.toString(),
           disbursed: allocation.disbursed.toString(),
+          details: (allocationDetailMap.get(allocation.causeId) ?? []).map((detail) => ({
+            kind: detail.kind,
+            label: detail.label ?? null,
+            orderSnapshotId: detail.orderSnapshotId,
+            shopifyOrderId: detail.shopifyOrderId,
+            orderNumber: detail.orderNumber ?? null,
+            shopifyLineItemId: detail.shopifyLineItemId,
+            productTitle: detail.productTitle,
+            variantTitle: detail.variantTitle,
+            quantity: detail.quantity,
+            grossLineAmount: detail.grossLineAmount?.toString() ?? null,
+            netContributionAmount: detail.netContributionAmount?.toString() ?? null,
+            allocatedAmount: detail.allocatedAmount.toString(),
+          })),
         })),
       },
       track2: {
