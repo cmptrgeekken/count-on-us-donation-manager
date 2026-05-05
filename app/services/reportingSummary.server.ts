@@ -310,6 +310,66 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       ),
     ]);
 
+  const packageAllocations = db.orderPackageAllocation?.findMany
+    ? await db.orderPackageAllocation.findMany({
+        where: {
+          shopId,
+          snapshot: {
+            createdAt: {
+              gte: selectedPeriod.startDate,
+              lt: selectedPeriod.endDate,
+            },
+          },
+        },
+        orderBy: [{ createdAt: "desc" }],
+        take: 25,
+        select: {
+          id: true,
+          packageName: true,
+          quantity: true,
+          materialCost: true,
+          source: true,
+          confidence: true,
+          reason: true,
+          snapshot: {
+            select: {
+              id: true,
+              orderNumber: true,
+            },
+          },
+        },
+      })
+    : [];
+
+  const packagingReviewItems = db.packagingReviewItem?.findMany
+    ? await db.packagingReviewItem.findMany({
+        where: {
+          shopId,
+          status: "open",
+          snapshot: {
+            createdAt: {
+              gte: selectedPeriod.startDate,
+              lt: selectedPeriod.endDate,
+            },
+          },
+        },
+        orderBy: [{ createdAt: "desc" }],
+        take: 25,
+        select: {
+          id: true,
+          reason: true,
+          severity: true,
+          createdAt: true,
+          snapshotId: true,
+          snapshot: {
+            select: {
+              orderNumber: true,
+            },
+          },
+        },
+      })
+    : [];
+
   const allocationMap = new Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>();
   const allocationDetailMap = new Map<string, CauseAllocationDetail[]>();
   let totalNetContribution = ZERO;
@@ -605,6 +665,27 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         amount: charge.amount.toString(),
         processedAt: charge.processedAt?.toISOString() ?? null,
       })),
+      packaging: {
+        allocations: packageAllocations.map((allocation: any) => ({
+          id: allocation.id,
+          packageName: allocation.packageName,
+          quantity: allocation.quantity,
+          materialCost: allocation.materialCost.toString(),
+          source: allocation.source,
+          confidence: allocation.confidence,
+          reason: allocation.reason ?? null,
+          snapshotId: allocation.snapshot.id,
+          orderNumber: allocation.snapshot.orderNumber ?? "Unnumbered order",
+        })),
+        reviewItems: packagingReviewItems.map((item: any) => ({
+          id: item.id,
+          reason: item.reason,
+          severity: item.severity,
+          createdAt: item.createdAt.toISOString(),
+          snapshotId: item.snapshotId,
+          orderNumber: item.snapshot.orderNumber ?? "Unnumbered order",
+        })),
+      },
       disbursements: disbursementRows,
       causePayables,
       taxTrueUps: taxTrueUps.map((trueUp) => ({

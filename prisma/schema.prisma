@@ -112,6 +112,7 @@ model MaterialLibraryItem {
 
   templateLines CostTemplateMaterialLine[]
   variantLines  VariantMaterialLine[]
+  packageLines  ShippingPackageMaterialLine[]
 
   @@index([shopId, status])
 }
@@ -227,6 +228,13 @@ model VariantCostConfig {
   productionTemplate   CostTemplate? @relation("ProductionTemplate", fields: [productionTemplateId], references: [id])
   shippingTemplateId   String?
   shippingTemplate     CostTemplate? @relation("ShippingTemplate", fields: [shippingTemplateId], references: [id])
+  preferredPackageId   String?
+  preferredPackage     ShippingPackage? @relation(fields: [preferredPackageId], references: [id], onDelete: SetNull)
+  packedLength         Decimal?      @db.Decimal(10, 3)
+  packedWidth          Decimal?      @db.Decimal(10, 3)
+  packedHeight         Decimal?      @db.Decimal(10, 3)
+  packedWeightGrams    Decimal?      @db.Decimal(10, 3)
+  canSharePackage      Boolean       @default(true)
   laborMinutes         Decimal?      @db.Decimal(10, 4)
   laborRate            Decimal?      @db.Decimal(10, 4) // overrides Shop.defaultLaborRate when set
   mistakeBuffer        Decimal?      @db.Decimal(5, 4) // overrides Shop.mistakeBuffer when set
@@ -237,6 +245,44 @@ model VariantCostConfig {
   materialLines  VariantMaterialLine[]
   equipmentLines VariantEquipmentLine[]
 
+  @@index([shopId])
+  @@index([shopId, preferredPackageId])
+}
+
+model ShippingPackage {
+  id                String   @id @default(cuid())
+  shopId            String
+  name              String
+  shopifyPackageId  String?
+  length            Decimal  @db.Decimal(10, 3)
+  width             Decimal  @db.Decimal(10, 3)
+  height            Decimal  @db.Decimal(10, 3)
+  emptyWeightGrams  Decimal? @db.Decimal(10, 3)
+  maxWeightGrams    Decimal? @db.Decimal(10, 3)
+  source            String   @default("manual")
+  status            String   @default("active")
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  materialLines        ShippingPackageMaterialLine[]
+  preferredByConfigs   VariantCostConfig[]
+  orderAllocations     OrderPackageAllocation[]
+
+  @@unique([shopId, shopifyPackageId])
+  @@index([shopId, status])
+}
+
+model ShippingPackageMaterialLine {
+  id         String              @id @default(cuid())
+  shopId     String
+  packageId  String
+  package    ShippingPackage     @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  materialId String
+  material   MaterialLibraryItem @relation(fields: [materialId], references: [id], onDelete: Restrict)
+  quantity   Decimal             @db.Decimal(10, 4)
+
+  @@unique([packageId, materialId])
   @@index([shopId])
 }
 
@@ -447,10 +493,50 @@ model OrderSnapshot {
   createdAt      DateTime @default(now())
 
   lines OrderSnapshotLine[]
+  packageAllocations OrderPackageAllocation[]
+  packagingReviewItems PackagingReviewItem[]
 
   @@unique([shopId, shopifyOrderId])
   @@index([shopId])
   @@index([shopId, periodId])
+}
+
+model OrderPackageAllocation {
+  id                 String        @id @default(cuid())
+  shopId             String
+  snapshotId         String
+  snapshot           OrderSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  packageId          String?
+  package            ShippingPackage? @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  packageName        String
+  quantity           Int           @default(1)
+  materialCost       Decimal       @db.Decimal(10, 4)
+  source             String        @default("cartonization")
+  confidence         String        @default("high")
+  reason             String?
+  allocationSignature String
+  createdAt          DateTime      @default(now())
+
+  @@index([shopId])
+  @@index([snapshotId])
+  @@unique([snapshotId, allocationSignature])
+}
+
+model PackagingReviewItem {
+  id          String        @id @default(cuid())
+  shopId      String
+  snapshotId  String
+  snapshot    OrderSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  status      String        @default("open")
+  reason      String
+  severity    String        @default("medium")
+  payload     Json?
+  resolvedAt  DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([shopId, status])
+  @@index([snapshotId])
 }
 
 model OrderSnapshotLine {

@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
 import { resolveCosts, type CostResult, type PodCostResolution } from "./costEngine.server";
+import { reconcileSnapshotPackaging } from "./packaging.server";
 import { decryptProviderCredential } from "./providerCredentials.server";
 import { listPrintifyProducts } from "./printify.server";
 import { recomputeTaxOffsetCache } from "./taxOffsetCache.server";
@@ -382,7 +383,7 @@ export async function createSnapshot(
           },
         })
       : [];
-  const productByGid = new Map(
+  const productByGid = new Map<string, { id: string; shopifyId: string }>(
     products.map((product: { id: string; shopifyId: string }) => [product.shopifyId, product]),
   );
   const initialVariantIds = variants.map((variant: { id: string }) => variant.id);
@@ -520,6 +521,13 @@ export async function createSnapshot(
           salesTaxCollected: getOrderSalesTax(order),
         },
       });
+      const packagingLines: Array<{
+        id: string;
+        variantId: string | null;
+        quantity: number;
+        subtotal: Prisma.Decimal;
+        packagingCost: Prisma.Decimal;
+      }> = [];
 
       for (const line of withFinalCosts) {
         const snapshotLine = await tx.orderSnapshotLine.create({
@@ -560,6 +568,13 @@ export async function createSnapshot(
                 )?.laborRate ?? null
               : null,
           },
+        });
+        packagingLines.push({
+          id: snapshotLine.id,
+          variantId: line.variantId,
+          quantity: line.quantity,
+          subtotal: line.subtotal,
+          packagingCost: line.finalCosts.packagingCost.mul(line.quantity),
         });
 
         if (line.finalCosts.materialLines.length > 0) {
@@ -621,6 +636,10 @@ export async function createSnapshot(
             })),
           });
         }
+      }
+
+      if (typeof tx.orderPackageAllocation?.upsert === "function") {
+        await reconcileSnapshotPackaging(shopId, snapshot.id, packagingLines, tx);
       }
 
       await recomputeTaxOffsetCache(shopId, tx);

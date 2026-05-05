@@ -43,6 +43,7 @@ export default function App() {
         <Link to="/app/dashboard" rel="home">Dashboard</Link>
         <Link to="/app/settings">Settings</Link>
         <Link to="/app/materials">Materials</Link>
+        <Link to="/app/packages">Shipping Packages</Link>
         <Link to="/app/equipment">Equipment</Link>
         <Link to="/app/templates">Cost Templates</Link>
         <Link to="/app/variants">Variants</Link>

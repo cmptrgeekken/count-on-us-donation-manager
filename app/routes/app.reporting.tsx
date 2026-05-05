@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useNavigate, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useNavigate, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db.server";
@@ -867,6 +867,45 @@ export default function ReportingPage() {
                   <s-text color="subdued">{formatMoney(summary.track1.taxTrueUpShortfallApplied)}</s-text>
                 </div>
               </div>
+            </div>
+          </s-section>
+
+          <s-section heading="Packaging reconciliation">
+            <div style={{ display: "grid", gap: "1rem" }}>
+              {summary.packaging.reviewItems.length > 0 ? (
+                <s-banner tone="warning">
+                  <s-text>{summary.packaging.reviewItems.length} order(s) need packaging review for this reporting period.</s-text>
+                </s-banner>
+              ) : null}
+              {summary.packaging.allocations.length === 0 ? (
+                <s-text color="subdued">No package allocations have been recorded for this reporting period yet.</s-text>
+              ) : (
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header>Order</s-table-header>
+                    <s-table-header>Package</s-table-header>
+                    <s-table-header>Qty</s-table-header>
+                    <s-table-header>Confidence</s-table-header>
+                    <s-table-header format="currency">Material cost</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {summary.packaging.allocations.map((allocation: (typeof summary.packaging.allocations)[number]) => (
+                      <s-table-row key={allocation.id}>
+                        <s-table-cell>
+                          <Link to={`/app/order-history/${allocation.snapshotId}`}>{allocation.orderNumber}</Link>
+                        </s-table-cell>
+                        <s-table-cell>
+                          <strong>{allocation.packageName}</strong>
+                          {allocation.reason ? <div><s-text color="subdued">{allocation.reason}</s-text></div> : null}
+                        </s-table-cell>
+                        <s-table-cell>{allocation.quantity}</s-table-cell>
+                        <s-table-cell>{allocation.confidence}</s-table-cell>
+                        <s-table-cell>{formatMoney(allocation.materialCost)}</s-table-cell>
+                      </s-table-row>
+                    ))}
+                  </s-table-body>
+                </s-table>
+              )}
             </div>
           </s-section>
 

@@ -181,6 +181,12 @@ function formatProviderName(provider: string) {
 const variantDraftSchema = z.object({
   productionTemplateId: z.string().nullable().optional(),
   shippingTemplateId: z.string().nullable().optional(),
+  preferredPackageId: z.string().nullable().optional(),
+  packedLength: z.string(),
+  packedWidth: z.string(),
+  packedHeight: z.string(),
+  packedWeightGrams: z.string(),
+  canSharePackage: z.boolean(),
   laborMinutes: z.string(),
   laborRate: z.string(),
   mistakeBuffer: z.string(),
@@ -258,7 +264,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const [templates, materials, equipment] = await Promise.all([
+  const [templates, materials, equipment, packages] = await Promise.all([
     prisma.costTemplate.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
@@ -276,6 +282,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
       select: { id: true, name: true, hourlyRate: true, perUseCost: true },
+    }),
+    prisma.shippingPackage.findMany({
+      where: { shopId, status: "active" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, length: true, width: true, height: true },
     }),
   ]);
 
@@ -428,6 +439,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           id: config.id,
           productionTemplateId: config.productionTemplateId,
           shippingTemplateId: config.shippingTemplateId,
+          preferredPackageId: config.preferredPackageId,
+          packedLength: config.packedLength?.toString() ?? "",
+          packedWidth: config.packedWidth?.toString() ?? "",
+          packedHeight: config.packedHeight?.toString() ?? "",
+          packedWeightGrams: config.packedWeightGrams?.toString() ?? "",
+          canSharePackage: config.canSharePackage,
           templateName: config.productionTemplate?.name ?? null,
           laborMinutes: config.laborMinutes?.toString() ?? "",
           laborRate: config.laborRate?.toString() ?? "",
@@ -475,6 +492,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       name: item.name,
       hourlyRate: item.hourlyRate?.toString() ?? null,
       perUseCost: item.perUseCost?.toString() ?? null,
+    })),
+    packages: packages.map((pkg) => ({
+      id: pkg.id,
+      name: pkg.name,
+      dimensions: `${pkg.length} x ${pkg.width} x ${pkg.height}`,
     })),
   });
 };
@@ -640,6 +662,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const draft = parsedDraft.data;
     const normalizedProductionTemplateId = draft.productionTemplateId?.trim() || null;
     const normalizedShippingTemplateId = draft.shippingTemplateId?.trim() || null;
+    const normalizedPreferredPackageId = draft.preferredPackageId?.trim() || null;
     const selectedTemplate = normalizedProductionTemplateId
       ? await prisma.costTemplate.findFirst({
           where: { id: normalizedProductionTemplateId, shopId },
@@ -671,6 +694,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     if (selectedShippingTemplate && selectedShippingTemplate.type !== "shipping") {
       return Response.json({ ok: false, message: "Shipping override must reference a shipping template." }, { status: 400 });
+    }
+
+    if (normalizedPreferredPackageId) {
+      const preferredPackage = await prisma.shippingPackage.findFirst({
+        where: { id: normalizedPreferredPackageId, shopId, status: "active" },
+        select: { id: true },
+      });
+      if (!preferredPackage) {
+        return Response.json({ ok: false, message: "Preferred package not found." }, { status: 404 });
+      }
     }
 
     const materialMap = new Map((selectedTemplate?.materialLines ?? []).map((line) => [line.id, line.materialId]));
@@ -719,6 +752,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         draft.laborMinutes ||
         draft.laborRate ||
         draft.mistakeBuffer ||
+        normalizedPreferredPackageId ||
+        draft.packedLength ||
+        draft.packedWidth ||
+        draft.packedHeight ||
+        draft.packedWeightGrams ||
+        draft.canSharePackage === false ||
         draft.materialLines.length ||
         draft.equipmentLines.length ||
         draft.templateMaterialLines.some((line) => line.hasOverride) ||
@@ -791,6 +830,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           data: {
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
+            preferredPackageId: normalizedPreferredPackageId,
+            packedLength: parseOptionalNonNegativeNumber(draft.packedLength, "Packed length"),
+            packedWidth: parseOptionalNonNegativeNumber(draft.packedWidth, "Packed width"),
+            packedHeight: parseOptionalNonNegativeNumber(draft.packedHeight, "Packed height"),
+            packedWeightGrams: parseOptionalNonNegativeNumber(draft.packedWeightGrams, "Packed weight"),
+            canSharePackage: draft.canSharePackage,
             laborMinutes: parseOptionalNonNegativeNumber(draft.laborMinutes, "Labor minutes"),
             laborRate: parseOptionalNonNegativeNumber(draft.laborRate, "Labor rate"),
             mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer, "Mistake buffer"),
@@ -804,6 +849,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             variantId,
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
+            preferredPackageId: normalizedPreferredPackageId,
+            packedLength: parseOptionalNonNegativeNumber(draft.packedLength, "Packed length"),
+            packedWidth: parseOptionalNonNegativeNumber(draft.packedWidth, "Packed width"),
+            packedHeight: parseOptionalNonNegativeNumber(draft.packedHeight, "Packed height"),
+            packedWeightGrams: parseOptionalNonNegativeNumber(draft.packedWeightGrams, "Packed weight"),
+            canSharePackage: draft.canSharePackage,
             laborMinutes: parseOptionalNonNegativeNumber(draft.laborMinutes, "Labor minutes"),
             laborRate: parseOptionalNonNegativeNumber(draft.laborRate, "Labor rate"),
             mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer, "Mistake buffer"),
@@ -1320,6 +1371,12 @@ type AvailableEquipment = {
   perUseCost: string | null;
 };
 
+type AvailablePackage = {
+  id: string;
+  name: string;
+  dimensions: string;
+};
+
 function describeMaterialLine(line: {
   costingModel: string | null;
   quantity: string | null;
@@ -1345,6 +1402,12 @@ function describeEquipmentLine(line: {
 function buildVariantDraft(config: {
   productionTemplateId?: string | null;
   shippingTemplateId?: string | null;
+  preferredPackageId?: string | null;
+  packedLength: string;
+  packedWidth: string;
+  packedHeight: string;
+  packedWeightGrams: string;
+  canSharePackage: boolean;
   laborMinutes: string;
   laborRate: string;
   mistakeBuffer: string;
@@ -1356,6 +1419,12 @@ function buildVariantDraft(config: {
   return {
     productionTemplateId: config?.productionTemplateId ?? null,
     shippingTemplateId: config?.shippingTemplateId ?? null,
+    preferredPackageId: config?.preferredPackageId ?? null,
+    packedLength: config?.packedLength ?? "",
+    packedWidth: config?.packedWidth ?? "",
+    packedHeight: config?.packedHeight ?? "",
+    packedWeightGrams: config?.packedWeightGrams ?? "",
+    canSharePackage: config?.canSharePackage ?? true,
     laborMinutes: config?.laborMinutes ?? "",
     laborRate: config?.laborRate ?? "",
     mistakeBuffer: config?.mistakeBuffer ?? "",
@@ -1371,7 +1440,7 @@ function serializeVariantDraftState(draft: VariantDraft) {
 }
 
 export default function VariantDetailPage() {
-  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment } =
+  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment, packages } =
     useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
   const previewFetcher = useFetcher<{
@@ -1435,6 +1504,10 @@ export default function VariantDetailPage() {
   const isSaving = saveFetcher.state !== "idle";
   const productionTemplates = templates.filter((template: TemplateCatalogEntry) => template.type !== "shipping");
   const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
+  const packageOptions = [
+    { label: "No preferred package", value: "" },
+    ...packages.map((pkg: AvailablePackage) => ({ label: `${pkg.name} (${pkg.dimensions})`, value: pkg.id })),
+  ];
   const effectiveTemplateSelection = resolveEffectiveTemplateSelection(
     {
       productionTemplateId: draft.productionTemplateId ?? null,
@@ -1920,6 +1993,84 @@ export default function VariantDetailPage() {
                 No shipping template is currently effective for this variant.
               </Text>
             )}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="400">
+            <BlockStack gap="100">
+              <Text as="h2" variant="headingMd">Package Profile</Text>
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Used by automatic cartonization for future order snapshots. Shipping templates remain estimate-only.
+              </Text>
+            </BlockStack>
+            <Divider />
+            <BlockStack gap="400">
+              <Select
+                label="Preferred package"
+                options={packageOptions}
+                value={draft.preferredPackageId ?? ""}
+                onChange={(value) => setDraft((current) => ({ ...current, preferredPackageId: value || null }))}
+              />
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Packed length"
+                    type="number"
+                    min={0}
+                    step={0.001}
+                    value={draft.packedLength}
+                    onChange={(value) => setDraft((current) => ({ ...current, packedLength: value }))}
+                    autoComplete="off"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Packed width"
+                    type="number"
+                    min={0}
+                    step={0.001}
+                    value={draft.packedWidth}
+                    onChange={(value) => setDraft((current) => ({ ...current, packedWidth: value }))}
+                    autoComplete="off"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Packed height"
+                    type="number"
+                    min={0}
+                    step={0.001}
+                    value={draft.packedHeight}
+                    onChange={(value) => setDraft((current) => ({ ...current, packedHeight: value }))}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Packed weight (g)"
+                    type="number"
+                    min={0}
+                    step={0.001}
+                    value={draft.packedWeightGrams}
+                    onChange={(value) => setDraft((current) => ({ ...current, packedWeightGrams: value }))}
+                    autoComplete="off"
+                  />
+                </div>
+                <div style={{ flex: 1, display: "flex", alignItems: "end" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <input
+                      type="checkbox"
+                      checked={draft.canSharePackage}
+                      onChange={(event) => setDraft((current) => ({ ...current, canSharePackage: event.currentTarget.checked }))}
+                    />
+                    <span>Can share a package with other items</span>
+                  </label>
+                </div>
+              </InlineStack>
+            </BlockStack>
           </BlockStack>
         </Card>
 

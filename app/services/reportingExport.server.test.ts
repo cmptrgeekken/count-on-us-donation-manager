@@ -13,6 +13,7 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
   },
   track1: {
     totalNetContribution: "90.00",
+    salesTaxCollected: "0.00",
     shopifyCharges: "12.00",
     donationPool: "78.00",
     taxTrueUpSurplusApplied: "0.00",
@@ -24,6 +25,7 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
         is501c3: true,
         allocated: "54.00",
         disbursed: "20.00",
+        details: [],
       },
     ],
   },
@@ -47,6 +49,10 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
       processedAt: "2026-03-07T00:00:00.000Z",
     },
   ],
+  packaging: {
+    allocations: [],
+    reviewItems: [],
+  },
   disbursements: [
     {
       id: "dis-1",

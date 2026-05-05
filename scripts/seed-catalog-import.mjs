@@ -404,6 +404,7 @@ async function replaceCatalog(shopId) {
         ],
       },
     }),
+    prisma.shippingPackageMaterialLine.deleteMany({ where: { shopId } }),
     prisma.variantCostConfig.deleteMany({ where: { shopId } }),
     prisma.variant.deleteMany({ where: { shopId } }),
     prisma.product.deleteMany({ where: { shopId } }),
@@ -424,6 +425,7 @@ async function replaceCatalog(shopId) {
       },
     }),
     prisma.costTemplate.deleteMany({ where: { shopId } }),
+    prisma.shippingPackage.deleteMany({ where: { shopId } }),
     prisma.materialLibraryItem.deleteMany({ where: { shopId } }),
     prisma.equipmentLibraryItem.deleteMany({ where: { shopId } }),
     prisma.cause.deleteMany({ where: { shopId } }),
@@ -435,6 +437,8 @@ async function replaceFinancials(shopId) {
     prisma.auditLog.deleteMany({ where: { shopId } }),
     prisma.adjustment.deleteMany({ where: { shopId } }),
     prisma.lineCauseAllocation.deleteMany({ where: { shopId } }),
+    prisma.packagingReviewItem.deleteMany({ where: { shopId } }),
+    prisma.orderPackageAllocation.deleteMany({ where: { shopId } }),
     prisma.orderSnapshotMaterialLine.deleteMany({ where: { snapshotLine: { shopId } } }),
     prisma.orderSnapshotEquipmentLine.deleteMany({ where: { snapshotLine: { shopId } } }),
     prisma.orderSnapshotPODLine.deleteMany({ where: { snapshotLine: { shopId } } }),
@@ -631,6 +635,77 @@ function calculateVariantCosts(variant, indexes, defaultMistakeBuffer, defaultLa
     materialLines: resolvedMaterialLines,
     equipmentLines: resolvedEquipmentLines,
   };
+}
+
+async function createImportedPackageProfiles(shopId, data, materialIds, configIds) {
+  const packageBySignature = new Map();
+  let packageIndex = 1;
+
+  for (const configRow of data.variantCostConfigs) {
+    const configId = configIds.get(configRow.variantShopifyId);
+    if (!configId) continue;
+
+    const shippingLines = data.variantMaterialLines
+      .filter((line) => line.variantShopifyId === configRow.variantShopifyId)
+      .map((line) => {
+        const material = data.materialLibraryItems.find((candidate) => candidate._dedupeKey === line.materialDedupeKey);
+        return material?.type === "shipping" ? { line, material } : null;
+      })
+      .filter(Boolean);
+
+    if (shippingLines.length === 0) continue;
+
+    const signature = shippingLines
+      .map(({ line }) => `${line.materialDedupeKey}:${line.quantity ?? "1"}`)
+      .sort()
+      .join("|");
+
+    let packageId = packageBySignature.get(signature);
+    if (!packageId) {
+      const pkg = await prisma.shippingPackage.create({
+        data: {
+          shopId,
+          name: `Imported package ${packageIndex}`,
+          length: new Prisma.Decimal(12),
+          width: new Prisma.Decimal(9),
+          height: new Prisma.Decimal(1),
+          source: "csv_import",
+          notes: "Created from imported variant shipping material lines. Review dimensions before relying on cartonization.",
+        },
+      });
+      packageIndex += 1;
+      packageId = pkg.id;
+      packageBySignature.set(signature, packageId);
+
+      for (const { line } of shippingLines) {
+        const materialId = materialIds.get(line.materialDedupeKey);
+        if (!materialId) continue;
+        await prisma.shippingPackageMaterialLine.upsert({
+          where: { packageId_materialId: { packageId, materialId } },
+          create: {
+            shopId,
+            packageId,
+            materialId,
+            quantity: decimal(line.quantity) ?? new Prisma.Decimal(1),
+          },
+          update: {
+            quantity: decimal(line.quantity) ?? new Prisma.Decimal(1),
+          },
+        });
+      }
+    }
+
+    await prisma.variantCostConfig.updateMany({
+      where: { id: configId, shopId },
+      data: {
+        preferredPackageId: packageId,
+        packedLength: new Prisma.Decimal(1),
+        packedWidth: new Prisma.Decimal(1),
+        packedHeight: new Prisma.Decimal(1),
+        canSharePackage: true,
+      },
+    });
+  }
 }
 
 function analyzeTemplateTrends(data, indexes) {
@@ -957,15 +1032,17 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
       },
     });
 
-    await prisma.lineCauseAllocation.deleteMany({ where: { snapshotLine: { snapshotId: snapshot.id } } });
-    await prisma.orderSnapshotLine.deleteMany({ where: { snapshotId: snapshot.id } });
+	    await prisma.lineCauseAllocation.deleteMany({ where: { snapshotLine: { snapshotId: snapshot.id } } });
+	    await prisma.packagingReviewItem.deleteMany({ where: { snapshotId: snapshot.id } });
+	    await prisma.orderPackageAllocation.deleteMany({ where: { snapshotId: snapshot.id } });
+	    await prisma.orderSnapshotLine.deleteMany({ where: { snapshotId: snapshot.id } });
 
     const lineDiscounts = buildOrderLineDiscounts(order);
     const preparedLines = [];
     let orderSubtotal = new Prisma.Decimal(0);
     let orderPackagingCost = new Prisma.Decimal(0);
 
-    for (let lineIndex = 0; lineIndex < order.lines.length; lineIndex += 1) {
+	    for (let lineIndex = 0; lineIndex < order.lines.length; lineIndex += 1) {
       const lineRow = order.lines[lineIndex];
       if (normalizeText(lineRow["Lineitem name"]) === "tip") continue;
       const variant = await orderLineResolver.resolve(lineRow["Lineitem name"], {
@@ -995,10 +1072,37 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
 
       preparedLines.push({ lineIndex, lineRow, variant, product, quantity, salePrice, subtotal, costs });
       orderSubtotal = orderSubtotal.add(subtotal);
-      if (costs.packagingCost.gt(orderPackagingCost)) orderPackagingCost = costs.packagingCost;
-    }
+	      if (costs.packagingCost.gt(orderPackagingCost)) orderPackagingCost = costs.packagingCost;
+	    }
 
-    for (const preparedLine of preparedLines) {
+	    const packageConfig = await prisma.variantCostConfig.findFirst({
+	      where: {
+	        shopId,
+	        variantId: {
+	          in: preparedLines.map((line) => line.variant?.id).filter(Boolean),
+	        },
+	        preferredPackageId: { not: null },
+	      },
+	      include: { preferredPackage: true },
+	    });
+	    if (packageConfig?.preferredPackage && orderPackagingCost.gt(0)) {
+	      await prisma.orderPackageAllocation.create({
+	        data: {
+	          shopId,
+	          snapshotId: snapshot.id,
+	          packageId: packageConfig.preferredPackage.id,
+	          packageName: packageConfig.preferredPackage.name,
+	          quantity: 1,
+	          materialCost: orderPackagingCost,
+	          source: "csv_import",
+	          confidence: "low",
+	          reason: "Imported from historical shipping-material estimate.",
+	          allocationSignature: `${snapshot.id}:csv-import-package`,
+	        },
+	      });
+	    }
+
+	    for (const preparedLine of preparedLines) {
       const { lineIndex, lineRow, variant, product, quantity, salePrice, subtotal, costs } = preparedLine;
       const packagingAllocated = orderSubtotal.gt(0)
         ? orderPackagingCost.mul(subtotal).div(orderSubtotal)
@@ -1410,6 +1514,8 @@ async function importCatalog(data, options) {
       },
     });
   }
+
+  await createImportedPackageProfiles(shopId, data, materialIds, configIds);
 
   for (const row of data.productCauseAssignments) {
     const productShopifyId = row.productShopifyId || row.shopifyProductId;

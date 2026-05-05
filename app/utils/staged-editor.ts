@@ -94,6 +94,12 @@ export type VariantAdditionalEquipmentDraftLine = {
 export type VariantDraft = {
   productionTemplateId?: string | null;
   shippingTemplateId?: string | null;
+  preferredPackageId?: string | null;
+  packedLength: string;
+  packedWidth: string;
+  packedHeight: string;
+  packedWeightGrams: string;
+  canSharePackage: boolean;
   laborMinutes: string;
   laborRate: string;
   mistakeBuffer: string;
@@ -181,6 +187,12 @@ export function normalizeVariantDraft(draft: VariantDraft) {
   return {
     productionTemplateId: draft.productionTemplateId ?? "",
     shippingTemplateId: draft.shippingTemplateId ?? "",
+    preferredPackageId: draft.preferredPackageId ?? "",
+    packedLength: draft.packedLength,
+    packedWidth: draft.packedWidth,
+    packedHeight: draft.packedHeight,
+    packedWeightGrams: draft.packedWeightGrams,
+    canSharePackage: draft.canSharePackage,
     laborMinutes: draft.laborMinutes,
     laborRate: draft.laborRate,
     mistakeBuffer: draft.mistakeBuffer,
@@ -217,6 +229,12 @@ export function hasMeaningfulVariantDraft(draft: VariantDraft) {
   return Boolean(
     draft.productionTemplateId ||
       draft.shippingTemplateId ||
+      draft.preferredPackageId ||
+      draft.packedLength ||
+      draft.packedWidth ||
+      draft.packedHeight ||
+      draft.packedWeightGrams ||
+      draft.canSharePackage === false ||
       draft.laborMinutes ||
       draft.laborRate ||
       draft.mistakeBuffer ||
