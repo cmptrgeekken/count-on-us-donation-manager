@@ -482,9 +482,12 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   );
 
   const deductionPool = expenseTotal.add(allocation501c3Total);
-  const taxableExposure = totalNetContribution.sub(deductionPool);
-  const widgetTaxSuppressed = taxableExposure.lessThanOrEqualTo(0);
   const taxEstimate = await calculateEstimatedTaxForPeriod(shopId, selectedPeriod.id, db);
+  const taxableExposure = taxEstimate.taxableBase.mul(taxEstimate.taxableWeight).toDecimalPlaces(
+    2,
+    Prisma.Decimal.ROUND_FLOOR,
+  );
+  const widgetTaxSuppressed = taxableExposure.lessThanOrEqualTo(0);
   const carryForwardSurplus = carryForwardTrueUps.reduce(
     (sum, trueUp) => (trueUp.delta.greaterThan(ZERO) ? sum.add(trueUp.delta) : sum),
     ZERO,

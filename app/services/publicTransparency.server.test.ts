@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { Prisma } from "@prisma/client";
 
 vi.mock("../db.server", () => ({
   prisma: {},
@@ -8,6 +9,7 @@ import { buildPublicTransparencyPage } from "./publicTransparency.server";
 
 describe("buildPublicTransparencyPage", () => {
   it("builds a display-safe public transparency contract", async () => {
+    const decimal = (value: string) => new Prisma.Decimal(value);
     const db = {
       reportingPeriod: {
         findMany: vi.fn().mockResolvedValue([
@@ -19,15 +21,16 @@ describe("buildPublicTransparencyPage", () => {
               {
                 causeId: "cause-1",
                 causeName: "Neighborhood Arts",
-                allocated: { toString: () => "20.00", valueOf: () => 20 },
-                disbursed: { toString: () => "15.00", valueOf: () => 15 },
+                is501c3: false,
+                allocated: decimal("20.00"),
+                disbursed: decimal("15.00"),
               },
             ],
             disbursements: [
               {
                 id: "dis-1",
-                amount: { toString: () => "15.00", valueOf: () => 15 },
-                feesCoveredAmount: { toString: () => "1.25", valueOf: () => 1.25 },
+            amount: decimal("15.00"),
+            feesCoveredAmount: decimal("1.25"),
                 paidAt: new Date("2026-04-02T00:00:00.000Z"),
                 receiptFileKey: "receipts/march.pdf",
                 cause: {
@@ -43,14 +46,15 @@ describe("buildPublicTransparencyPage", () => {
         findMany: vi.fn().mockResolvedValue([
           {
             quantity: 2,
-            subtotal: { toString: () => "50.00", valueOf: () => 50 },
-            laborCost: { toString: () => "5.00", valueOf: () => 5 },
-            materialCost: { toString: () => "8.00", valueOf: () => 8 },
-            packagingCost: { toString: () => "2.00", valueOf: () => 2 },
-            equipmentCost: { toString: () => "1.50", valueOf: () => 1.5 },
-            podCost: { toString: () => "0.00", valueOf: () => 0 },
-            mistakeBufferAmount: { toString: () => "0.75", valueOf: () => 0.75 },
-            totalCost: { toString: () => "17.25", valueOf: () => 17.25 },
+            subtotal: decimal("50.00"),
+            netContribution: decimal("32.75"),
+            laborCost: decimal("5.00"),
+            materialCost: decimal("8.00"),
+            packagingCost: decimal("2.00"),
+            equipmentCost: decimal("1.50"),
+            podCost: decimal("0.00"),
+            mistakeBufferAmount: decimal("0.75"),
+            totalCost: decimal("17.25"),
             adjustments: [],
           },
         ]),
@@ -58,17 +62,26 @@ describe("buildPublicTransparencyPage", () => {
       orderSnapshot: {
         findMany: vi.fn().mockResolvedValue([
           {
-            salesTaxCollected: { toString: () => "4.00", valueOf: () => 4 },
+            salesTaxCollected: decimal("4.00"),
           },
         ]),
       },
       shopifyChargeTransaction: {
         findMany: vi.fn().mockResolvedValue([
           {
-            amount: { toString: () => "2.25", valueOf: () => 2.25 },
+            amount: decimal("2.25"),
             transactionType: "payment_fee",
           },
         ]),
+      },
+      shop: {
+        findUnique: vi.fn().mockResolvedValue({
+          effectiveTaxRate: decimal("0.00"),
+          taxDeductionMode: "all_causes",
+        }),
+      },
+      businessExpense: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("0.00") } }),
       },
     };
     const storage = {

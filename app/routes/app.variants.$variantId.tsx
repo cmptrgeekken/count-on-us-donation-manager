@@ -21,7 +21,7 @@ import {
 import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
-import { resolveCosts } from "../services/costEngine.server";
+import { buildAdminVariantEstimate, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import {
@@ -508,7 +508,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const variant = await prisma.variant.findFirst({
     where: { id: variantId, shopId },
-    select: { shopId: true, price: true },
+    select: { shopId: true },
   });
   if (!variant) {
     return Response.json({ ok: false, message: "Not found." }, { status: 404 });
@@ -1329,26 +1329,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   if (intent === "preview-cost") {
-    const result = await resolveCosts(
-      shopId,
-      variantId,
-      variant.price,
-      "preview",
-      prisma as Parameters<typeof resolveCosts>[4],
-    );
+    const estimate = await buildAdminVariantEstimate(shopId, variantId);
+    if (!estimate) {
+      return Response.json({ ok: false, message: "Not found." }, { status: 404 });
+    }
     return Response.json({
       ok: true,
-      preview: {
-        laborCost: result.laborCost.toFixed(2),
-        materialCost: result.materialCost.toFixed(2),
-        packagingCost: result.packagingCost.toFixed(2),
-        equipmentCost: result.equipmentCost.toFixed(2),
-        podCost: result.podCost.toFixed(2),
-        podCostEstimated: result.podCostEstimated,
-        podCostMissing: result.podCostMissing,
-        mistakeBufferAmount: result.mistakeBufferAmount.toFixed(2),
-        totalCost: result.totalCost.toFixed(2),
-      },
+      preview: estimate,
     });
   }
 
@@ -1446,17 +1433,7 @@ export default function VariantDetailPage() {
   const previewFetcher = useFetcher<{
     ok: boolean;
     message: string;
-    preview?: {
-      laborCost: string;
-      materialCost: string;
-      packagingCost: string;
-      equipmentCost: string;
-      podCost: string;
-      podCostEstimated: boolean;
-      podCostMissing: boolean;
-      mistakeBufferAmount: string;
-      totalCost: string;
-    };
+    preview?: VariantEstimatePayload;
   }>();
   const revalidator = useRevalidator();
 
@@ -2381,22 +2358,27 @@ export default function VariantDetailPage() {
             ) : !preview ? (
               <Text as="p" variant="bodyMd" tone="subdued">Click Refresh to calculate the current cost breakdown.</Text>
             ) : (
-              <BlockStack gap="200">
+              <BlockStack gap="300">
                 <InlineStack align="space-between">
-                  <Text as="p" variant="bodyMd">Labor</Text>
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">Estimated sale price</Text>
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">{formatMoney(preview.reconciliation.estimatedTotal)}</Text>
+                </InlineStack>
+                <Divider />
+                <InlineStack align="space-between">
+                  <Text as="p" variant="bodyMd">Assembly / labor</Text>
                   <Text as="p" variant="bodyMd">{formatMoney(preview.laborCost)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Materials (production)</Text>
-                  <Text as="p" variant="bodyMd">{formatMoney(preview.materialCost)}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.materials)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Packaging (shipping materials)</Text>
-                  <Text as="p" variant="bodyMd">{formatMoney(preview.packagingCost)}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.packaging)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
-                  <Text as="p" variant="bodyMd">Equipment</Text>
-                  <Text as="p" variant="bodyMd">{formatMoney(preview.equipmentCost)}</Text>
+                  <Text as="p" variant="bodyMd">Equipment / maintenance</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.equipment)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <InlineStack gap="200" blockAlign="center">
@@ -2404,17 +2386,56 @@ export default function VariantDetailPage() {
                     {preview.podCostEstimated ? <Badge tone="info">Cached estimate</Badge> : null}
                     {preview.podCostMissing ? <Badge tone="warning">Missing cost data</Badge> : null}
                   </InlineStack>
-                  <Text as="p" variant="bodyMd">{formatMoney(preview.podCost)}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.podCostTotal)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Mistake buffer</Text>
                   <Text as="p" variant="bodyMd">{formatMoney(preview.mistakeBufferAmount)}</Text>
                 </InlineStack>
+                <InlineStack align="space-between">
+                  <Text as="p" variant="bodyMd">Approx. Shopify/payment fees</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.shopifyFees)}</Text>
+                </InlineStack>
+                <InlineStack align="space-between">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text as="p" variant="bodyMd">Approx. tax buffer withheld</Text>
+                    {preview.taxReserve.suppressed ? <Badge tone="info">Suppressed</Badge> : null}
+                  </InlineStack>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.taxReserve.estimatedAmount)}</Text>
+                </InlineStack>
                 <Divider />
                 <InlineStack align="space-between">
-                  <Text as="p" variant="bodyMd" fontWeight="semibold">Total cost</Text>
-                  <Text as="p" variant="bodyMd" fontWeight="semibold">{formatMoney(preview.totalCost)}</Text>
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">Approx. assigned donations</Text>
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">{formatMoney(preview.reconciliation.allocatedDonations)}</Text>
                 </InlineStack>
+                {preview.causes.length > 0 ? (
+                  <BlockStack gap="200">
+                    {preview.causes.map((cause) => (
+                      <InlineStack key={cause.causeId} align="space-between">
+                        <Text as="p" variant="bodySm">{cause.name} ({cause.donationPercentage}%)</Text>
+                        <Text as="p" variant="bodySm">{formatMoney(cause.estimatedDonationAmount)}</Text>
+                      </InlineStack>
+                    ))}
+                  </BlockStack>
+                ) : (
+                  <Text as="p" variant="bodyMd" tone="subdued">No active cause assignments are configured for this product.</Text>
+                )}
+                <details>
+                  <summary>Advanced reconciliation</summary>
+                  <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
+                    <InlineStack align="space-between">
+                      <Text as="p" variant="bodySm">Retained / unassigned</Text>
+                      <Text as="p" variant="bodySm">{formatMoney(preview.reconciliation.retainedByShop)}</Text>
+                    </InlineStack>
+                    <InlineStack align="space-between">
+                      <Text as="p" variant="bodySm">Rounding remainder</Text>
+                      <Text as="p" variant="bodySm">{formatMoney(preview.reconciliation.remainder)}</Text>
+                    </InlineStack>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Processing fee estimate uses {preview.shopifyFees.processingRate}% plus {formatMoney(preview.shopifyFees.processingFlatFee)}.
+                    </Text>
+                  </div>
+                </details>
               </BlockStack>
             )}
           </BlockStack>

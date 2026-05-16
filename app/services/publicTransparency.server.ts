@@ -1,4 +1,6 @@
 import { prisma } from "../db.server";
+import { Prisma } from "@prisma/client";
+import { computeEstimatedTaxReserve } from "./taxReserve.server";
 import { createReceiptStorage, type ReceiptStorage } from "./receiptStorage.server";
 
 const disclosureTierRank = {
@@ -207,6 +209,7 @@ export async function buildPublicTransparencyPage(
         select: {
           causeId: true,
           causeName: true,
+          is501c3: true,
           allocated: true,
           disbursed: true,
         },
@@ -244,7 +247,7 @@ export async function buildPublicTransparencyPage(
   const scopedEndDate =
     rollupRange?.endDate ?? scopedPeriods.reduce<Date | null>((latest, period) => (!latest || period.endDate > latest ? period.endDate : latest), null);
 
-  const [snapshotLines, orderSnapshots, shopifyChargeTransactions] =
+  const [snapshotLines, orderSnapshots, shopifyChargeTransactions, shop, businessExpenseTotals] =
     scopedStartDate && scopedEndDate
       ? await Promise.all([
           db.orderSnapshotLine.findMany({
@@ -260,6 +263,7 @@ export async function buildPublicTransparencyPage(
             select: {
               quantity: true,
               subtotal: true,
+              netContribution: true,
               laborCost: true,
               materialCost: true,
               packagingCost: true,
@@ -269,6 +273,7 @@ export async function buildPublicTransparencyPage(
               totalCost: true,
               adjustments: {
                 select: {
+                  netContribAdj: true,
                   laborAdj: true,
                   materialAdj: true,
                   packagingAdj: true,
@@ -308,8 +313,25 @@ export async function buildPublicTransparencyPage(
               transactionType: true,
             },
           }),
+          db.shop.findUnique({
+            where: { shopId },
+            select: {
+              effectiveTaxRate: true,
+              taxDeductionMode: true,
+            },
+          }),
+          db.businessExpense.aggregate({
+            where: {
+              shopId,
+              expenseDate: {
+                gte: scopedStartDate,
+                lt: scopedEndDate,
+              },
+            },
+            _sum: { amount: true },
+          }),
         ])
-      : [[], [], []];
+      : [[], [], [], null, { _sum: { amount: new Prisma.Decimal(0) } }];
 
   const causeTotals = new Map<string, { causeId: string; causeName: string; donated: number; pending: number }>();
   const receiptCauseTotals = new Map<
@@ -413,6 +435,18 @@ export async function buildPublicTransparencyPage(
   if (!showReconciliation) hiddenSections.push("reconciliation");
 
   const grossSales = sumValues(snapshotLines, (line) => line.subtotal);
+  const totalNetContribution = snapshotLines.reduce(
+    (sum, line) =>
+      sum
+        .add(new Prisma.Decimal(line.netContribution?.toString() ?? 0))
+        .add(
+          line.adjustments.reduce(
+            (adjustmentSum, adjustment) => adjustmentSum.add(new Prisma.Decimal(adjustment.netContribAdj?.toString() ?? 0)),
+            new Prisma.Decimal(0),
+          ),
+        ),
+    new Prisma.Decimal(0),
+  );
   const itemCount = snapshotLines.reduce((sum, line) => sum + (Number.isFinite(line.quantity) ? line.quantity : 0), 0);
   const laborCost = sumValues(snapshotLines, (line) => line.laborCost) + sumValues(snapshotLines, (line) => sumValues(line.adjustments, (adjustment) => adjustment.laborAdj));
   const materialCost =
@@ -449,7 +483,20 @@ export async function buildPublicTransparencyPage(
     ),
   );
   const salesTaxCollected = sumValues(orderSnapshots, (snapshot) => snapshot.salesTaxCollected);
-  const taxBuffer = 0;
+  const allocationInputs = scopedPeriods.flatMap((period) =>
+    period.causeAllocations.map((allocation) => ({
+      is501c3: allocation.is501c3,
+      allocated: new Prisma.Decimal(allocation.allocated?.toString() ?? 0),
+    })),
+  );
+  const taxEstimate = computeEstimatedTaxReserve({
+    totalNetContribution,
+    businessExpenseTotal: new Prisma.Decimal(businessExpenseTotals._sum.amount?.toString() ?? 0),
+    allocations: allocationInputs,
+    effectiveTaxRate: shop?.effectiveTaxRate,
+    taxDeductionMode: shop?.taxDeductionMode,
+  });
+  const taxBuffer = decimalToNumber(taxEstimate.estimatedTaxReserve);
   const marketingReserve = 0;
   const productCosts =
     materialCost +

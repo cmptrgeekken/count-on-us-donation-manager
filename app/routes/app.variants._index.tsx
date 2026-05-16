@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
 import { prisma } from "../db.server";
+import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
 
@@ -13,7 +14,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterProductId = url.searchParams.get("product") ?? "";
   const filterConfigured = url.searchParams.get("configured") ?? "";
 
-  const [variants, products, templates] = await Promise.all([
+  const [variants, products, templates, shop, taxOffsetCache] = await Promise.all([
     prisma.variant.findMany({
       where: {
         shopId,
@@ -45,10 +46,73 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     }),
+    prisma.shop.findUnique({
+      where: { shopId },
+      select: {
+        currency: true,
+        paymentRate: true,
+        effectiveTaxRate: true,
+        taxDeductionMode: true,
+      },
+    }),
+    prisma.taxOffsetCache.findUnique({
+      where: { shopId },
+      select: {
+        widgetTaxSuppressed: true,
+      },
+    }),
   ]);
 
+  const productIds = [...new Set(variants.map((variant) => variant.productId))];
+  const causeAssignments = await prisma.productCauseAssignment.findMany({
+    where: {
+      shopId,
+      productId: { in: productIds },
+      cause: {
+        status: "active",
+      },
+    },
+    orderBy: [{ percentage: "desc" }, { cause: { name: "asc" } }],
+    select: {
+      productId: true,
+      causeId: true,
+      percentage: true,
+      cause: {
+        select: {
+          id: true,
+          name: true,
+          is501c3: true,
+          iconUrl: true,
+          donationLink: true,
+        },
+      },
+    },
+  });
+  const causeAssignmentsByProductId = new Map<string, typeof causeAssignments>();
+  for (const assignment of causeAssignments) {
+    if (!assignment.productId) continue;
+    const current = causeAssignmentsByProductId.get(assignment.productId) ?? [];
+    current.push(assignment);
+    causeAssignmentsByProductId.set(assignment.productId, current);
+  }
+  const widgetTaxSuppressed = taxOffsetCache?.widgetTaxSuppressed ?? true;
+  const estimates = shop
+    ? await Promise.all(
+        variants.map((variant) =>
+          buildVariantEstimatePayload({
+            shopId,
+            variant,
+            causeAssignments: causeAssignmentsByProductId.get(variant.productId) ?? [],
+            shop,
+            widgetTaxSuppressed,
+            db: prisma,
+          }),
+        ),
+      )
+    : variants.map(() => null);
+
   return Response.json({
-    variants: variants.map((v) => ({
+    variants: variants.map((v, index) => ({
       id: v.id,
       shopifyId: v.shopifyId,
       productId: v.productId,
@@ -60,6 +124,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       templateName: v.costConfig?.productionTemplate?.name ?? null,
       mappedProviders: Array.from(new Set(v.providerMappings.map((mapping) => mapping.provider))),
       latestProviderSyncAt: v.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? null,
+      estimate: estimates[index],
     })),
     products: products.map((p) => ({ id: p.id, title: p.title })),
     templates: templates.map((t) => ({ id: t.id, name: t.name })),
@@ -132,10 +197,26 @@ type VariantRow = {
   templateName: string | null;
   mappedProviders: string[];
   latestProviderSyncAt: string | null;
+  estimate: VariantEstimatePayload | null;
 };
 
 function formatProviderLabel(provider: string) {
   return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
+function estimateTotalCost(estimate: VariantEstimatePayload) {
+  return [
+    estimate.reconciliation.labor,
+    estimate.reconciliation.materials,
+    estimate.reconciliation.packaging,
+    estimate.reconciliation.equipment,
+    estimate.reconciliation.pod,
+    estimate.reconciliation.mistakeBuffer,
+    estimate.reconciliation.shopifyFees,
+    estimate.reconciliation.taxReserve,
+  ]
+    .reduce((sum, amount) => sum + Number(amount), 0)
+    .toFixed(2);
 }
 
 export default function VariantsPage() {
@@ -153,6 +234,8 @@ export default function VariantsPage() {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [pendingAssign, setPendingAssign] = useState<string[]>([]);
   const [overwriteCount, setOverwriteCount] = useState(0);
+  const [exportingEstimates, setExportingEstimates] = useState(false);
+  const [exportError, setExportError] = useState("");
 
   useEffect(() => {
     setSelectedVariantIds((current) => current.filter((id) => variants.some((variant: VariantRow) => variant.id === id)));
@@ -267,6 +350,48 @@ export default function VariantsPage() {
     navigate(`?${params.toString()}`);
   }
 
+  function exportUrl() {
+    const params = new URLSearchParams();
+    const product = searchParams.get("product");
+    const configured = searchParams.get("configured");
+    if (product) params.set("product", product);
+    if (configured) params.set("configured", configured);
+    const query = params.toString();
+    return `/app/variants-export${query ? `?${query}` : ""}`;
+  }
+
+  async function exportEstimates() {
+    setExportError("");
+    setExportingEstimates(true);
+    try {
+      const response = await fetch(exportUrl(), {
+        credentials: "same-origin",
+      });
+
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || "Unable to export variant estimates.");
+      }
+
+      const blob = await response.blob();
+      const disposition = response.headers.get("content-disposition") ?? "";
+      const match = disposition.match(/filename="([^"]+)"/);
+      const filename = match?.[1] ?? "variant-estimates.csv";
+      const objectUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = objectUrl;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "Unable to export variant estimates.");
+    } finally {
+      setExportingEstimates(false);
+    }
+  }
+
   return (
     <>
       <ui-title-bar title="Variants" />
@@ -297,6 +422,11 @@ export default function VariantsPage() {
             <s-text>{fetcher.data.message}</s-text>
           </s-banner>
         )}
+        {exportError ? (
+          <s-banner tone="critical">
+            <s-text>{exportError}</s-text>
+          </s-banner>
+        ) : null}
 
         {variants.length === 0 && !filterProductId && !filterConfigured ? (
           <s-section heading="No variants synced yet">
@@ -427,16 +557,21 @@ export default function VariantsPage() {
                 >
                   <div style={{ display: "grid", gap: "0.2rem" }}>
                     <strong>Variants</strong>
-                    <s-text color="subdued">Filter, select, and assign templates to synced Shopify variants.</s-text>
+                    <s-text color="subdued">Filter, select, assign templates, and export detailed estimates.</s-text>
                   </div>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      onChange={(event) => toggleSelectAll(event.currentTarget.checked)}
-                    />
-                    <span>Select all visible</span>
-                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                    <s-button variant="secondary" onClick={() => void exportEstimates()} disabled={exportingEstimates}>
+                      {exportingEstimates ? "Exporting..." : "Export estimates CSV"}
+                    </s-button>
+                    <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={(event) => toggleSelectAll(event.currentTarget.checked)}
+                      />
+                      <span>Select all visible</span>
+                    </label>
+                  </div>
                 </div>
 
                 <s-table-header-row>
@@ -445,6 +580,8 @@ export default function VariantsPage() {
                   <s-table-header listSlot="primary">Variant</s-table-header>
                   <s-table-header listSlot="secondary">SKU</s-table-header>
                   <s-table-header listSlot="labeled" format="currency">Price</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Est. costs</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Est. donation</s-table-header>
                   <s-table-header listSlot="secondary">Template</s-table-header>
                   <s-table-header listSlot="secondary">POD</s-table-header>
                   <s-table-header listSlot="inline">Status</s-table-header>
@@ -466,6 +603,20 @@ export default function VariantsPage() {
                       <s-table-cell>{variant.title}</s-table-cell>
                       <s-table-cell>{variant.sku || "—"}</s-table-cell>
                       <s-table-cell>{formatMoney(variant.price)}</s-table-cell>
+                      <s-table-cell>
+                        {variant.estimate ? (
+                          <strong>{formatMoney(estimateTotalCost(variant.estimate))}</strong>
+                        ) : (
+                          <s-text color="subdued">Unavailable</s-text>
+                        )}
+                      </s-table-cell>
+                      <s-table-cell>
+                        {variant.estimate ? (
+                          <strong>{formatMoney(variant.estimate.reconciliation.allocatedDonations)}</strong>
+                        ) : (
+                          <s-text color="subdued">Unavailable</s-text>
+                        )}
+                      </s-table-cell>
                       <s-table-cell>{variant.templateName ?? "—"}</s-table-cell>
                       <s-table-cell>
                         {variant.mappedProviders.length > 0 ? (

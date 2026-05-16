@@ -1615,7 +1615,7 @@ export default function ReportingPage() {
             </div>
           </s-section>
 
-          <s-section heading="Track 2 — Tax estimation">
+          <s-section heading="Track 2 — Tax estimation for selected period">
             <div style={{ display: "grid", gap: "0.75rem" }}>
               <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
                 <div>
