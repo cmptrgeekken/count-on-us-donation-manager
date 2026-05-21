@@ -194,6 +194,7 @@ model Product {
 
   variants         Variant[]
   causeAssignments ProductCauseAssignment[]
+  artistAssignments ProductArtistAssignment[]
 
   @@unique([shopId, shopifyId])
   @@index([shopId])
@@ -459,8 +460,83 @@ model Cause {
   periodAllocations  CauseAllocation[]
   disbursements      Disbursement[]
   trueUpRedistributions TaxTrueUpRedistribution[]
+  artistAssignments ArtistCauseAssignment[]
 
   @@index([shopId, status])
+}
+
+model Artist {
+  id                    String   @id @default(cuid())
+  shopId                String
+  displayName           String
+  creditName            String
+  creditPreference      String   @default("artist_name")
+  publicBio             String?
+  websiteUrl            String?
+  instagramUrl          String?
+  contactName           String?
+  contactEmail          String?
+  status                String   @default("draft")
+  paymentEnabled        Boolean  @default(false)
+  defaultPayoutRate     Decimal  @default(10) @db.Decimal(5, 2)
+  taxStatus             String   @default("not_required")
+  paymentNotes          String?
+  termsAcceptedAt       DateTime?
+  effectiveAt           DateTime?
+  revokedAt             DateTime?
+  restrictedChannels    String?
+  restrictedFormats     String?
+  internalNotes         String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  causeAssignments      ArtistCauseAssignment[]
+  productAssignments    ProductArtistAssignment[]
+  lineAllocations       LineArtistAllocation[]
+  periodAllocations     ArtistAllocation[]
+  payments              ArtistPayment[]
+
+  @@index([shopId, status])
+}
+
+model ArtistCauseAssignment {
+  id         String   @id @default(cuid())
+  shopId     String
+  artistId   String
+  artist     Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  causeId    String
+  cause      Cause    @relation(fields: [causeId], references: [id], onDelete: Restrict)
+  percentage Decimal  @db.Decimal(5, 2)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([shopId, artistId, causeId])
+  @@index([shopId])
+  @@index([shopId, artistId])
+}
+
+model ProductArtistAssignment {
+  id                    String   @id @default(cuid())
+  shopId                String
+  productId             String
+  product               Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  shopifyProductId      String
+  artistId              String
+  artist                Artist   @relation(fields: [artistId], references: [id], onDelete: Restrict)
+  attributionOrder      Int      @default(0)
+  creditOverride        String?
+  collaborationShare    Decimal  @default(100) @db.Decimal(5, 2)
+  payoutEnabledOverride Boolean?
+  payoutRateOverride    Decimal? @db.Decimal(5, 2)
+  status                String   @default("active")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@unique([shopId, productId, artistId])
+  @@unique([shopId, shopifyProductId, artistId])
+  @@index([shopId])
+  @@index([shopId, productId])
+  @@index([shopId, artistId])
 }
 
 model ProductCauseAssignment {
@@ -568,6 +644,7 @@ model OrderSnapshotLine {
   equipmentLines   OrderSnapshotEquipmentLine[]
   podLines         OrderSnapshotPODLine[]
   causeAllocations LineCauseAllocation[]
+  artistAllocations LineArtistAllocation[]
   adjustments      Adjustment[]
 
   @@index([shopId])
@@ -625,8 +702,35 @@ model LineCauseAllocation {
   is501c3        Boolean
   percentage     Decimal           @db.Decimal(5, 2)
   amount         Decimal           @db.Decimal(10, 4)
+  source         String            @default("product")
+  artistId       String?
+  artistName     String?
 
   @@index([shopId])
+  @@index([shopId, artistId])
+}
+
+model LineArtistAllocation {
+  id                     String            @id @default(cuid())
+  shopId                 String
+  snapshotLineId         String
+  snapshotLine           OrderSnapshotLine @relation(fields: [snapshotLineId], references: [id], onDelete: Cascade)
+  artistId               String
+  artist                 Artist            @relation(fields: [artistId], references: [id], onDelete: Restrict)
+  artistName             String
+  creditName             String
+  creditPreference       String
+  collaborationShare     Decimal           @db.Decimal(5, 2)
+  payoutEnabled          Boolean           @default(false)
+  payoutRate             Decimal           @db.Decimal(5, 2)
+  payoutBasis            Decimal           @db.Decimal(10, 4)
+  payoutAmount           Decimal           @db.Decimal(10, 4)
+  donationRoutableAmount Decimal           @db.Decimal(10, 4)
+  createdAt              DateTime          @default(now())
+
+  @@index([shopId])
+  @@index([shopId, artistId])
+  @@index([snapshotLineId])
 }
 
 model ReportingPeriod {
@@ -643,7 +747,9 @@ model ReportingPeriod {
 
   snapshots        OrderSnapshot[]
   causeAllocations CauseAllocation[]
+  artistAllocations ArtistAllocation[]
   disbursements    Disbursement[]
+  artistPayments    ArtistPayment[]
   taxTrueUps       TaxTrueUp[]
   appliedTrueUps   TaxTrueUp[]      @relation("AppliedTaxTrueUps")
   shopifyCharges   ShopifyChargeTransaction[]
@@ -686,6 +792,60 @@ model CauseAllocation {
 
   @@unique([periodId, causeId])
   @@index([shopId])
+}
+
+model ArtistAllocation {
+  id            String          @id @default(cuid())
+  shopId        String
+  periodId      String
+  period        ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  artistId      String
+  artist        Artist          @relation(fields: [artistId], references: [id], onDelete: Restrict)
+  artistName    String
+  creditName    String
+  allocated     Decimal         @db.Decimal(10, 4)
+  paid          Decimal         @default(0) @db.Decimal(10, 2)
+  createdAt     DateTime        @default(now())
+  applications  ArtistPaymentApplication[]
+
+  @@unique([periodId, artistId])
+  @@index([shopId])
+  @@index([shopId, artistId])
+}
+
+model ArtistPayment {
+  id              String          @id @default(cuid())
+  shopId          String
+  periodId        String
+  period          ReportingPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  artistId        String
+  artist          Artist          @relation(fields: [artistId], references: [id], onDelete: Restrict)
+  amount          Decimal         @db.Decimal(10, 2)
+  paidAt          DateTime
+  paymentMethod   String
+  referenceId     String?
+  notes           String?
+  createdAt       DateTime        @default(now())
+  applications    ArtistPaymentApplication[]
+
+  @@index([shopId])
+  @@index([periodId, artistId])
+  @@index([shopId, artistId])
+}
+
+model ArtistPaymentApplication {
+  id                 String           @id @default(cuid())
+  shopId             String
+  artistPaymentId    String
+  artistPayment      ArtistPayment    @relation(fields: [artistPaymentId], references: [id], onDelete: Cascade)
+  artistAllocationId String
+  artistAllocation   ArtistAllocation @relation(fields: [artistAllocationId], references: [id], onDelete: Cascade)
+  amount             Decimal          @db.Decimal(10, 2)
+  createdAt          DateTime         @default(now())
+
+  @@unique([artistPaymentId, artistAllocationId])
+  @@index([shopId])
+  @@index([artistAllocationId])
 }
 
 model Disbursement {

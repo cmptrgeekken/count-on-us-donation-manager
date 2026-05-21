@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Prisma, PrismaClient } from "@prisma/client";
 import {
@@ -45,6 +45,8 @@ function parseArgs() {
     orderLineMap: null,
     interactiveOrderLineMap: false,
     fuzzyOrderLineMatching: true,
+    templateCandidatesReport: null,
+    templateCandidateMinVariants: 3,
   };
 
   for (const arg of process.argv.slice(2)) {
@@ -64,6 +66,16 @@ function parseArgs() {
     if (arg.startsWith("--shop=")) result.shopId = arg.slice("--shop=".length).trim();
     if (arg.startsWith("--shop-domain=")) result.shopDomain = arg.slice("--shop-domain=".length).trim();
     if (arg.startsWith("--order-line-map=")) result.orderLineMap = arg.slice("--order-line-map=".length).trim();
+    if (arg.startsWith("--template-candidates-report=")) {
+      result.templateCandidatesReport = arg.slice("--template-candidates-report=".length).trim();
+    }
+    if (arg.startsWith("--template-candidate-min-variants=")) {
+      const value = Number.parseInt(arg.slice("--template-candidate-min-variants=".length).trim(), 10);
+      if (!Number.isFinite(value) || value < 2) {
+        throw new Error("--template-candidate-min-variants must be an integer greater than or equal to 2.");
+      }
+      result.templateCandidateMinVariants = value;
+    }
   }
 
   if (!result.shopDomain && result.shopId) {
@@ -90,9 +102,115 @@ function parseArgs() {
   return result;
 }
 
+function displayValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  return String(value);
+}
+
 function decimal(value) {
   if (value === null || value === undefined || value === "") return null;
   return new Prisma.Decimal(value);
+}
+
+function decimalOrZero(value) {
+  return value ?? new Prisma.Decimal(0);
+}
+
+async function recomputeTaxOffsetCache(shopId) {
+  const [expenseTotals, allocationTotals, snapshotTotals, adjustmentTotals, adjustedAllocationLines] = await Promise.all([
+    prisma.businessExpense.aggregate({
+      where: { shopId },
+      _sum: { amount: true },
+    }),
+    prisma.lineCauseAllocation.aggregate({
+      where: {
+        shopId,
+        is501c3: true,
+      },
+      _sum: { amount: true },
+    }),
+    prisma.orderSnapshotLine.aggregate({
+      where: { shopId },
+      _sum: { netContribution: true },
+    }),
+    prisma.adjustment.aggregate({
+      where: { shopId },
+      _sum: { netContribAdj: true },
+    }),
+    prisma.orderSnapshotLine.findMany({
+      where: {
+        shopId,
+        causeAllocations: {
+          some: {
+            is501c3: true,
+          },
+        },
+        adjustments: {
+          some: {},
+        },
+      },
+      select: {
+        netContribution: true,
+        adjustments: {
+          select: { netContribAdj: true },
+        },
+        causeAllocations: {
+          where: { is501c3: true },
+          select: { amount: true },
+        },
+      },
+    }),
+  ]);
+
+  const expenseTotal = decimalOrZero(expenseTotals._sum.amount);
+  const allocationTotal = decimalOrZero(allocationTotals._sum.amount);
+  const snapshotTotal = decimalOrZero(snapshotTotals._sum.netContribution);
+  const adjustmentTotal = decimalOrZero(adjustmentTotals._sum.netContribAdj);
+  const adjustedAllocationTotal = adjustedAllocationLines.reduce((sum, line) => {
+    if (line.netContribution.equals(0)) return sum;
+
+    const baseAllocations = line.causeAllocations.reduce(
+      (allocationSum, allocation) => allocationSum.add(allocation.amount),
+      new Prisma.Decimal(0),
+    );
+    const lineAdjustmentTotal = line.adjustments.reduce(
+      (adjustmentSum, adjustment) => adjustmentSum.add(adjustment.netContribAdj),
+      new Prisma.Decimal(0),
+    );
+    const ratio = lineAdjustmentTotal.div(line.netContribution);
+    if (ratio.abs().greaterThan(new Prisma.Decimal(10))) return sum;
+
+    return sum.add(baseAllocations.mul(ratio));
+  }, new Prisma.Decimal(0));
+
+  const cumulativeNetContrib = snapshotTotal.plus(adjustmentTotal);
+  const deductionPool = expenseTotal.plus(allocationTotal).plus(adjustedAllocationTotal);
+  const taxableExposure = cumulativeNetContrib.minus(deductionPool);
+  const widgetTaxSuppressed = taxableExposure.lessThanOrEqualTo(0);
+
+  await prisma.taxOffsetCache.upsert({
+    where: { shopId },
+    create: {
+      shopId,
+      taxableExposure,
+      deductionPool,
+      cumulativeNetContrib,
+      widgetTaxSuppressed,
+    },
+    update: {
+      taxableExposure,
+      deductionPool,
+      cumulativeNetContrib,
+      widgetTaxSuppressed,
+    },
+  });
+
+  return {
+    taxableExposure,
+    deductionPool,
+    cumulativeNetContrib,
+    widgetTaxSuppressed,
+  };
 }
 
 function date(value) {
@@ -708,6 +826,70 @@ async function createImportedPackageProfiles(shopId, data, materialIds, configId
   }
 }
 
+function materialTemplatePart(line, material) {
+  return {
+    kind: "material",
+    key: `material:${material._dedupeKey}:${line.quantity ?? ""}:${line.yield ?? ""}:${line.usesPerVariant ?? ""}`,
+    materialDedupeKey: material._dedupeKey,
+    name: material.name,
+    materialType: material.type,
+    costingModel: material.costingModel,
+    quantity: displayValue(line.quantity),
+    yield: displayValue(line.yield),
+    usesPerVariant: displayValue(line.usesPerVariant),
+  };
+}
+
+function equipmentTemplatePart(line, equipment) {
+  return {
+    kind: "equipment",
+    key: `equipment:${equipment._dedupeKey}:${line.minutes ?? ""}:${line.uses ?? ""}`,
+    equipmentDedupeKey: equipment._dedupeKey,
+    name: equipment.name,
+    minutes: displayValue(line.minutes),
+    uses: displayValue(line.uses),
+  };
+}
+
+function variantExample(variant, indexes) {
+  const product = indexes.productsByShopifyId.get(variant.productShopifyId);
+  return {
+    productTitle: product?.title ?? null,
+    productHandle: product?.handle ?? null,
+    variantTitle: variant.title ?? null,
+    sku: variant.sku ?? null,
+    shopifyId: variant.shopifyId,
+  };
+}
+
+function formatVariantExample(example) {
+  const product = example.productTitle ?? "Unknown product";
+  const variant = example.variantTitle && !["default title", "none"].includes(example.variantTitle.toLowerCase())
+    ? ` - ${example.variantTitle}`
+    : "";
+  const sku = example.sku ? ` (${example.sku})` : "";
+  return `${product}${variant}${sku}`;
+}
+
+function describeTemplatePart(line) {
+  if (line.kind === "material") {
+    const details = [
+      `type=${line.materialType}`,
+      `model=${line.costingModel}`,
+      line.quantity ? `quantity=${line.quantity}` : null,
+      line.yield ? `yield=${line.yield}` : null,
+      line.usesPerVariant ? `usesPerVariant=${line.usesPerVariant}` : null,
+    ].filter(Boolean);
+    return `material: ${line.name} (${details.join(", ")})`;
+  }
+
+  const details = [
+    line.minutes ? `minutes=${line.minutes}` : null,
+    line.uses ? `uses=${line.uses}` : null,
+  ].filter(Boolean);
+  return `equipment: ${line.name}${details.length > 0 ? ` (${details.join(", ")})` : ""}`;
+}
+
 function analyzeTemplateTrends(data, indexes) {
   const productionPatterns = new Map();
   const shippingPatterns = new Map();
@@ -721,7 +903,7 @@ function analyzeTemplateTrends(data, indexes) {
     for (const line of materialLines) {
       const material = indexes.materialsByDedupeKey.get(line.materialDedupeKey);
       if (!material) continue;
-      const part = `material:${material.name}:${line.quantity ?? ""}:${line.yield ?? ""}:${line.usesPerVariant ?? ""}`;
+      const part = materialTemplatePart(line, material);
       if (material.type === "shipping") shippingParts.push(part);
       else productionParts.push(part);
     }
@@ -729,31 +911,49 @@ function analyzeTemplateTrends(data, indexes) {
     for (const line of equipmentLines) {
       const equipment = indexes.equipmentByDedupeKey.get(line.equipmentDedupeKey);
       if (!equipment) continue;
-      productionParts.push(`equipment:${equipment.name}:${line.minutes ?? ""}:${line.uses ?? ""}`);
+      productionParts.push(equipmentTemplatePart(line, equipment));
     }
 
     for (const [map, parts] of [
       [productionPatterns, productionParts],
       [shippingPatterns, shippingParts],
     ]) {
-      const signature = parts.sort().join("|");
+      const sortedParts = parts.sort((left, right) => left.key.localeCompare(right.key));
+      const signature = sortedParts.map((part) => part.key).join("|");
       if (!signature) continue;
-      const current = map.get(signature) ?? { count: 0, examples: [] };
+      const current = map.get(signature) ?? {
+        count: 0,
+        examples: [],
+        lines: sortedParts.map(({ key, ...part }) => part),
+      };
       current.count += 1;
-      if (current.examples.length < 3) current.examples.push(variant.shopifyId);
+      if (current.examples.length < 5) current.examples.push(variantExample(variant, indexes));
       map.set(signature, current);
     }
   }
 
   const sortPatterns = (patterns) =>
     Array.from(patterns.entries())
-      .map(([signature, value]) => ({ signature, ...value }))
+      .map(([signature, value], index) => ({
+        signature,
+        suggestedName: `Imported Template Candidate ${index + 1}`,
+        lineCount: value.lines.length,
+        ...value,
+      }))
       .sort((left, right) => right.count - left.count);
 
-  return {
+  const trends = {
     production: sortPatterns(productionPatterns),
     shipping: sortPatterns(shippingPatterns),
   };
+
+  for (const [type, rows] of Object.entries(trends)) {
+    rows.forEach((row, index) => {
+      row.suggestedName = `Imported ${type === "production" ? "Production" : "Shipping"} Template ${index + 1}`;
+    });
+  }
+
+  return trends;
 }
 
 function groupOrderRows(rows) {
@@ -1253,8 +1453,13 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
     });
   }
 
+  const taxOffsetSummary = await recomputeTaxOffsetCache(shopId);
+
   console.log(
     `Imported ${importedOrderCount} orders, skipped ${skippedCanceledOrderCount} canceled orders, ${charges.length} Shopify charge rows, and ${transactions.length} payment transaction rows for ${shopId}.`,
+  );
+  console.log(
+    `Tax offset cache: deduction pool ${taxOffsetSummary.deductionPool.toFixed(2)}, cumulative net contribution ${taxOffsetSummary.cumulativeNetContrib.toFixed(2)}, taxable exposure ${taxOffsetSummary.taxableExposure.toFixed(2)}, widget tax reserve ${taxOffsetSummary.widgetTaxSuppressed ? "suppressed" : "enabled"}.`,
   );
   console.log("\nOrder line catalog matching:");
   for (const line of summarizeOrderLineMatching(orderLineResolver.stats)) {
@@ -1283,7 +1488,11 @@ async function importCatalog(data, options) {
   const csvAnalysis = financialAnalysis(options);
 
   const validation = validateExport(data, shopId);
-  printAnalysis(data, shopId, validation, analyzeTemplateTrends(data, indexes), csvAnalysis);
+  const templateTrends = analyzeTemplateTrends(data, indexes);
+  printAnalysis(data, shopId, validation, templateTrends, csvAnalysis, options);
+  if (options.templateCandidatesReport) {
+    writeTemplateCandidateReport(options.templateCandidatesReport, shopId, templateTrends, options);
+  }
   if (validation.errors.length > 0) {
     throw new Error(`Import validation failed with ${validation.errors.length} error(s).`);
   }
@@ -1559,7 +1768,28 @@ async function importCatalog(data, options) {
   printShopDataCounts(shopId, await shopDataCounts(shopId));
 }
 
-function printAnalysis(data, shopId, validation, templateTrends, csvAnalysis) {
+function reportableTemplateCandidates(templateTrends, minVariants) {
+  return {
+    production: templateTrends.production.filter((row) => row.count >= minVariants),
+    shipping: templateTrends.shipping.filter((row) => row.count >= minVariants),
+  };
+}
+
+function writeTemplateCandidateReport(file, shopId, templateTrends, options) {
+  const candidates = reportableTemplateCandidates(templateTrends, options.templateCandidateMinVariants);
+  const payload = {
+    shopId,
+    generatedAt: new Date().toISOString(),
+    minVariants: options.templateCandidateMinVariants,
+    note: "Analysis-only template candidates derived from repeated variant material/equipment line patterns. Review before creating or assigning templates.",
+    candidates,
+  };
+
+  writeFileSync(file, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  console.log(`\nWrote template candidate report to ${file}.`);
+}
+
+function printAnalysis(data, shopId, validation, templateTrends, csvAnalysis, options) {
   console.log(`Catalog import analysis for ${shopId}`);
   for (const collection of EXPECTED_COLLECTIONS) {
     console.log(`- ${collection}: ${data[collection].length}`);
@@ -1574,12 +1804,17 @@ function printAnalysis(data, shopId, validation, templateTrends, csvAnalysis) {
   }
 
   if (templateTrends) {
+    const minVariants = options.templateCandidateMinVariants;
     const printTrend = (label, rows) => {
-      const strong = rows.filter((row) => row.count >= 3).slice(0, 5);
+      const strong = rows.filter((row) => row.count >= minVariants).slice(0, 5);
       if (strong.length === 0) return;
       console.log(`\n${label} template candidates:`);
       for (const row of strong) {
-        console.log(`- ${row.count} variants share ${row.signature.split("|").length} line(s); examples: ${row.examples.join(", ")}`);
+        console.log(`- ${row.suggestedName}: ${row.count} variants share ${row.lineCount} line(s)`);
+        for (const line of row.lines) {
+          console.log(`  - ${describeTemplatePart(line)}`);
+        }
+        console.log(`  examples: ${row.examples.map(formatVariantExample).join("; ")}`);
       }
     };
     printTrend("Production", templateTrends.production);

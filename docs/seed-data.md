@@ -59,6 +59,7 @@ npm run seed:import:catalog -- \
   --charges-csv=seed-imports/charges.csv \
   --payment-transactions-csv=seed-imports/payment-transactions.csv \
   --order-line-map=seed-imports/order-line-map.json \
+  --template-candidates-report=seed-imports/template-candidates.json \
   --shop=your-dev-store.myshopify.com \
   --shop-domain=your-dev-store.myshopify.com \
   --reset-shop \
@@ -91,6 +92,8 @@ npm run seed:import:catalog -- \
 - `--order-line-map`: local JSON file for matching renamed historical order line names to current catalog variants. Defaults to `order-line-map.json` beside `--orders-csv`.
 - `--interactive-order-line-map`: prompts to confirm ambiguous order-line matches when running in an interactive terminal.
 - `--fuzzy-order-line-matching` / `--no-fuzzy-order-line-matching`: enables or disables high-confidence fuzzy matching for renamed order line names. Fuzzy matching is enabled by default for order CSV imports.
+- `--template-candidates-report`: optional JSON file path for detailed production/shipping template candidates discovered from repeated variant material/equipment patterns.
+- `--template-candidate-min-variants`: minimum number of variants that must share a pattern before it is reported as a template candidate. Defaults to `3`.
 - `--dry-run`: validates and summarizes the import without writing to the database.
 
 If `--shop` is omitted, the importer derives the shop ID from the JSON export in
@@ -114,7 +117,10 @@ the same CUID format as rows created through the app. The importer assumes
 `--reset-shop` is used before reimporting the same shop.
 
 The dry run also reports repeated material/equipment patterns as possible
-production and shipping template candidates. This is analysis-only for now; the
+production and shipping template candidates. Candidate output includes a
+suggested template name, the full material/equipment line details, and example
+products/variants using that pattern. Pass `--template-candidates-report` to
+write the same analysis to JSON for review. This is analysis-only for now; the
 importer does not create or assign cost templates.
 
 If you accidentally imported under the placeholder shop ID, clean it up with:

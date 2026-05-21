@@ -9,10 +9,12 @@ const TENANT_SCOPED_MODELS = [
   // they are protected through their parent CostTemplate (cascade delete).
   "Product", "Variant", "VariantCostConfig",
   "VariantMaterialLine", "VariantEquipmentLine",
-  "Cause", "ProductCauseAssignment",
+  "Cause", "ProductCauseAssignment", "Artist",
+  "ArtistCauseAssignment", "ProductArtistAssignment",
   "OrderSnapshot", "OrderSnapshotLine",
-  "LineCauseAllocation", "Adjustment",
-  "ReportingPeriod", "CauseAllocation", "Disbursement",
+  "LineCauseAllocation", "LineArtistAllocation", "Adjustment",
+  "ReportingPeriod", "CauseAllocation", "ArtistAllocation", "Disbursement",
+  "ArtistPayment", "ArtistPaymentApplication",
   "TaxTrueUp", "ShopifyChargeTransaction",
   "BusinessExpense", "TaxOffsetCache",
 ];

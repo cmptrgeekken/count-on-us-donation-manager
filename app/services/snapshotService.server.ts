@@ -142,6 +142,21 @@ type SnapshotResolution = {
     is501c3: boolean;
     percentage: Prisma.Decimal;
     amount: Prisma.Decimal;
+    source: "product" | "artist";
+    artistId?: string | null;
+    artistName?: string | null;
+  }>;
+  artistAllocations: Array<{
+    artistId: string;
+    artistName: string;
+    creditName: string;
+    creditPreference: string;
+    collaborationShare: Prisma.Decimal;
+    payoutEnabled: boolean;
+    payoutRate: Prisma.Decimal;
+    payoutBasis: Prisma.Decimal;
+    payoutAmount: Prisma.Decimal;
+    donationRoutableAmount: Prisma.Decimal;
   }>;
 };
 
@@ -442,6 +457,7 @@ export async function createSnapshot(
         packagingAllocated: ZERO,
         finalCosts: firstPass,
         allocations: [],
+        artistAllocations: [],
       };
     }),
   );
@@ -480,25 +496,92 @@ export async function createSnapshot(
             };
 
       let allocations: SnapshotResolution["allocations"] = [];
+      let artistAllocations: SnapshotResolution["artistAllocations"] = [];
       if (line.productGid) {
         const product = productByGid.get(line.productGid);
-        const productAssignments = await db.productCauseAssignment.findMany({
-          where: { shopId, productId: product?.id ?? "__missing_product__" },
-          include: {
-            cause: {
-              select: { id: true, name: true, is501c3: true },
-            },
-          },
-        });
+        const productId = product?.id ?? "__missing_product__";
+        const productArtistAssignments = db.productArtistAssignment?.findMany
+          ? await db.productArtistAssignment.findMany({
+              where: { shopId, productId, status: "active" },
+              orderBy: [{ attributionOrder: "asc" }, { createdAt: "asc" }],
+              include: {
+                artist: {
+                  include: {
+                    causeAssignments: {
+                      include: {
+                        cause: {
+                          select: { id: true, name: true, is501c3: true },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            })
+          : [];
 
         const allocationBase = Prisma.Decimal.max(finalCosts.netContribution!.mul(line.quantity), ZERO);
-        allocations = productAssignments.map((assignment: any) => ({
-          causeId: assignment.causeId,
-          causeName: assignment.cause.name,
-          is501c3: assignment.cause.is501c3,
-          percentage: assignment.percentage,
-          amount: allocationBase.mul(assignment.percentage).div(100),
-        }));
+
+        if (productArtistAssignments.length > 0) {
+          for (const assignment of productArtistAssignments) {
+            const artist = assignment.artist;
+            const collaborationShare = new Prisma.Decimal(assignment.collaborationShare);
+            const payoutEnabled = assignment.payoutEnabledOverride ?? artist.paymentEnabled;
+            const payoutRate = new Prisma.Decimal(assignment.payoutRateOverride ?? artist.defaultPayoutRate);
+            const payoutBasis = line.subtotal.mul(collaborationShare).div(100);
+            const payoutAmount = payoutEnabled ? payoutBasis.mul(payoutRate).div(100) : ZERO;
+            const artistDonationBase = allocationBase.mul(collaborationShare).div(100);
+            const donationRoutableAmount = Prisma.Decimal.max(artistDonationBase.sub(payoutAmount), ZERO);
+            const artistName = artist.displayName;
+            const creditName = assignment.creditOverride?.trim() || artist.creditName || artist.displayName;
+
+            artistAllocations.push({
+              artistId: artist.id,
+              artistName,
+              creditName,
+              creditPreference: artist.creditPreference,
+              collaborationShare,
+              payoutEnabled,
+              payoutRate,
+              payoutBasis,
+              payoutAmount,
+              donationRoutableAmount,
+            });
+
+            for (const artistCauseAssignment of artist.causeAssignments) {
+              allocations.push({
+                causeId: artistCauseAssignment.causeId,
+                causeName: artistCauseAssignment.cause.name,
+                is501c3: artistCauseAssignment.cause.is501c3,
+                percentage: artistCauseAssignment.percentage,
+                amount: donationRoutableAmount.mul(artistCauseAssignment.percentage).div(100),
+                source: "artist",
+                artistId: artist.id,
+                artistName,
+              });
+            }
+          }
+        } else {
+          const productAssignments = await db.productCauseAssignment.findMany({
+            where: { shopId, productId },
+            include: {
+              cause: {
+                select: { id: true, name: true, is501c3: true },
+              },
+            },
+          });
+
+          allocations = productAssignments.map((assignment: any) => ({
+            causeId: assignment.causeId,
+            causeName: assignment.cause.name,
+            is501c3: assignment.cause.is501c3,
+            percentage: assignment.percentage,
+            amount: allocationBase.mul(assignment.percentage).div(100),
+            source: "product",
+            artistId: null,
+            artistName: null,
+          }));
+        }
       }
 
       return {
@@ -506,6 +589,7 @@ export async function createSnapshot(
         packagingAllocated,
         finalCosts,
         allocations,
+        artistAllocations,
       };
     }),
   );
@@ -633,6 +717,28 @@ export async function createSnapshot(
               is501c3: allocation.is501c3,
               percentage: allocation.percentage,
               amount: allocation.amount,
+              source: allocation.source,
+              artistId: allocation.artistId ?? null,
+              artistName: allocation.artistName ?? null,
+            })),
+          });
+        }
+
+        if (line.artistAllocations.length > 0) {
+          await tx.lineArtistAllocation.createMany({
+            data: line.artistAllocations.map((allocation) => ({
+              shopId,
+              snapshotLineId: snapshotLine.id,
+              artistId: allocation.artistId,
+              artistName: allocation.artistName,
+              creditName: allocation.creditName,
+              creditPreference: allocation.creditPreference,
+              collaborationShare: allocation.collaborationShare,
+              payoutEnabled: allocation.payoutEnabled,
+              payoutRate: allocation.payoutRate,
+              payoutBasis: allocation.payoutBasis,
+              payoutAmount: allocation.payoutAmount,
+              donationRoutableAmount: allocation.donationRoutableAmount,
             })),
           });
         }

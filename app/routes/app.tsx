@@ -48,6 +48,7 @@ export default function App() {
         <Link to="/app/templates">Cost Templates</Link>
         <Link to="/app/variants">Variants</Link>
         <Link to="/app/causes">Causes</Link>
+        <Link to="/app/artists">Artists</Link>
         <Link to="/app/products">Products</Link>
         <Link to="/app/reporting">Reporting</Link>
         <Link to="/app/expenses">Expenses</Link>
