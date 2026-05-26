@@ -41,7 +41,7 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
 
   await boss.work("plan.detect.daily", async () => {
     const shops = await prisma.shop.findMany({
-      where: { planOverride: false },
+      where: { shopId: { not: "" }, planOverride: false },
       select: { shopId: true },
     });
 
@@ -131,6 +131,7 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
 
   await boss.work("reconciliation.daily", async () => {
     const shops = await prisma.shop.findMany({
+      where: { shopId: { not: "" } },
       select: { shopId: true },
     });
 
@@ -172,6 +173,7 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
 
   await boss.work("shopify-charges.daily", async () => {
     const shops = await prisma.shop.findMany({
+      where: { shopId: { not: "" } },
       select: { shopId: true },
     });
 
@@ -226,6 +228,7 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
 
   await boss.work("reporting.tax-offset.daily", async () => {
     const shops = await prisma.shop.findMany({
+      where: { shopId: { not: "" } },
       select: { shopId: true },
     });
 
