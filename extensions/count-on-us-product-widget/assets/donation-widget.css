@@ -78,6 +78,159 @@
   display: none !important;
 }
 
+.count-on-us-artist-form {
+  max-width: 48rem;
+}
+
+.count-on-us-artist-form__form {
+  display: grid;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.count-on-us-artist-form__body {
+  display: grid;
+  gap: 1rem;
+}
+
+.count-on-us-artist-form__body[hidden] {
+  display: none !important;
+}
+
+.count-on-us-artist-form__grid {
+  display: grid;
+  gap: 0.85rem;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+}
+
+.count-on-us-artist-form__field,
+.count-on-us-artist-form__fieldset {
+  display: grid;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.count-on-us-artist-form__help {
+  color: #4b5563;
+  font-size: 0.86rem;
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.count-on-us-artist-form__error {
+  color: #991b1b;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.count-on-us-artist-form__error[hidden] {
+  display: none !important;
+}
+
+.count-on-us-artist-form__field input,
+.count-on-us-artist-form__field select,
+.count-on-us-artist-form__field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(17, 24, 39, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  font: inherit;
+  padding: 0.72rem 0.78rem;
+}
+
+.count-on-us-artist-form__field input::placeholder,
+.count-on-us-artist-form__field textarea::placeholder {
+  color: rgba(75, 85, 99, 0.62);
+  font-style: italic;
+  opacity: 1;
+}
+
+.count-on-us-artist-form__link-row {
+  display: grid;
+  gap: 0.55rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.count-on-us-artist-form__secondary-button,
+.count-on-us-artist-form__link-remove {
+  border: 1px solid rgba(17, 24, 39, 0.16);
+  border-radius: 8px;
+  background: #ffffff;
+  color: #111827;
+  cursor: pointer;
+  font: inherit;
+  padding: 0.72rem 0.78rem;
+}
+
+.count-on-us-artist-form__secondary-button:focus-visible,
+.count-on-us-artist-form__link-remove:focus-visible {
+  outline: 2px solid #111827;
+  outline-offset: 2px;
+}
+
+.count-on-us-artist-form__link-list {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.count-on-us-artist-form__link-item {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid rgba(17, 24, 39, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 0.5rem 0.55rem;
+}
+
+.count-on-us-artist-form__link-item span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.count-on-us-artist-form__link-remove {
+  padding: 0.45rem 0.6rem;
+}
+
+.count-on-us-artist-form__field textarea {
+  resize: vertical;
+}
+
+.count-on-us-artist-form__fieldset {
+  border: 1px solid rgba(17, 24, 39, 0.14);
+  border-radius: 8px;
+  padding: 0.85rem;
+}
+
+.count-on-us-artist-form__fieldset legend {
+  padding: 0 0.35rem;
+  font-weight: 700;
+}
+
+.count-on-us-artist-form__fieldset label,
+.count-on-us-artist-form__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  line-height: 1.4;
+}
+
+.count-on-us-artist-form__privacy {
+  margin: 0;
+  color: #4b5563;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.count-on-us-artist-form__submit {
+  justify-content: center;
+  margin-top: 0;
+}
+
 .count-on-us-widget__status {
   margin: 0;
   padding: 0.85rem 1rem;

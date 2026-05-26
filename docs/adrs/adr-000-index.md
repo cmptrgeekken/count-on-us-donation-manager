@@ -19,6 +19,7 @@ This directory contains Architecture Decision Records (ADRs) for the Shopify Don
 | [ADR-011](adr-011-marketing-attribution-transparency.md) | Marketing attribution and customer-facing transparency | Accepted | April 2026 |
 | [ADR-012](adr-012-public-financial-disclosure-boundaries.md) | Public financial disclosure boundaries | Accepted | April 2026 |
 | [ADR-013](adr-013-artist-collaboration-product-attribution-and-payouts.md) | Artist collaboration product attribution and payouts | Proposed | May 2026 |
+| [ADR-014](adr-014-artist-submission-storefront-widget.md) | Artist submission storefront widget | Proposed | May 2026 |
 
 ## Dependencies
 
@@ -34,6 +35,7 @@ ADR-010 (Provider rollout strategy) - guides provider work after ADR-003 and ADR
 ADR-011 (Marketing attribution transparency) - extends ADR-003, ADR-004, ADR-009, and ADR-010 for acquisition-cost disclosure
 ADR-012 (Public financial disclosure boundaries) - extends ADR-001, ADR-002, ADR-003, ADR-008, ADR-009, and ADR-011 for public payout/reconciliation summaries
 ADR-013 (Artist collaboration product attribution and payouts) - extends ADR-001, ADR-002, ADR-008, ADR-009, and ADR-012 for artist-routed products and artist payables
+ADR-014 (Artist submission storefront widget) - extends ADR-004, ADR-012, and ADR-013 for storefront artist intake and upload handling
 ```
 
 ## Conventions

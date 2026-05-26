@@ -1,2 +1,3 @@
 export const DONATION_RECEIPTS_APP_PROXY_PATH = "/apps/count-on-us/donation-receipts";
 export const PUBLIC_TRANSPARENCY_APP_PROXY_PATH = "/apps/count-on-us/transparency";
+export const ARTIST_SUBMISSIONS_APP_PROXY_PATH = "/apps/count-on-us/artist-submissions";

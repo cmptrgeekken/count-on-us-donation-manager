@@ -10,6 +10,7 @@ const TENANT_SCOPED_MODELS = [
   "Product", "Variant", "VariantCostConfig",
   "VariantMaterialLine", "VariantEquipmentLine",
   "Cause", "ProductCauseAssignment", "Artist",
+  "ArtistSubmission", "ArtistSubmissionFile",
   "ArtistCauseAssignment", "ProductArtistAssignment",
   "OrderSnapshot", "OrderSnapshotLine",
   "LineCauseAllocation", "LineArtistAllocation", "Adjustment",

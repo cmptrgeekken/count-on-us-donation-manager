@@ -495,8 +495,73 @@ model Artist {
   lineAllocations       LineArtistAllocation[]
   periodAllocations     ArtistAllocation[]
   payments              ArtistPayment[]
+  convertedSubmissions  ArtistSubmission[]
 
   @@index([shopId, status])
+}
+
+model ArtistSubmission {
+  id                       String   @id @default(cuid())
+  shopId                   String
+  submitterName            String
+  email                    String
+  artistName               String?
+  publicLinks              String[] @default([])
+  causeLinks               String[] @default([])
+  preferredContactMethod   String?
+  phoneNumber              String?
+  instagramHandle          String?
+  otherContact             String?
+  localConnection          String?
+  artworkIdea              String
+  interestedFormats        String[] @default([])
+  formatRestrictions       String?
+  salesChannelRestrictions String?
+  causePreference          String?
+  causeInterests           String?
+  artistSharePreference    String?
+  proofApprovalPreference  String?
+  artworkSampleLinks       String?
+  notes                    String?
+  termsAcknowledgedAt      DateTime
+  termsVersion             String?
+  termsText                String?
+  paymentAcknowledgedAt    DateTime?
+  status                   String   @default("new")
+  source                   String   @default("storefront_widget")
+  submitterIpHash          String?
+  userAgent                String?
+  internalNotes            String?
+  convertedArtistId        String?
+  convertedArtist          Artist?  @relation(fields: [convertedArtistId], references: [id], onDelete: SetNull)
+  convertedAt              DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  files                    ArtistSubmissionFile[]
+
+  @@index([shopId, status, createdAt])
+  @@index([shopId, email])
+  @@index([shopId, convertedArtistId])
+}
+
+model ArtistSubmissionFile {
+  id               String           @id @default(cuid())
+  shopId           String
+  submissionId     String
+  submission       ArtistSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  originalFileName String
+  contentType      String
+  byteSize         Int
+  storageKey       String
+  scanStatus       String           @default("pending")
+  scanResult       String?
+  uploadedAt       DateTime         @default(now())
+  deletedAt        DateTime?
+
+  @@unique([shopId, storageKey])
+  @@index([shopId, submissionId])
+  @@index([shopId, scanStatus])
 }
 
 model ArtistCauseAssignment {

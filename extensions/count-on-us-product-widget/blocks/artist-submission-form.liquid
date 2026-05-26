@@ -1,0 +1,305 @@
+<div
+  class="count-on-us-widget count-on-us-artist-form"
+  data-count-on-us-artist-form
+  data-proxy-url="/apps/count-on-us/artist-submissions"
+>
+  <div class="count-on-us-widget__header">
+    <h3 class="count-on-us-widget__heading">{{ block.settings.heading | escape }}</h3>
+    <p class="count-on-us-widget__description">{{ block.settings.description | escape }}</p>
+  </div>
+
+  <form class="count-on-us-artist-form__form" method="post" enctype="multipart/form-data" action="/apps/count-on-us/artist-submissions" novalidate>
+    <p class="count-on-us-widget__status" data-count-on-us-artist-form-status hidden></p>
+
+    <div class="count-on-us-artist-form__body" data-count-on-us-artist-form-body>
+      <input type="text" name="company" class="count-on-us-widget__visually-hidden" tabindex="-1" autocomplete="off" aria-hidden="true">
+      <input type="hidden" name="termsVersion" value="artist-collaboration-terms-2026-05">
+
+      <div class="count-on-us-artist-form__grid">
+        <label class="count-on-us-artist-form__field">
+          <span>Name *</span>
+          <span class="count-on-us-artist-form__help">Your legal name or preferred contact name. This does not have to be your public artist credit.</span>
+          <input name="name" required autocomplete="name">
+          <span class="count-on-us-artist-form__error" data-count-on-us-error-for="name" hidden></span>
+        </label>
+        <label class="count-on-us-artist-form__field">
+          <span>Email *</span>
+          <span class="count-on-us-artist-form__help">We will use this to follow up about your submission.</span>
+          <input name="email" type="email" required autocomplete="email">
+          <span class="count-on-us-artist-form__error" data-count-on-us-error-for="email" hidden></span>
+        </label>
+      </div>
+
+    <label class="count-on-us-artist-form__field">
+      <span>Artist name / public credit name</span>
+      <span class="count-on-us-artist-form__help">How should we credit you publicly? You can use a name, studio, handle, pseudonym, or leave this blank.</span>
+      <input name="artistName">
+      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="artistName" hidden></span>
+    </label>
+
+    <div class="count-on-us-artist-form__field" data-count-on-us-link-field data-count-on-us-link-name="publicLinks" data-count-on-us-link-error="publicLinks">
+      <span>Instagram / website / portfolio</span>
+      <span class="count-on-us-artist-form__help">Share where we can see your work or sample artwork. Instagram, portfolio, Etsy, Linktree, Google Drive, Dropbox, and similar links are all fine.</span>
+      <div class="count-on-us-artist-form__link-row">
+        <input type="text" inputmode="url" placeholder="https://example.com" data-count-on-us-link-input>
+        <button type="button" class="count-on-us-artist-form__secondary-button" data-count-on-us-add-link>Add link</button>
+      </div>
+      <div class="count-on-us-artist-form__link-list" data-count-on-us-link-list aria-live="polite"></div>
+      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="publicLinks" hidden></span>
+    </div>
+
+    <div class="count-on-us-artist-form__grid">
+      <label class="count-on-us-artist-form__field">
+        <span>Preferred communication method</span>
+        <span class="count-on-us-artist-form__help">How would you most like us to follow up? Email is always collected, but we can use another method if you prefer.</span>
+        <select name="preferredContactMethod">
+          <option value="">Select one</option>
+          <option>Email</option>
+          <option>Phone / text</option>
+          <option>Instagram DM</option>
+          <option>Signal</option>
+          <option>Discord</option>
+          <option>Other</option>
+        </select>
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="preferredContactMethod" hidden></span>
+      </label>
+
+      <label class="count-on-us-artist-form__field">
+        <span>Phone or text number</span>
+        <span class="count-on-us-artist-form__help">Optional. Include this if you prefer text, phone, or Signal.</span>
+        <input name="phoneNumber" type="tel" autocomplete="tel">
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="phoneNumber" hidden></span>
+      </label>
+    </div>
+
+    <div class="count-on-us-artist-form__grid">
+      <label class="count-on-us-artist-form__field">
+        <span>Instagram handle</span>
+        <span class="count-on-us-artist-form__help">Optional. Include this if Instagram DM is a good way to reach you.</span>
+        <input name="instagramHandle" placeholder="@sparklyrocketship">
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="instagramHandle" hidden></span>
+      </label>
+
+      <label class="count-on-us-artist-form__field">
+        <span>Other contact details</span>
+        <span class="count-on-us-artist-form__help">Optional. Use this for Discord, Signal username, preferred hours, or another contact method.</span>
+        <input name="otherContact">
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="otherContact" hidden></span>
+      </label>
+    </div>
+
+    {% if block.settings.template_style == 'full' %}
+      <label class="count-on-us-artist-form__field">
+        <span>Are you based in Minnesota or the Twin Cities?</span>
+        <span class="count-on-us-artist-form__help">This helps us understand your local connection. Minnesota and Twin Cities artists are especially encouraged, but broader collaborations are welcome.</span>
+        <select name="localConnection">
+          <option value="">Select one</option>
+          <option>Twin Cities</option>
+          <option>Elsewhere in Minnesota</option>
+          <option>Minnesota connection, but not currently local</option>
+          <option>Outside Minnesota</option>
+          <option>Prefer not to say</option>
+        </select>
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="localConnection" hidden></span>
+      </label>
+    {% endif %}
+
+    <label class="count-on-us-artist-form__field">
+      <span>Tell us about your artwork or idea *</span>
+      <span class="count-on-us-artist-form__help">Describe your style, concept, design idea, or the kind of product you would like to collaborate on. Rough ideas are welcome.</span>
+      <textarea name="artworkIdea" rows="5" required></textarea>
+      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="artworkIdea" hidden></span>
+    </label>
+
+    <fieldset class="count-on-us-artist-form__fieldset">
+      <legend>Product formats that interest you</legend>
+      <p class="count-on-us-artist-form__help">Select any that seem like a good fit. It is okay if you are not sure yet.</p>
+      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="interestedFormats" hidden></span>
+      {% assign formats = 'Full-color stickers|Buttons|Laser-cut acrylic earrings|Laser-cut acrylic pins|Single-tone silhouette acrylic designs|Two-tone acrylic designs|Full-color sublimated earrings or pins|Future formats like magnets, keychains, shirts, or bags|Not sure yet' | split: '|' %}
+      {% for format in formats %}
+        <label>
+          <input type="checkbox" name="interestedFormats" value="{{ format | escape }}">
+          <span>{{ format }}</span>
+        </label>
+      {% endfor %}
+    </fieldset>
+
+    {% if block.settings.template_style == 'full' %}
+      <label class="count-on-us-artist-form__field">
+        <span>Product formats you do not want your design used for</span>
+        <span class="count-on-us-artist-form__help">Examples: no shirts, no bags, no earrings, no print-on-demand, online only, or other limits.</span>
+        <textarea name="formatRestrictions" rows="3"></textarea>
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="formatRestrictions" hidden></span>
+      </label>
+
+      <label class="count-on-us-artist-form__field">
+        <span>Sales channels you do not want your design sold through</span>
+        <span class="count-on-us-artist-form__help">Examples: website only, no wholesale, no consignment, no markets, no political events, or no specific shop types.</span>
+        <textarea name="salesChannelRestrictions" rows="3"></textarea>
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="salesChannelRestrictions" hidden></span>
+      </label>
+    {% endif %}
+
+    <div class="count-on-us-artist-form__grid">
+      <label class="count-on-us-artist-form__field">
+        <span>Cause support preference</span>
+        <span class="count-on-us-artist-form__help">Choose specific causes, let Sparkly Rocketship pick aligned causes, or decide together later.</span>
+        <select name="causePreference">
+          <option value="">Select one</option>
+          <option>I have specific causes in mind</option>
+          <option>Sparkly Rocketship can choose aligned causes</option>
+          <option>Not sure yet / discuss later</option>
+        </select>
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="causePreference" hidden></span>
+      </label>
+
+      <div class="count-on-us-artist-form__field" data-count-on-us-link-field data-count-on-us-link-name="causeLinks" data-count-on-us-link-error="causeLinks">
+        <span>Cause, nonprofit, or donation links</span>
+        <span class="count-on-us-artist-form__help">Optional. Add links if you have specific organizations, mutual aid funds, donation pages, or cause information in mind.</span>
+        <div class="count-on-us-artist-form__link-row">
+          <input type="text" inputmode="url" placeholder="https://example.org/donate" data-count-on-us-link-input>
+          <button type="button" class="count-on-us-artist-form__secondary-button" data-count-on-us-add-link>Add link</button>
+        </div>
+        <div class="count-on-us-artist-form__link-list" data-count-on-us-link-list aria-live="polite"></div>
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="causeLinks" hidden></span>
+      </div>
+    </div>
+
+    <label class="count-on-us-artist-form__field">
+      <span>Cause notes</span>
+      <span class="count-on-us-artist-form__help">Optional. Add names, issue areas, or context for your cause preference.</span>
+      <textarea name="causeInterests" rows="2"></textarea>
+      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="causeInterests" hidden></span>
+    </label>
+
+    <div class="count-on-us-artist-form__grid">
+      <label class="count-on-us-artist-form__field">
+        <span>Artist share preference</span>
+        <span class="count-on-us-artist-form__help">You can choose to donate your artist share, receive payment, or decide later. Paid artists may need to complete a W-9 before payment.</span>
+        <select name="artistSharePreference">
+          <option value="">Select one</option>
+          <option>Donate my artist share to my selected cause</option>
+          <option>Receive artist payment</option>
+          <option>Not sure yet / discuss later</option>
+        </select>
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="artistSharePreference" hidden></span>
+      </label>
+
+      {% if block.settings.template_style == 'full' %}
+        <label class="count-on-us-artist-form__field">
+          <span>Approve final product proofs before launch?</span>
+          <span class="count-on-us-artist-form__help">Some artists want final approval before products go live; others prefer Sparkly Rocketship to handle production adaptation.</span>
+          <select name="proofApprovalPreference">
+            <option value="">Select one</option>
+            <option>Yes, I want to approve proofs before launch</option>
+            <option>No, Sparkly Rocketship can handle production adaptation</option>
+            <option>Not sure yet / discuss later</option>
+          </select>
+          <span class="count-on-us-artist-form__error" data-count-on-us-error-for="proofApprovalPreference" hidden></span>
+        </label>
+      {% endif %}
+    </div>
+
+    {% if block.settings.uploads_enabled %}
+      <label class="count-on-us-artist-form__field">
+        <span>Artwork/sample files</span>
+        <span class="count-on-us-artist-form__help">Upload optional sample files. PNG, SVG, PDF, and WebP are supported; please do not upload W-9s, tax IDs, or payment details here.</span>
+        <input name="artworkFiles" type="file" multiple accept=".png,.svg,.pdf,.webp,image/png,image/svg+xml,application/pdf,image/webp">
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="artworkFiles" hidden></span>
+      </label>
+    {% endif %}
+
+    {% if block.settings.template_style == 'full' %}
+      <label class="count-on-us-artist-form__field">
+        <span>Anything else we should know?</span>
+        <span class="count-on-us-artist-form__help">Add context, questions, accessibility needs, timing notes, preferred communication method, or anything else helpful.</span>
+        <textarea name="notes" rows="3"></textarea>
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="notes" hidden></span>
+      </label>
+    {% endif %}
+
+    <label class="count-on-us-artist-form__check">
+      <input type="checkbox" name="termsAcknowledged" value="true" required>
+      <span>
+        I have reviewed the
+        {% if block.settings.terms_url != blank %}
+          <a href="{{ block.settings.terms_url }}" target="_blank" rel="noreferrer">Collaboration Terms & Conditions</a>
+        {% else %}
+          Collaboration Terms & Conditions
+        {% endif %}
+        and understand that submitting this form does not commit me to a collaboration or automatically grant product rights. Final details will be confirmed before launch.
+      </span>
+    </label>
+    <span class="count-on-us-artist-form__error" data-count-on-us-error-for="termsAcknowledged" hidden></span>
+
+    <label class="count-on-us-artist-form__check">
+      <input type="checkbox" name="paymentAcknowledged" value="true">
+      <span>I understand that if I choose to receive artist payments, Sparkly Rocketship may require a completed Form W-9 before issuing payment.</span>
+    </label>
+    <span class="count-on-us-artist-form__error" data-count-on-us-error-for="paymentAcknowledged" hidden></span>
+
+    <p class="count-on-us-artist-form__privacy">{{ block.settings.privacy_note | escape }}</p>
+
+      <button type="submit" class="count-on-us-widget__toggle count-on-us-artist-form__submit">
+        <span>{{ block.settings.submit_label | escape }}</span>
+      </button>
+      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="form" hidden></span>
+    </div>
+  </form>
+</div>
+
+{% schema %}
+{
+  "name": "Artist submission form",
+  "target": "section",
+  "stylesheet": "donation-widget.css",
+  "javascript": "artist-submission-form.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Artist Collaboration Interest Form"
+    },
+    {
+      "type": "textarea",
+      "id": "description",
+      "label": "Description",
+      "default": "Interested in collaborating with Sparkly Rocketship? Use this form to tell us a little about yourself, your artwork, and the kinds of products or causes you're interested in."
+    },
+    {
+      "type": "select",
+      "id": "template_style",
+      "label": "Template",
+      "default": "full",
+      "options": [
+        { "value": "full", "label": "Full" },
+        { "value": "minimal", "label": "Minimal" }
+      ]
+    },
+    {
+      "type": "checkbox",
+      "id": "uploads_enabled",
+      "label": "Enable file uploads",
+      "default": true
+    },
+    {
+      "type": "url",
+      "id": "terms_url",
+      "label": "Collaboration terms URL"
+    },
+    {
+      "type": "textarea",
+      "id": "privacy_note",
+      "label": "Privacy note",
+      "default": "We will use your information only to review and follow up on possible Sparkly Rocketship collaborations. We will not publish your legal name, contact information, or private submission details without permission."
+    },
+    {
+      "type": "text",
+      "id": "submit_label",
+      "label": "Submit label",
+      "default": "Submit collaboration interest"
+    }
+  ]
+}
+{% endschema %}
