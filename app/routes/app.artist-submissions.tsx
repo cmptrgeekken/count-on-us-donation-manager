@@ -58,6 +58,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         publicLinks: submission.publicLinks,
         causeLinks: submission.causeLinks,
         preferredContactMethod: submission.preferredContactMethod ?? "",
+        contactDetail: submission.contactDetail ?? "",
         phoneNumber: submission.phoneNumber ?? "",
         instagramHandle: submission.instagramHandle ?? "",
         otherContact: submission.otherContact ?? "",
@@ -232,11 +233,12 @@ export default function ArtistSubmissionsPage() {
                       <div>
                         <strong>Contact</strong>
                         <p style={{ marginBlock: "0.35rem" }}>{submission.submitterName}</p>
-                        <a href={`mailto:${submission.email}`}>{submission.email}</a>
+                        {submission.email ? <a href={`mailto:${submission.email}`}>{submission.email}</a> : null}
                         {submission.localConnection ? <p>{submission.localConnection}</p> : null}
                         {submission.preferredContactMethod ? (
                           <p style={{ marginBottom: 0 }}>Prefers: {submission.preferredContactMethod}</p>
                         ) : null}
+                        {submission.contactDetail ? <p style={{ whiteSpace: "pre-wrap" }}>{submission.contactDetail}</p> : null}
                         {submission.phoneNumber ? <p style={{ marginBlock: "0.25rem" }}>Phone/text: {submission.phoneNumber}</p> : null}
                         {submission.instagramHandle ? <p style={{ marginBlock: "0.25rem" }}>Instagram: {submission.instagramHandle}</p> : null}
                         {submission.otherContact ? <p style={{ whiteSpace: "pre-wrap" }}>{submission.otherContact}</p> : null}

@@ -70,6 +70,13 @@ const optionalText = (max: number) =>
     .optional()
     .transform((value) => (value ? value : null));
 
+const requiredText = (fieldName: string, max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1, `${fieldName} is required.`)
+    .max(max, `${fieldName} must be ${max} characters or fewer.`);
+
 const textList = (maxItems: number, maxItemLength: number) =>
   z
     .union([z.string(), z.array(z.string())])
@@ -180,7 +187,8 @@ function optionalEnum<T extends readonly [string, ...string[]]>(values: T) {
 }
 
 const artistSubmissionInputSchema = z.object({
-  name: z.string().trim().min(1, "Name is required.").max(120, "Name must be 120 characters or fewer."),
+  publicCreditName: requiredText("Public credit name", 120).optional(),
+  name: optionalText(120),
   email: z
     .string()
     .trim()
@@ -191,7 +199,10 @@ const artistSubmissionInputSchema = z.object({
   artistName: optionalText(120),
   publicLinks: publicLinksSchema("Portfolio links"),
   causeLinks: publicLinksSchema("Cause links"),
-  preferredContactMethod: optionalEnum(contactMethodPreferences),
+  preferredContactMethod: z.enum(contactMethodPreferences, {
+    error: "Preferred communication method is required.",
+  }),
+  contactDetail: optionalText(500),
   phoneNumber: optionalText(80),
   instagramHandle: optionalText(120),
   otherContact: optionalText(500),
@@ -263,7 +274,25 @@ export function validateArtistSubmissionInput(input: ArtistSubmissionInput): Val
     throw new ArtistSubmissionSpamError();
   }
 
-  return parsed.data;
+  const publicCreditName = parsed.data.publicCreditName || parsed.data.artistName || parsed.data.name;
+  if (!publicCreditName) {
+    throw new ArtistSubmissionValidationError("Public credit name is required.", {
+      publicCreditName: ["Public credit name is required."],
+    });
+  }
+
+  if (parsed.data.preferredContactMethod !== "Email" && !parsed.data.contactDetail) {
+    throw new ArtistSubmissionValidationError("Contact detail is required for the selected communication method.", {
+      contactDetail: ["Please enter the contact detail for your preferred communication method."],
+    });
+  }
+
+  return {
+    ...parsed.data,
+    publicCreditName,
+    artistName: publicCreditName,
+    name: parsed.data.name ?? publicCreditName,
+  };
 }
 
 export function hashSubmissionIp(ipAddress: string | null | undefined) {
@@ -288,12 +317,13 @@ export async function createArtistSubmission(
   const submission = await db.artistSubmission.create({
     data: {
       shopId,
-      submitterName: data.name,
+      submitterName: data.publicCreditName,
       email: data.email,
       artistName: data.artistName,
       publicLinks: data.publicLinks,
       causeLinks: data.causeLinks,
       preferredContactMethod: data.preferredContactMethod,
+      contactDetail: data.contactDetail,
       phoneNumber: data.phoneNumber,
       instagramHandle: data.instagramHandle,
       otherContact: data.otherContact,
@@ -333,6 +363,7 @@ export async function createArtistSubmission(
         email: data.email,
         artistName: data.artistName,
         preferredContactMethod: data.preferredContactMethod,
+        hasContactDetail: Boolean(data.contactDetail),
         localConnection: data.localConnection,
         interestedFormats: data.interestedFormats,
         artistSharePreference: data.artistSharePreference,
@@ -538,6 +569,7 @@ export async function convertArtistSubmissionToDraftArtist(
         causeLinks: true,
         causePreference: true,
         preferredContactMethod: true,
+        contactDetail: true,
         phoneNumber: true,
         instagramHandle: true,
         otherContact: true,
@@ -576,6 +608,7 @@ export async function convertArtistSubmissionToDraftArtist(
         internalNotes: [
           "Created from artist submission.",
           submission.preferredContactMethod ? `Preferred contact: ${submission.preferredContactMethod}` : "",
+          submission.contactDetail ? `Contact detail: ${submission.contactDetail}` : "",
           submission.phoneNumber ? `Phone/text: ${submission.phoneNumber}` : "",
           submission.instagramHandle ? `Instagram: ${submission.instagramHandle}` : "",
           submission.otherContact ? `Other contact: ${submission.otherContact}` : "",

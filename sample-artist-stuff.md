@@ -317,7 +317,9 @@ You can reach out with a finished design, a work in progress, a sketch, a cause 
 
 Helpful things to include:
 
-- Your name and artist name
+- Your public credit name
+- Your email address
+- Your preferred communication method
 - Instagram, website, or portfolio link
 - A short description of your style or idea
 - Any sample artwork or design files

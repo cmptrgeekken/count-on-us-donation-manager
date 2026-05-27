@@ -76,12 +76,14 @@ async function readSubmissionPayload(request: Request) {
 
   return {
     payload: {
+      publicCreditName: formData.get("publicCreditName")?.toString() ?? "",
       name: formData.get("name")?.toString() ?? "",
       email: formData.get("email")?.toString() ?? "",
       artistName: formData.get("artistName")?.toString() ?? "",
       publicLinks: formData.getAll("publicLinks").map((value) => value.toString()),
       causeLinks: formData.getAll("causeLinks").map((value) => value.toString()),
       preferredContactMethod: formData.get("preferredContactMethod")?.toString() ?? "",
+      contactDetail: formData.get("contactDetail")?.toString() ?? "",
       phoneNumber: formData.get("phoneNumber")?.toString() ?? "",
       instagramHandle: formData.get("instagramHandle")?.toString() ?? "",
       otherContact: formData.get("otherContact")?.toString() ?? "",

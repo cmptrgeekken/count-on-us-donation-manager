@@ -6,6 +6,13 @@
     const status = root.querySelector("[data-count-on-us-artist-form-status]");
     const body = root.querySelector("[data-count-on-us-artist-form-body]");
     const linkFields = Array.from(root.querySelectorAll("[data-count-on-us-link-field]"));
+    const contactMethod = root.querySelector("[data-count-on-us-contact-method]");
+    const contactDetailField = root.querySelector("[data-count-on-us-contact-detail-field]");
+    const contactDetailInput = root.querySelector("[data-count-on-us-contact-detail]");
+    const contactDetailLabel = root.querySelector("[data-count-on-us-contact-detail-label]");
+    const contactDetailHelp = root.querySelector("[data-count-on-us-contact-detail-help]");
+    const causePreference = root.querySelector("[data-count-on-us-cause-preference]");
+    const causeLinksField = root.querySelector("[data-count-on-us-cause-links]");
     const submit = form && form.querySelector("button[type='submit']");
 
     if (!form || !status) return;
@@ -47,7 +54,7 @@
       const field =
         form.querySelector(`[name="${fieldName}"]`) ||
         linkInput ||
-        form.querySelector("[name='name']");
+        form.querySelector("[name='publicCreditName']");
       if (field && typeof field.focus === "function") field.focus();
     }
 
@@ -117,6 +124,7 @@
     }
 
     function addCurrentLink(field) {
+      if (field.hidden) return true;
       const linkInput = field.querySelector("[data-count-on-us-link-input]");
       if (!linkInput) return true;
       const value = linkInput.value.trim();
@@ -161,10 +169,103 @@
       return linkFields.every((field) => addCurrentLink(field));
     }
 
+    const contactDetailCopy = {
+      "Phone / text": {
+        label: "Phone or text number *",
+        help: "Enter the phone number we should use for text or phone follow-up.",
+        placeholder: "555-555-5555",
+        type: "tel",
+        autocomplete: "tel",
+      },
+      "Instagram DM": {
+        label: "Instagram handle *",
+        help: "Enter the Instagram handle we should message.",
+        placeholder: "@sparklyrocketship",
+        type: "text",
+        autocomplete: "off",
+      },
+      Signal: {
+        label: "Signal contact *",
+        help: "Enter the phone number or Signal username we should use.",
+        placeholder: "Signal phone number or username",
+        type: "text",
+        autocomplete: "off",
+      },
+      Discord: {
+        label: "Discord username *",
+        help: "Enter the Discord username we should use.",
+        placeholder: "username",
+        type: "text",
+        autocomplete: "off",
+      },
+      Other: {
+        label: "Contact detail *",
+        help: "Enter the contact detail and any context we need for your preferred method.",
+        placeholder: "Preferred contact detail",
+        type: "text",
+        autocomplete: "off",
+      },
+    };
+
+    function updateContactDetailField() {
+      if (!contactMethod || !contactDetailField || !contactDetailInput) return;
+      const selectedMethod = contactMethod.value;
+      const copy = contactDetailCopy[selectedMethod];
+
+      contactDetailField.hidden = !copy;
+      contactDetailInput.required = Boolean(copy);
+
+      if (!copy) {
+        contactDetailInput.value = "";
+        const errorTarget = getErrorTarget("contactDetail");
+        if (errorTarget) {
+          errorTarget.hidden = true;
+          errorTarget.textContent = "";
+        }
+        return;
+      }
+
+      if (contactDetailLabel) contactDetailLabel.textContent = copy.label;
+      if (contactDetailHelp) contactDetailHelp.textContent = copy.help;
+      contactDetailInput.placeholder = copy.placeholder;
+      contactDetailInput.type = copy.type;
+      contactDetailInput.autocomplete = copy.autocomplete;
+    }
+
+    function updateCauseLinksVisibility() {
+      if (!causePreference || !causeLinksField) return;
+      const showLinks = causePreference.value === "I have specific causes in mind";
+      causeLinksField.hidden = !showLinks;
+
+      if (showLinks) return;
+
+      const linkInput = causeLinksField.querySelector("[data-count-on-us-link-input]");
+      const linkList = causeLinksField.querySelector("[data-count-on-us-link-list]");
+      if (linkInput) linkInput.value = "";
+      if (linkList) linkList.textContent = "";
+      const errorTarget = getErrorTarget("causeLinks");
+      if (errorTarget) {
+        errorTarget.hidden = true;
+        errorTarget.textContent = "";
+      }
+    }
+
+    if (contactMethod) {
+      contactMethod.addEventListener("change", updateContactDetailField);
+      updateContactDetailField();
+    }
+
+    if (causePreference) {
+      causePreference.addEventListener("change", updateCauseLinksVisibility);
+      updateCauseLinksVisibility();
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       clearFieldErrors();
       hideStatus();
+      updateContactDetailField();
+      updateCauseLinksVisibility();
       if (!addPendingLinks()) return;
       setStatus("Submitting...", false);
       if (submit) submit.disabled = true;

@@ -10,14 +10,13 @@ import {
 describe("validateArtistSubmissionInput", () => {
   it("normalizes a valid artist submission", () => {
     const result = validateArtistSubmissionInput({
-      name: "  Ada Artist  ",
+      publicCreditName: "  Ada Studio  ",
       email: "ADA@EXAMPLE.COM ",
-      artistName: "Ada Studio",
       publicLinks: "example.com\nhttps://instagram.com/ada",
       causeLinks: ["mutual-aid.example/donate"],
       causePreference: "Sparkly Rocketship can choose aligned causes",
       preferredContactMethod: "Instagram DM",
-      instagramHandle: "@ada",
+      contactDetail: "@ada",
       localConnection: "Twin Cities",
       artworkIdea: "A sticker design for mutual aid.",
       interestedFormats: ["Buttons", "Not a real format", "Full-color stickers"],
@@ -27,25 +26,38 @@ describe("validateArtistSubmissionInput", () => {
       paymentAcknowledged: true,
     });
 
-    expect(result.name).toBe("Ada Artist");
+    expect(result.name).toBe("Ada Studio");
     expect(result.email).toBe("ada@example.com");
+    expect(result.artistName).toBe("Ada Studio");
     expect(result.publicLinks).toEqual(["https://example.com/", "https://instagram.com/ada"]);
     expect(result.causeLinks).toEqual(["https://mutual-aid.example/donate"]);
     expect(result.causePreference).toBe("Sparkly Rocketship can choose aligned causes");
     expect(result.preferredContactMethod).toBe("Instagram DM");
-    expect(result.instagramHandle).toBe("@ada");
+    expect(result.contactDetail).toBe("@ada");
     expect(result.interestedFormats).toEqual(["Buttons", "Full-color stickers"]);
     expect(result.artistSharePreference).toBe("Receive artist payment");
     expect(result.paymentAcknowledged).toBe(true);
   });
 
-  it("requires name, email, idea, and terms acknowledgement", () => {
+  it("requires public credit name, email, preferred contact method, idea, and terms acknowledgement", () => {
     expect(() =>
       validateArtistSubmissionInput({
         name: "",
         email: "not-an-email",
         artworkIdea: "",
         termsAcknowledged: false,
+      }),
+    ).toThrow(ArtistSubmissionValidationError);
+  });
+
+  it("requires contact detail for non-email preferred contact methods", () => {
+    expect(() =>
+      validateArtistSubmissionInput({
+        publicCreditName: "Ada Studio",
+        email: "ada@example.com",
+        preferredContactMethod: "Instagram DM",
+        artworkIdea: "A sticker design for mutual aid.",
+        termsAcknowledged: true,
       }),
     ).toThrow(ArtistSubmissionValidationError);
   });
@@ -112,8 +124,9 @@ describe("validateArtistSubmissionInput", () => {
   it("rejects honeypot submissions", () => {
     expect(() =>
       validateArtistSubmissionInput({
-        name: "Ada Artist",
+        publicCreditName: "Ada Artist",
         email: "ada@example.com",
+        preferredContactMethod: "Email",
         artworkIdea: "A sticker design for mutual aid.",
         termsAcknowledged: true,
         honeypot: "bot-filled-field",

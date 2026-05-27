@@ -24,9 +24,9 @@ Artist submissions will be stored as shop-scoped intake records separate from ac
 
 Each intake record should include:
 
-- submitter name
-- email
-- artist name / public credit name
+- public credit name
+- email, required for durable follow-up and payment/legal coordination
+- preferred communication method and method-specific contact detail when the preferred method is not email
 - public/work sample links, such as Instagram, website, portfolio, Etsy, Linktree, Google Drive, Dropbox, or similar
 - local connection selection
 - artwork or collaboration idea
@@ -51,9 +51,10 @@ Admins may convert a submission into a draft Artist record. Conversion should co
 
 The default Sparkly Rocketship template should include these fields:
 
-- Name, required
+- Public credit name, required
 - Email, required
-- Artist name / public credit name, optional
+- Preferred communication method, required dropdown
+- Method-specific contact detail, required when the preferred method is not email
 - Instagram / website / portfolio, optional repeatable validated links
 - Are you based in Minnesota or the Twin Cities?, optional dropdown
 - Tell us about your artwork or idea, required long text
@@ -72,9 +73,9 @@ The default Sparkly Rocketship template should include these fields:
 
 The widget may also offer a minimal template for merchants who want less friction:
 
-- Name
+- Public credit name
 - Email
-- Artist name / public credit name
+- Preferred communication method
 - Instagram / website / portfolio
 - Tell us about your artwork or idea
 - Product formats that interest you

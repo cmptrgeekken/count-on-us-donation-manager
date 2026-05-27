@@ -509,6 +509,7 @@ model ArtistSubmission {
   publicLinks              String[] @default([])
   causeLinks               String[] @default([])
   preferredContactMethod   String?
+  contactDetail            String?
   phoneNumber              String?
   instagramHandle          String?
   otherContact             String?

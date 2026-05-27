@@ -15,44 +15,25 @@
       <input type="text" name="company" class="count-on-us-widget__visually-hidden" tabindex="-1" autocomplete="off" aria-hidden="true">
       <input type="hidden" name="termsVersion" value="artist-collaboration-terms-2026-05">
 
-      <div class="count-on-us-artist-form__grid">
-        <label class="count-on-us-artist-form__field">
-          <span>Name *</span>
-          <span class="count-on-us-artist-form__help">Your legal name or preferred contact name. This does not have to be your public artist credit.</span>
-          <input name="name" required autocomplete="name">
-          <span class="count-on-us-artist-form__error" data-count-on-us-error-for="name" hidden></span>
-        </label>
-        <label class="count-on-us-artist-form__field">
-          <span>Email *</span>
-          <span class="count-on-us-artist-form__help">We will use this to follow up about your submission.</span>
-          <input name="email" type="email" required autocomplete="email">
-          <span class="count-on-us-artist-form__error" data-count-on-us-error-for="email" hidden></span>
-        </label>
-      </div>
+      <label class="count-on-us-artist-form__field">
+        <span>Public credit name *</span>
+        <span class="count-on-us-artist-form__help">How should we refer to you? You can use your artist name, studio name, handle, pseudonym, or preferred public name.</span>
+        <input name="publicCreditName" required autocomplete="name">
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="publicCreditName" hidden></span>
+      </label>
 
-    <label class="count-on-us-artist-form__field">
-      <span>Artist name / public credit name</span>
-      <span class="count-on-us-artist-form__help">How should we credit you publicly? You can use a name, studio, handle, pseudonym, or leave this blank.</span>
-      <input name="artistName">
-      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="artistName" hidden></span>
-    </label>
-
-    <div class="count-on-us-artist-form__field" data-count-on-us-link-field data-count-on-us-link-name="publicLinks" data-count-on-us-link-error="publicLinks">
-      <span>Instagram / website / portfolio</span>
-      <span class="count-on-us-artist-form__help">Share where we can see your work or sample artwork. Instagram, portfolio, Etsy, Linktree, Google Drive, Dropbox, and similar links are all fine.</span>
-      <div class="count-on-us-artist-form__link-row">
-        <input type="text" inputmode="url" placeholder="https://example.com" data-count-on-us-link-input>
-        <button type="button" class="count-on-us-artist-form__secondary-button" data-count-on-us-add-link>Add link</button>
-      </div>
-      <div class="count-on-us-artist-form__link-list" data-count-on-us-link-list aria-live="polite"></div>
-      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="publicLinks" hidden></span>
-    </div>
+      <label class="count-on-us-artist-form__field">
+        <span>Email *</span>
+        <span class="count-on-us-artist-form__help">We use email for durable follow-up, collaboration records, and any payment or legal document coordination if needed.</span>
+        <input name="email" type="email" required autocomplete="email">
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="email" hidden></span>
+      </label>
 
     <div class="count-on-us-artist-form__grid">
       <label class="count-on-us-artist-form__field">
-        <span>Preferred communication method</span>
-        <span class="count-on-us-artist-form__help">How would you most like us to follow up? Email is always collected, but we can use another method if you prefer.</span>
-        <select name="preferredContactMethod">
+        <span>Preferred communication method *</span>
+        <span class="count-on-us-artist-form__help">Choose the best way for us to follow up about your submission.</span>
+        <select name="preferredContactMethod" required data-count-on-us-contact-method>
           <option value="">Select one</option>
           <option>Email</option>
           <option>Phone / text</option>
@@ -64,28 +45,23 @@
         <span class="count-on-us-artist-form__error" data-count-on-us-error-for="preferredContactMethod" hidden></span>
       </label>
 
-      <label class="count-on-us-artist-form__field">
-        <span>Phone or text number</span>
-        <span class="count-on-us-artist-form__help">Optional. Include this if you prefer text, phone, or Signal.</span>
-        <input name="phoneNumber" type="tel" autocomplete="tel">
-        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="phoneNumber" hidden></span>
+      <label class="count-on-us-artist-form__field" data-count-on-us-contact-detail-field hidden>
+        <span data-count-on-us-contact-detail-label>Contact detail *</span>
+        <span class="count-on-us-artist-form__help" data-count-on-us-contact-detail-help>Enter the email, phone number, handle, username, or other detail for your chosen method.</span>
+        <input name="contactDetail" data-count-on-us-contact-detail>
+        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="contactDetail" hidden></span>
       </label>
     </div>
 
-    <div class="count-on-us-artist-form__grid">
-      <label class="count-on-us-artist-form__field">
-        <span>Instagram handle</span>
-        <span class="count-on-us-artist-form__help">Optional. Include this if Instagram DM is a good way to reach you.</span>
-        <input name="instagramHandle" placeholder="@sparklyrocketship">
-        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="instagramHandle" hidden></span>
-      </label>
-
-      <label class="count-on-us-artist-form__field">
-        <span>Other contact details</span>
-        <span class="count-on-us-artist-form__help">Optional. Use this for Discord, Signal username, preferred hours, or another contact method.</span>
-        <input name="otherContact">
-        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="otherContact" hidden></span>
-      </label>
+    <div class="count-on-us-artist-form__field" data-count-on-us-link-field data-count-on-us-link-name="publicLinks" data-count-on-us-link-error="publicLinks">
+      <span>Instagram / website / portfolio</span>
+      <span class="count-on-us-artist-form__help">Share where we can see your work or sample artwork. Instagram, portfolio, Etsy, Linktree, Google Drive, Dropbox, and similar links are all fine.</span>
+      <div class="count-on-us-artist-form__link-row">
+        <input type="text" inputmode="url" placeholder="https://example.com" data-count-on-us-link-input>
+        <button type="button" class="count-on-us-artist-form__secondary-button" data-count-on-us-add-link>Add link</button>
+      </div>
+      <div class="count-on-us-artist-form__link-list" data-count-on-us-link-list aria-live="polite"></div>
+      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="publicLinks" hidden></span>
     </div>
 
     {% if block.settings.template_style == 'full' %}
@@ -140,29 +116,27 @@
       </label>
     {% endif %}
 
-    <div class="count-on-us-artist-form__grid">
-      <label class="count-on-us-artist-form__field">
-        <span>Cause support preference</span>
-        <span class="count-on-us-artist-form__help">Choose specific causes, let Sparkly Rocketship pick aligned causes, or decide together later.</span>
-        <select name="causePreference">
-          <option value="">Select one</option>
-          <option>I have specific causes in mind</option>
-          <option>Sparkly Rocketship can choose aligned causes</option>
-          <option>Not sure yet / discuss later</option>
-        </select>
-        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="causePreference" hidden></span>
-      </label>
+    <label class="count-on-us-artist-form__field">
+      <span>Cause support preference</span>
+      <span class="count-on-us-artist-form__help">Choose specific causes, let Sparkly Rocketship pick aligned causes, or decide together later.</span>
+      <select name="causePreference" data-count-on-us-cause-preference>
+        <option value="">Select one</option>
+        <option>I have specific causes in mind</option>
+        <option>Sparkly Rocketship can choose aligned causes</option>
+        <option>Not sure yet / discuss later</option>
+      </select>
+      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="causePreference" hidden></span>
+    </label>
 
-      <div class="count-on-us-artist-form__field" data-count-on-us-link-field data-count-on-us-link-name="causeLinks" data-count-on-us-link-error="causeLinks">
-        <span>Cause, nonprofit, or donation links</span>
-        <span class="count-on-us-artist-form__help">Optional. Add links if you have specific organizations, mutual aid funds, donation pages, or cause information in mind.</span>
-        <div class="count-on-us-artist-form__link-row">
-          <input type="text" inputmode="url" placeholder="https://example.org/donate" data-count-on-us-link-input>
-          <button type="button" class="count-on-us-artist-form__secondary-button" data-count-on-us-add-link>Add link</button>
-        </div>
-        <div class="count-on-us-artist-form__link-list" data-count-on-us-link-list aria-live="polite"></div>
-        <span class="count-on-us-artist-form__error" data-count-on-us-error-for="causeLinks" hidden></span>
+    <div class="count-on-us-artist-form__field" data-count-on-us-cause-links data-count-on-us-link-field data-count-on-us-link-name="causeLinks" data-count-on-us-link-error="causeLinks" hidden>
+      <span>Cause, nonprofit, or donation links</span>
+      <span class="count-on-us-artist-form__help">Optional. Add links if you have specific organizations, mutual aid funds, donation pages, or cause information in mind.</span>
+      <div class="count-on-us-artist-form__link-row">
+        <input type="text" inputmode="url" placeholder="https://example.org/donate" data-count-on-us-link-input>
+        <button type="button" class="count-on-us-artist-form__secondary-button" data-count-on-us-add-link>Add link</button>
       </div>
+      <div class="count-on-us-artist-form__link-list" data-count-on-us-link-list aria-live="polite"></div>
+      <span class="count-on-us-artist-form__error" data-count-on-us-error-for="causeLinks" hidden></span>
     </div>
 
     <label class="count-on-us-artist-form__field">
