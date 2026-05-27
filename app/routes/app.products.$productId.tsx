@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { z } from "zod";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
@@ -51,6 +51,27 @@ const fieldStyle = {
   color: "var(--p-color-text, #303030)",
   font: "inherit",
 };
+
+async function auditProductShopifySyncFailure(
+  shopId: string,
+  productId: string,
+  productGid: string,
+  error: unknown,
+) {
+  await prisma.auditLog.create({
+    data: {
+      shopId,
+      entity: "Product",
+      entityId: productId,
+      action: "PRODUCT_CAUSE_ASSIGNMENTS_SHOPIFY_SYNC_FAILED",
+      actor: "merchant",
+      payload: {
+        shopifyProductId: productGid,
+        message: error instanceof Error ? error.message : "Unknown Shopify sync failure",
+      },
+    },
+  });
+}
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -366,15 +387,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       });
 
       if (admin) {
-        await syncProductCauseAssignmentsMetafield(
-          admin,
-          product.shopifyId,
-          derivedAssignments.map((assignment) => ({
-            causeId: assignment.causeId,
-            metaobjectId: assignment.metaobjectId,
-            percentage: assignment.percentage.toFixed(2),
-          })),
-        );
+        try {
+          await syncProductCauseAssignmentsMetafield(
+            admin,
+            product.shopifyId,
+            derivedAssignments.map((assignment) => ({
+              causeId: assignment.causeId,
+              metaobjectId: assignment.metaobjectId,
+              percentage: assignment.percentage.toFixed(2),
+            })),
+          );
+        } catch (error) {
+          console.error("[ProductDonations] Shopify sync failed after saving artist assignments:", error);
+          await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);
+          return Response.json({
+            ok: true,
+            message: "Artist assignments saved locally. Shopify storefront sync failed; save again later to retry the storefront rollup.",
+          });
+        }
       }
 
       return Response.json({ ok: true, message: "Product Artist assignments saved." });
@@ -513,22 +543,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
       return Response.json({ ok: true, message: "Product Cause assignments saved." });
     } catch (error) {
-      await prisma.auditLog.create({
-        data: {
-          shopId,
-          entity: "Product",
-          entityId: product.id,
-          action: "PRODUCT_CAUSE_ASSIGNMENTS_SHOPIFY_SYNC_FAILED",
-          actor: "merchant",
-          payload: {
-            message: error instanceof Error ? error.message : "Unknown Shopify sync failure",
-          },
-        },
-      });
+      console.error("[ProductDonations] Shopify sync failed after saving cause assignments:", error);
+      await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);
 
       return Response.json(
-        { ok: false, message: "Assignments saved locally, but Shopify sync failed. Save again to retry." },
-        { status: 502 },
+        { ok: true, message: "Cause assignments saved locally. Shopify storefront sync failed; save again later to retry the storefront rollup." },
       );
     }
   } catch (error) {
@@ -653,6 +672,11 @@ export default function ProductDetailPage() {
             <s-text>{fetcher.data.message}</s-text>
           </s-banner>
         )}
+        {fetcher.data?.ok && fetcher.data.message && (
+          <s-banner tone="success">
+            <s-text>{fetcher.data.message}</s-text>
+          </s-banner>
+        )}
 
         <s-section heading={product.title}>
           <div style={{ display: "grid", gap: "0.35rem" }}>
@@ -663,109 +687,159 @@ export default function ProductDetailPage() {
 
         <s-section heading="Artist collaboration assignments">
           <div style={{ display: "grid", gap: "1rem" }}>
-            <s-text>
-              Assign one or more active Artists to route this product through artist-selected Causes and optional artist payout tracking.
-            </s-text>
-            <HelpText>Artist collaboration shares must total exactly 100%. Saving Artist assignments replaces direct Cause assignments with a derived Cause rollup for storefront display.</HelpText>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start", flexWrap: "wrap" }}>
+              <div style={{ display: "grid", gap: "0.35rem", maxWidth: "46rem" }}>
+                <s-text>
+                  Route this product through artist-selected Causes and optional artist payout tracking.
+                </s-text>
+                <HelpText>Artist shares must total exactly 100%. Saving Artist assignments replaces direct Cause assignments with a derived Cause rollup for storefront display.</HelpText>
+              </div>
+              <Link to="/app/artists">Manage Artists</Link>
+            </div>
 
             {artistRows.length === 0 ? (
               <s-banner tone="info">
-                <s-text>No Artists are assigned. This product uses direct Cause assignments below.</s-text>
+                <s-text>
+                  No Artists are assigned. This product uses direct Cause assignments below.
+                  {artists.length === 0 ? " Add active Artists before assigning collaborations." : ""}
+                </s-text>
               </s-banner>
             ) : (
-              <div style={{ display: "grid", gap: "0.75rem" }}>
+              <div style={{ display: "grid", gap: "0.6rem" }}>
                 {artistRows.map((row, index) => {
                   const selectableArtists = artists.filter(
                     (artist: (typeof artists)[number]) =>
                       artist.id === row.artistId || !artistRows.some((entry, entryIndex) => entry.artistId === artist.id && entryIndex !== index),
                   );
                   const selectedArtist = artists.find((artist: (typeof artists)[number]) => artist.id === row.artistId);
+                  const selectedArtistCauseText = selectedArtist?.causeAssignments.length
+                    ? selectedArtist.causeAssignments
+                        .map((assignment: (typeof selectedArtist.causeAssignments)[number]) => `${assignment.causeName} ${Number(assignment.percentage).toFixed(0)}%`)
+                        .join(" · ")
+                    : "No Cause routing configured";
+                  const effectivePayout =
+                    row.payoutEnabledOverride === "inherit"
+                      ? selectedArtist?.paymentEnabled
+                        ? `${selectedArtist.defaultPayoutRate}% default payout`
+                        : "Share donated"
+                      : row.payoutEnabledOverride === "true"
+                        ? `${row.payoutRateOverride || selectedArtist?.defaultPayoutRate || "10"}% payout`
+                        : "Share donated";
 
                   return (
                     <div
                       key={`${row.artistId}-${index}`}
                       style={{
                         display: "grid",
-                        gap: "0.75rem",
-                        gridTemplateColumns: "minmax(220px, 1.5fr) minmax(140px, 0.75fr) minmax(180px, 1fr) minmax(160px, 1fr) auto",
-                        alignItems: "end",
+                        gap: "0.65rem",
+                        padding: "0.85rem",
+                        border: "1px solid var(--p-color-border, #d2d5d8)",
+                        borderRadius: "0.5rem",
+                        background: "var(--p-color-bg-surface, #fff)",
                       }}
                     >
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor={`artist-${index}`}>Artist</label>
-                        <select
-                          id={`artist-${index}`}
-                          value={row.artistId}
-                          onChange={(event) => updateArtistRow(index, { artistId: event.currentTarget.value })}
-                          style={fieldStyle}
+                      <div
+                        style={{
+                          display: "grid",
+                          gap: "0.75rem",
+                          gridTemplateColumns: "minmax(15rem, 2fr) minmax(7rem, 0.6fr) minmax(14rem, 1fr) auto",
+                          alignItems: "end",
+                        }}
+                      >
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor={`artist-${index}`}>Artist</label>
+                          <select
+                            id={`artist-${index}`}
+                            value={row.artistId}
+                            onChange={(event) => updateArtistRow(index, { artistId: event.currentTarget.value })}
+                            style={fieldStyle}
+                          >
+                            {!row.artistId ? <option value="">Select Artist</option> : null}
+                            {selectableArtists.map((artist: (typeof artists)[number]) => (
+                              <option key={artist.id} value={artist.id}>
+                                {artist.displayName}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor={`artist-share-${index}`}>Share</label>
+                          <input
+                            id={`artist-share-${index}`}
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="0.01"
+                            value={row.collaborationShare}
+                            onChange={(event) => updateArtistRow(index, { collaborationShare: event.currentTarget.value })}
+                            style={fieldStyle}
+                          />
+                        </div>
+
+                        <div style={{ display: "grid", gap: "0.25rem" }}>
+                          <strong>{selectedArtist?.creditName ?? "No Artist selected"}</strong>
+                          <s-text color="subdued">{effectivePayout}</s-text>
+                          <s-text color="subdued">{selectedArtistCauseText}</s-text>
+                        </div>
+
+                        <s-button variant="secondary" tone="critical" onClick={() => removeArtistRow(index)}>
+                          Remove
+                        </s-button>
+                      </div>
+
+                      <details>
+                        <summary>Overrides</summary>
+                        <div
+                          style={{
+                            display: "grid",
+                            gap: "0.75rem",
+                            gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))",
+                            paddingTop: "0.75rem",
+                          }}
                         >
-                          {!row.artistId ? <option value="">Select Artist</option> : null}
-                          {selectableArtists.map((artist: (typeof artists)[number]) => (
-                            <option key={artist.id} value={artist.id}>
-                              {artist.displayName}
-                            </option>
-                          ))}
-                        </select>
-                        {selectedArtist ? (
-                          <HelpText>
-                            Credit: {selectedArtist.creditName}. {selectedArtist.paymentEnabled ? `Default payout ${selectedArtist.defaultPayoutRate}%.` : "Artist share is donated."}
-                          </HelpText>
-                        ) : null}
-                      </div>
+                          <div style={{ display: "grid", gap: "0.35rem" }}>
+                            <label htmlFor={`artist-credit-${index}`}>Credit override</label>
+                            <input
+                              id={`artist-credit-${index}`}
+                              type="text"
+                              value={row.creditOverride}
+                              onChange={(event) => updateArtistRow(index, { creditOverride: event.currentTarget.value })}
+                              style={fieldStyle}
+                            />
+                            <HelpText>Leave blank to use the Artist credit name.</HelpText>
+                          </div>
 
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor={`artist-share-${index}`}>Share</label>
-                        <input
-                          id={`artist-share-${index}`}
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.01"
-                          value={row.collaborationShare}
-                          onChange={(event) => updateArtistRow(index, { collaborationShare: event.currentTarget.value })}
-                          style={fieldStyle}
-                        />
-                      </div>
+                          <div style={{ display: "grid", gap: "0.35rem" }}>
+                            <label htmlFor={`artist-payout-enabled-${index}`}>Payout rule</label>
+                            <select
+                              id={`artist-payout-enabled-${index}`}
+                              value={row.payoutEnabledOverride}
+                              onChange={(event) => updateArtistRow(index, { payoutEnabledOverride: event.currentTarget.value as ArtistAssignmentRow["payoutEnabledOverride"] })}
+                              style={fieldStyle}
+                            >
+                              <option value="inherit">Artist default</option>
+                              <option value="true">Enabled</option>
+                              <option value="false">Disabled</option>
+                            </select>
+                          </div>
 
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor={`artist-credit-${index}`}>Credit override</label>
-                        <input
-                          id={`artist-credit-${index}`}
-                          type="text"
-                          value={row.creditOverride}
-                          onChange={(event) => updateArtistRow(index, { creditOverride: event.currentTarget.value })}
-                          style={fieldStyle}
-                        />
-                      </div>
-
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor={`artist-payout-enabled-${index}`}>Payout</label>
-                        <select
-                          id={`artist-payout-enabled-${index}`}
-                          value={row.payoutEnabledOverride}
-                          onChange={(event) => updateArtistRow(index, { payoutEnabledOverride: event.currentTarget.value as ArtistAssignmentRow["payoutEnabledOverride"] })}
-                          style={fieldStyle}
-                        >
-                          <option value="inherit">Artist default</option>
-                          <option value="true">Enabled</option>
-                          <option value="false">Disabled</option>
-                        </select>
-                        <input
-                          aria-label={`Artist payout rate override ${index + 1}`}
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="0.01"
-                          placeholder="Rate override"
-                          value={row.payoutRateOverride}
-                          onChange={(event) => updateArtistRow(index, { payoutRateOverride: event.currentTarget.value })}
-                          style={fieldStyle}
-                        />
-                      </div>
-
-                      <s-button variant="secondary" tone="critical" onClick={() => removeArtistRow(index)}>
-                        Remove
-                      </s-button>
+                          <div style={{ display: "grid", gap: "0.35rem" }}>
+                            <label htmlFor={`artist-payout-rate-${index}`}>Payout rate override</label>
+                            <input
+                              id={`artist-payout-rate-${index}`}
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.01"
+                              placeholder="Use Artist default"
+                              value={row.payoutRateOverride}
+                              onChange={(event) => updateArtistRow(index, { payoutRateOverride: event.currentTarget.value })}
+                              style={fieldStyle}
+                            />
+                          </div>
+                        </div>
+                      </details>
                     </div>
                   );
                 })}
