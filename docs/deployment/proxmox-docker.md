@@ -169,6 +169,12 @@ Only skip the pre-restore backup when you have a known-good off-host copy:
 SKIP_PRE_RESTORE_BACKUP=true bash scripts/restore-postgres.sh backups/postgres/countonus-YYYYMMDDTHHMMSSZ.sql.gz
 ```
 
+Prefer backups created by `scripts/backup-postgres.sh`, because it runs `pg_dump` from the same PostgreSQL container version used by production. Plain SQL dumps from pgAdmin can include newer client session settings, such as `SET transaction_timeout`, that PostgreSQL 16 does not recognize. The restore script filters that known unsupported setting by default. To disable that compatibility filter:
+
+```sh
+FILTER_UNSUPPORTED_PG_SETTINGS=false bash scripts/restore-postgres.sh backups/postgres/countonus-YYYYMMDDTHHMMSSZ.sql.gz
+```
+
 ## Rollback
 
 Rollback is code-first, database-careful:

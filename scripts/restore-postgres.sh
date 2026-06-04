@@ -7,6 +7,7 @@ PROJECT_NAME="${PROJECT_NAME:-count-on-us}"
 BACKUP_DIR="${BACKUP_DIR:-backups/postgres}"
 PRE_RESTORE_BACKUP_DIR="${PRE_RESTORE_BACKUP_DIR:-$BACKUP_DIR/pre-restore}"
 SKIP_PRE_RESTORE_BACKUP="${SKIP_PRE_RESTORE_BACKUP:-false}"
+FILTER_UNSUPPORTED_PG_SETTINGS="${FILTER_UNSUPPORTED_PG_SETTINGS:-true}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -22,6 +23,7 @@ Environment overrides:
   BACKUP_DIR=backups/postgres
   PRE_RESTORE_BACKUP_DIR=backups/postgres/pre-restore
   SKIP_PRE_RESTORE_BACKUP=true
+  FILTER_UNSUPPORTED_PG_SETTINGS=false
 
 This is destructive: it restores into the production database and may drop
 existing database objects because backups are created with pg_dump --clean.
@@ -79,13 +81,21 @@ compose() {
 
 restore_input() {
   case "$BACKUP_FILE" in
-    *.gz)
+    *.gz | *.gzip)
       gunzip -c "$BACKUP_FILE"
       ;;
     *)
       cat "$BACKUP_FILE"
       ;;
   esac
+}
+
+restore_sql() {
+  if [[ "$FILTER_UNSUPPORTED_PG_SETTINGS" == "true" ]]; then
+    restore_input | sed '/^SET transaction_timeout = /d'
+  else
+    restore_input
+  fi
 }
 
 on_error() {
@@ -109,7 +119,10 @@ echo "Stopping app before database restore..."
 compose stop app
 
 echo "Restoring PostgreSQL from $BACKUP_FILE..."
-restore_input | compose exec -T db psql -v ON_ERROR_STOP=1 -U countonus -d countonus
+if [[ "$FILTER_UNSUPPORTED_PG_SETTINGS" == "true" ]]; then
+  echo "Filtering known unsupported PostgreSQL session settings from restore input."
+fi
+restore_sql | compose exec -T db psql -v ON_ERROR_STOP=1 -U countonus -d countonus
 
 echo "Starting app after restore..."
 compose up -d --wait app
