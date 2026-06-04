@@ -52,8 +52,8 @@ and variants, cost templates and template lines, direct variant material/equipme
 assignments, variant cost config basics, and product-Cause assignments. Template
 rows are exported as source-keyed records and recreated directly by the importer.
 
-For production Docker usage, including `docker compose exec` and `docker compose
-cp` commands for the read-only app container, see
+For production Docker usage, including `docker compose exec` file streaming for
+the read-only app container, see
 [Proxmox Docker deployment](./deployment/proxmox-docker.md#production-catalog-exportimport).
 
 Recommended local file names:

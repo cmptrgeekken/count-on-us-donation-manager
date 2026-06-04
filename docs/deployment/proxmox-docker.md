@@ -181,9 +181,13 @@ The production app image includes the catalog export and import scripts. Run the
 through the `app` service so they use the same Node, Prisma client, and
 `DATABASE_URL` as the deployed application.
 
+The runtime image is based on Alpine Linux. Use `/bin/sh`, not `/bin/bash`, for
+ad hoc container inspection.
+
 The production app container is read-only except for `/tmp`, so write temporary
-files inside `/tmp` and use `docker compose cp` to move files between the host
-and container.
+files inside `/tmp`. Docker's `cp` command cannot copy files into this read-only
+container rootfs, even when the destination is `/tmp`; stream host files through
+`docker compose exec -T` instead.
 
 Use the same Compose arguments as the deploy script:
 
@@ -234,7 +238,7 @@ APP_ENV_FILE=.env.production docker compose \
   --project-name count-on-us \
   --env-file .env.production \
   -f compose.production.yml \
-  cp seed-imports/catalog.json app:/tmp/catalog.json
+  exec -T app sh -c 'cat > /tmp/catalog.json' < seed-imports/catalog.json
 
 APP_ENV_FILE=.env.production docker compose \
   --project-name count-on-us \
@@ -263,8 +267,18 @@ APP_ENV_FILE=.env.production docker compose \
 ```
 
 For a deliberate migration that includes historical order CSVs already exported
-from another environment, copy those CSVs into `/tmp` and pass the same importer
-flags used locally, for example `--orders-csv=/tmp/orders.csv` and
+from another environment, stream those CSVs into `/tmp` the same way:
+
+```sh
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  exec -T app sh -c 'cat > /tmp/orders.csv' < seed-imports/orders.csv
+```
+
+Then pass the same importer flags used locally, for example
+`--orders-csv=/tmp/orders.csv` and
 `--order-line-map=/tmp/order-line-map.json`. Keep this separate from normal app
 install behavior: production installs do not automatically import historical
 orders, and the daily reconciliation job remains a short-window missed-webhook
