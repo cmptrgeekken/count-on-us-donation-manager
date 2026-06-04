@@ -8,6 +8,7 @@ type AdminContext = {
 type ReconciliationOrderNode = {
   id: string;
   name: string | null;
+  createdAt?: string | null;
   currentTotalTaxSet?: {
     shopMoney?: { amount?: string | null } | null;
   } | null;
@@ -40,6 +41,7 @@ const RECONCILIATION_ORDERS_QUERY = `#graphql
         node {
           id
           name
+          createdAt
           currentTotalTaxSet {
             shopMoney {
               amount
@@ -87,6 +89,30 @@ function sevenDaysAgoDateString() {
   const date = new Date();
   date.setUTCDate(date.getUTCDate() - 7);
   return date.toISOString().slice(0, 10);
+}
+
+function toDateInput(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+type ReconciliationOptions = {
+  since?: Date;
+  until?: Date;
+  searchQuery?: string;
+};
+
+function buildSearchQuery(options?: ReconciliationOptions) {
+  if (options?.searchQuery) return options.searchQuery;
+
+  const parts = [
+    `created_at:>=${options?.since ? toDateInput(options.since) : sevenDaysAgoDateString()}`,
+  ];
+
+  if (options?.until) {
+    parts.push(`created_at:<${toDateInput(options.until)}`);
+  }
+
+  return parts.join(" ");
 }
 
 async function readGraphqlPayload<T>(
@@ -156,8 +182,9 @@ export async function runReconciliation(
   shopId: string,
   admin: AdminContext,
   db: any = prisma,
+  options?: ReconciliationOptions,
 ): Promise<{ created: number; skipped: number }> {
-  const searchQuery = `created_at:>=${sevenDaysAgoDateString()}`;
+  const searchQuery = buildSearchQuery(options);
   let cursor: string | null = null;
   let created = 0;
   let skipped = 0;
@@ -211,6 +238,7 @@ export async function runReconciliation(
         {
           admin_graphql_api_id: order.id,
           name: order.name,
+          created_at: order.createdAt ?? null,
           current_total_tax_set: {
             shop_money: {
               amount: order.currentTotalTaxSet?.shopMoney?.amount ?? "0",
@@ -249,7 +277,7 @@ export async function runReconciliation(
       payload: {
         created,
         skipped,
-        windowDays: 7,
+        searchQuery,
       },
     },
   });
