@@ -136,6 +136,7 @@ export async function computeAnalyticalRecalculationSummary(shopId: string, peri
       shopifyId: true,
       product: {
         select: {
+          id: true,
           shopifyId: true,
         },
       },
@@ -143,14 +144,14 @@ export async function computeAnalyticalRecalculationSummary(shopId: string, peri
   });
   const variantMap = new Map(variants.map((variant) => [variant.shopifyId, variant]));
 
-  const productIds = [...new Set(variants.map((variant) => variant.product.shopifyId))];
+  const productIds = [...new Set(variants.map((variant) => variant.product.id))];
   const assignments = await db.productCauseAssignment.findMany({
     where: {
       shopId,
-      shopifyProductId: { in: productIds },
+      productId: { in: productIds },
     },
     select: {
-      shopifyProductId: true,
+      productId: true,
       percentage: true,
       causeId: true,
       cause: {
@@ -162,9 +163,9 @@ export async function computeAnalyticalRecalculationSummary(shopId: string, peri
   });
   const assignmentMap = new Map<string, typeof assignments>();
   for (const assignment of assignments) {
-    const current = assignmentMap.get(assignment.shopifyProductId) ?? [];
+    const current = assignmentMap.get(assignment.productId ?? "") ?? [];
     current.push(assignment);
-    assignmentMap.set(assignment.shopifyProductId, current);
+    assignmentMap.set(assignment.productId ?? "", current);
   }
 
   let recalculatedNetContribution = ZERO;
@@ -196,7 +197,7 @@ export async function computeAnalyticalRecalculationSummary(shopId: string, peri
       .add(adjustmentTotal);
     recalculatedNetContribution = recalculatedNetContribution.add(lineNet);
 
-    const productAssignments = assignmentMap.get(variant.product.shopifyId) ?? [];
+    const productAssignments = assignmentMap.get(variant.product.id) ?? [];
     if (productAssignments.length === 0) {
       for (const allocation of line.causeAllocations) {
         addCauseAmount(recalculatedCauseTotals, {
@@ -212,7 +213,7 @@ export async function computeAnalyticalRecalculationSummary(shopId: string, peri
       addCauseAmount(recalculatedCauseTotals, {
         causeId: assignment.causeId,
         causeName: assignment.cause.name,
-        amount: lineNet.mul(assignment.percentage).div(100),
+        amount: Prisma.Decimal.max(lineNet, ZERO).mul(assignment.percentage).div(100),
       });
     }
   }

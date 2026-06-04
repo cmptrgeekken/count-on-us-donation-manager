@@ -1,0 +1,2 @@
+ALTER TABLE "ArtistSubmission"
+ADD COLUMN "causeLinks" TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[];

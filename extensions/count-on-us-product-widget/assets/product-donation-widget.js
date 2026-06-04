@@ -11,6 +11,23 @@
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(value);
+  const formatPercent = (value) => {
+    const parsed = Number.parseFloat(String(value ?? "0"));
+    if (!Number.isFinite(parsed)) return "0%";
+    return `${new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: parsed % 1 === 0 ? 0 : 2,
+      maximumFractionDigits: 2,
+    }).format(parsed)}%`;
+  };
+  const formatQuantity = (value, unit) => {
+    const parsed = Number.parseFloat(String(value ?? ""));
+    if (!Number.isFinite(parsed)) return "";
+    const formatted = new Intl.NumberFormat(undefined, {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 4,
+    }).format(parsed);
+    return `${formatted}${unit ? ` ${unit}` : ""}`;
+  };
   const escapeHtml = (value) =>
     String(value ?? "")
       .replace(/&/g, "&amp;")
@@ -120,15 +137,39 @@
     const processingFlatFee = money(variant.shopifyFees?.processingFlatFee);
     const shopifyFees = estimatedTotal * (processingRate + managedMarketsRate) + processingFlatFee;
     const taxReserve = money(variant.taxReserve?.estimatedAmount) * nextQuantity;
-    const allocatedDonations = variant.causes.reduce(
-      (sum, cause) => sum + money(cause.estimatedDonationAmount) * nextQuantity,
+    const donationPool = Math.max(
       0,
+      estimatedTotal - (labor + materials + equipment + packaging + pod + mistakeBuffer + shopifyFees + taxReserve),
     );
-    const retainedByShop = Math.max(
-      0,
-      estimatedTotal - (allocatedDonations + labor + materials + equipment + packaging + pod + mistakeBuffer + shopifyFees + taxReserve),
+    const totalDonationPercentage = variant.causes.reduce((sum, cause) => sum + money(cause.donationPercentage), 0);
+    const allocatedDonations = Math.min(
+      donationPool,
+      variant.causes.reduce((sum, cause) => sum + donationPool * (money(cause.donationPercentage) / 100), 0),
     );
-    const scaleLine = (line) => ({ ...line, lineCost: (money(line.lineCost) * nextQuantity).toFixed(2) });
+    const retainedByShop = Math.max(0, donationPool - allocatedDonations);
+    const scaleLine = (line) => {
+      const nextLineCost = money(line.lineCost) * nextQuantity;
+      const baseQuantity = line.quantityValue == null ? null : money(line.quantityValue);
+      const nextQuantityValue = baseQuantity == null ? null : baseQuantity * nextQuantity;
+      const nextQuantityParts = Array.isArray(line.quantityParts)
+        ? line.quantityParts
+            .map((part) => {
+              const value = money(part.value) * nextQuantity;
+              return value > 0 ? formatQuantity(value, part.unit) : "";
+            })
+            .filter(Boolean)
+        : [];
+      return {
+        ...line,
+        lineCost: nextLineCost.toFixed(2),
+        quantityValue: nextQuantityValue == null ? line.quantityValue : nextQuantityValue.toFixed(4),
+        quantity: nextQuantityParts.length
+          ? nextQuantityParts.join(" + ")
+          : nextQuantityValue == null
+            ? line.quantity
+            : formatQuantity(nextQuantityValue, line.quantityUnit),
+      };
+    };
     return {
       ...variant,
       quantity: nextQuantity,
@@ -138,7 +179,11 @@
       shippingMaterialLines: variant.shippingMaterialLines.map((line) => ({ ...line, lineCost: money(line.lineCost).toFixed(2) })),
       podCostTotal: (money(variant.podCostTotal) * nextQuantity).toFixed(2),
       mistakeBufferAmount: (money(variant.mistakeBufferAmount) * nextQuantity).toFixed(2),
-      causes: variant.causes.map((cause) => ({ ...cause, estimatedDonationAmount: (money(cause.estimatedDonationAmount) * nextQuantity).toFixed(2) })),
+      causes: variant.causes.map((cause) => ({
+        ...cause,
+        estimatedDonationAmount:
+          totalDonationPercentage > 0 ? (donationPool * (money(cause.donationPercentage) / 100)).toFixed(2) : "0.00",
+      })),
       taxReserve: { ...variant.taxReserve, estimatedAmount: (money(variant.taxReserve.estimatedAmount) * nextQuantity).toFixed(2) },
       reconciliation: {
         estimatedTotal: estimatedTotal.toFixed(2),
@@ -185,7 +230,50 @@
     ]
       .filter((row) => Math.abs(row.value) >= 0.01)
       .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
-  const renderVariant = (panel, payload, variantId, quantity) => {
+  const lineNameMarkup = (line) => {
+    const label = escapeHtml(line.name);
+    const href = safeExternalUrl(line.purchaseLink);
+    return href
+      ? `<a class="count-on-us-widget__line-link" href="${href}" target="_blank" rel="noreferrer">${label}</a>`
+      : label;
+  };
+  const rateMarkup = (line) => {
+    if (!line.rate) return "&mdash;";
+    const rate = escapeHtml(line.rate);
+    return line.rateDetail ? `<abbr title="${escapeHtml(line.rateDetail)}">${rate}</abbr>` : rate;
+  };
+  const buildLineItemRows = (lines, currencyCode) => {
+    const rows = lines
+      .filter((line) => Math.abs(money(line.lineCost)) >= 0.01)
+      .map(
+        (line) =>
+          `<tr><td>${lineNameMarkup(line)}</td><td>${escapeHtml(line.quantity || "-")}</td><td>${rateMarkup(line)}</td><td>${formatMoney(money(line.lineCost), currencyCode)}</td></tr>`,
+      )
+      .join("");
+
+    if (!rows) return "";
+
+    return `<table class="count-on-us-widget__line-table"><thead><tr><th scope="col">Line item</th><th scope="col">Qty</th><th scope="col">Rate</th><th scope="col">Total</th></tr></thead><tbody>${rows}</tbody></table>`;
+  };
+  const buildLineItemDetailButton = (title, lines, currencyCode) => {
+    const rows = buildLineItemRows(lines || [], currencyCode);
+    if (!rows) return "";
+
+    return `<span class="count-on-us-widget__line-detail"><button type="button" class="count-on-us-widget__line-detail-trigger" data-count-on-us-line-detail data-count-on-us-line-detail-title="${escapeHtml(title)}" aria-label="Show ${escapeHtml(title)} details">Details</button></span><template data-count-on-us-line-detail-body>${rows}</template>`;
+  };
+  const detailLinesForRow = (variant, rowKey) => {
+    if (rowKey === "materials") {
+      return { title: "Production materials", lines: variant.materialLines };
+    }
+    if (rowKey === "equipment") {
+      return { title: "Equipment", lines: variant.equipmentLines };
+    }
+    if (rowKey === "packaging") {
+      return { title: "Packaging / shipping materials", lines: variant.shippingMaterialLines };
+    }
+    return null;
+  };
+  const renderVariant = (panel, payload, variantId, quantity, showLineItemDetails, breakdownOpen) => {
     const variant = findVariant(payload, variantId);
     if (!variant) {
       panel.innerHTML = '<p class="count-on-us-widget__status count-on-us-widget__status--error">Donation estimate unavailable right now.</p>';
@@ -198,7 +286,7 @@
           `<div class="count-on-us-widget__list">${scaled.causes
             .map((cause) => {
               const donationLink = safeExternalUrl(cause.donationLink);
-              return `<article class="count-on-us-widget__cause"><div class="count-on-us-widget__cause-line">${donationLink ? `<a href="${donationLink}" target="_blank" rel="noreferrer" class="count-on-us-widget__cause-link"><strong>${escapeHtml(cause.name)}</strong><span class="count-on-us-widget__cause-link-text">Learn more</span></a>` : `<strong>${escapeHtml(cause.name)}</strong>`}<strong>${formatMoney(money(cause.estimatedDonationAmount), cause.donationCurrencyCode)}</strong></div><div class="count-on-us-widget__cause-line"><span class="count-on-us-widget__subdued">Estimated for this product</span></div></article>`;
+              return `<article class="count-on-us-widget__cause"><div class="count-on-us-widget__cause-line">${donationLink ? `<a href="${donationLink}" target="_blank" rel="noreferrer" class="count-on-us-widget__cause-link"><strong>${escapeHtml(cause.name)}</strong><span class="count-on-us-widget__cause-link-text">Learn more</span></a>` : `<strong>${escapeHtml(cause.name)}</strong>`}<strong>${formatMoney(money(cause.estimatedDonationAmount), cause.donationCurrencyCode)} / ${formatPercent(cause.donationPercentage)}</strong></div><div class="count-on-us-widget__cause-line"><span class="count-on-us-widget__subdued">Estimated for this product</span></div></article>`;
             })
             .join("")}</div>`,
         )
@@ -209,16 +297,38 @@
         ? `<div class="count-on-us-widget__row"><span>${renderInfoLabel("Unattributed remainder", "remainder")}</span><strong>${formatMoney(money(scaled.reconciliation.remainder), scaled.currencyCode)}</strong></div>`
         : "";
     const waterfallRows = reconciliationRows
-      .map(
-        (row) =>
-          `<div class="count-on-us-widget__row"><span>Less: ${renderInfoLabel(row.label, row.key)}${row.estimated ? ' <em class="count-on-us-widget__estimate-tag">(estimate)</em>' : ""}</span><strong>- ${formatMoney(row.value, scaled.currencyCode)}</strong></div>`,
-      )
+      .map((row) => {
+        const detail = showLineItemDetails ? detailLinesForRow(scaled, row.key) : null;
+        const detailButton = detail ? buildLineItemDetailButton(detail.title, detail.lines, scaled.currencyCode) : "";
+        return `<div class="count-on-us-widget__row"><span>Less: ${renderInfoLabel(row.label, row.key)}${row.estimated ? ' <em class="count-on-us-widget__estimate-tag">(estimate)</em>' : ""}${detailButton}</span><strong>- ${formatMoney(row.value, scaled.currencyCode)}</strong></div>`;
+      })
       .join("");
     const breakdown = section(
       "Estimated reconciliation",
-      `<details class="count-on-us-widget__details" data-count-on-us-product-breakdown><summary class="count-on-us-widget__details-summary">See how this estimate is calculated</summary><div class="count-on-us-widget__details-body"><div class="count-on-us-widget__list"><div class="count-on-us-widget__row"><span>${renderInfoLabel("Estimated total", "estimatedTotal")}</span><strong>${formatMoney(money(scaled.reconciliation.estimatedTotal), scaled.currencyCode)}</strong></div>${waterfallRows}<div class="count-on-us-widget__row count-on-us-widget__row--total"><span>${renderInfoLabel("Equals: amount remaining after costs", "estimatedDonationPool")}</span><strong>${formatMoney(money(scaled.reconciliation.allocatedDonations) + money(scaled.reconciliation.retainedByShop), scaled.currencyCode)}</strong></div><div class="count-on-us-widget__row"><span>${renderInfoLabel("Allocated to causes", "allocatedDonations")}</span><strong>${formatMoney(money(scaled.reconciliation.allocatedDonations), scaled.currencyCode)}</strong></div><div class="count-on-us-widget__row"><span>${renderInfoLabel("Retained by shop", "retainedByShop")}</span><strong>${formatMoney(money(scaled.reconciliation.retainedByShop), scaled.currencyCode)}</strong></div>${remainderRow}</div></div></details>`,
+      `<details class="count-on-us-widget__details" data-count-on-us-product-breakdown${breakdownOpen ? " open" : ""}><summary class="count-on-us-widget__details-summary">See how this estimate is calculated</summary><div class="count-on-us-widget__details-body"><div class="count-on-us-widget__list"><div class="count-on-us-widget__row"><span>${renderInfoLabel("Estimated total", "estimatedTotal")}</span><strong>${formatMoney(money(scaled.reconciliation.estimatedTotal), scaled.currencyCode)}</strong></div>${waterfallRows}<div class="count-on-us-widget__row count-on-us-widget__row--total"><span>${renderInfoLabel("Equals: amount remaining after costs", "estimatedDonationPool")}</span><strong>${formatMoney(money(scaled.reconciliation.allocatedDonations) + money(scaled.reconciliation.retainedByShop), scaled.currencyCode)}</strong></div><div class="count-on-us-widget__row"><span>${renderInfoLabel("Allocated to causes", "allocatedDonations")}</span><strong>${formatMoney(money(scaled.reconciliation.allocatedDonations), scaled.currencyCode)}</strong></div><div class="count-on-us-widget__row"><span>${renderInfoLabel("Retained by shop", "retainedByShop")}</span><strong>${formatMoney(money(scaled.reconciliation.retainedByShop), scaled.currencyCode)}</strong></div>${remainderRow}</div></div></details>`,
     );
     panel.innerHTML = `${causes}${breakdown}`;
+  };
+  const closeLineItemModal = (container) => {
+    container.querySelector("[data-count-on-us-line-detail-modal]")?.remove();
+  };
+  const openLineItemModal = (container, trigger) => {
+    const title = trigger.getAttribute("data-count-on-us-line-detail-title") || "Line item details";
+    const body = trigger.closest(".count-on-us-widget__row")?.querySelector("[data-count-on-us-line-detail-body]")?.innerHTML || "";
+    if (!body) return;
+
+    closeLineItemModal(container);
+    const overlay = document.createElement("div");
+    overlay.className = "count-on-us-widget__modal-overlay";
+    overlay.dataset.countOnUsLineDetailModal = "true";
+    overlay.innerHTML = `<div class="count-on-us-widget__modal" role="dialog" aria-modal="true" aria-labelledby="count-on-us-line-detail-title"><div class="count-on-us-widget__modal-header"><h4 class="count-on-us-widget__section-title" id="count-on-us-line-detail-title">${escapeHtml(title)}</h4><button type="button" class="count-on-us-widget__modal-close" data-count-on-us-line-detail-close aria-label="Close line item details">Close</button></div><div class="count-on-us-widget__modal-body">${body}</div></div>`;
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay || event.target.closest("[data-count-on-us-line-detail-close]")) {
+        closeLineItemModal(container);
+      }
+    });
+    container.append(overlay);
+    overlay.querySelector("[data-count-on-us-line-detail-close]")?.focus();
   };
   async function setupWidget(container) {
     if (!container || container.dataset.widgetReady === "true") return;
@@ -237,13 +347,18 @@
       panel.innerHTML = `<p class="count-on-us-widget__status${tone === "error" ? " count-on-us-widget__status--error" : ""}">${escapeHtml(message)}</p>`;
       if (liveRegion) liveRegion.textContent = message;
     };
+    const handleKeydown = (event) => {
+      if (event.key === "Escape") closeLineItemModal(container);
+    };
     const renderCurrent = () => {
       if (!payload) return;
       const variantId = getVariantId(container);
       const quantity = getQuantity(container);
+      const showLineItemDetails = container.dataset.showLineItemDetails === "true";
+      const breakdownOpen = panel.querySelector("[data-count-on-us-product-breakdown]")?.open ?? false;
       lastRenderedVariantId = variantId;
       lastRenderedQuantity = quantity;
-      renderVariant(panel, payload, variantId, quantity);
+      renderVariant(panel, payload, variantId, quantity, showLineItemDetails, breakdownOpen);
       if (liveRegion) liveRegion.textContent = "Donation estimate updated.";
     };
     const syncCurrent = () => {
@@ -285,6 +400,7 @@
       toggle.querySelector("[aria-hidden='true']").textContent = isOpen ? "-" : "+";
       if (!isOpen) {
         stopSync();
+        closeLineItemModal(container);
         return;
       }
       if (!payload) {
@@ -300,6 +416,12 @@
       renderCurrent();
       startSync();
     });
+    panel.addEventListener("click", (event) => {
+      const trigger = event.target instanceof Element ? event.target.closest("[data-count-on-us-line-detail]") : null;
+      if (!trigger) return;
+      openLineItemModal(container, trigger);
+    });
+    container.addEventListener("keydown", handleKeydown);
     container.dataset.widgetBound = "true";
     const form = closestAddToCartForm(container);
     const eventTarget = form || document;

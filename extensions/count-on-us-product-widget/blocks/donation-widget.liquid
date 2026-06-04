@@ -5,6 +5,7 @@
   data-product-id="gid://shopify/Product/{{ product.id }}"
   data-selected-variant-id="gid://shopify/ProductVariant/{{ product.selected_or_first_available_variant.id }}"
   data-selected-quantity="1"
+  data-show-line-item-details="{{ block.settings.show_line_item_details | json }}"
   data-proxy-base="/apps/count-on-us"
   {% unless request.design_mode %}hidden{% endunless %}
 >
@@ -55,6 +56,12 @@
       "id": "description",
       "label": "Description",
       "default": "Preview the cost breakdown, estimated donation by cause, and estimated tax reserve for this product."
+    },
+    {
+      "type": "checkbox",
+      "id": "show_line_item_details",
+      "label": "Show material, equipment, and packaging line items",
+      "default": false
     }
   ]
 }

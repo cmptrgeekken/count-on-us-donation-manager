@@ -95,7 +95,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
 
-  const [expenses, taxOffsetCache] = await Promise.all([
+  const [expenses, existingTaxOffsetCache] = await Promise.all([
     prisma.businessExpense.findMany({
       where: { shopId },
       orderBy: { expenseDate: "desc" },
@@ -104,6 +104,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       where: { shopId },
     }),
   ]);
+  const taxOffsetCache = existingTaxOffsetCache ?? await recomputeTaxOffsetCache(shopId);
 
   return Response.json({
     expenses: expenses.map((expense) => ({

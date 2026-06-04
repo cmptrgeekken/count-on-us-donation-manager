@@ -14,6 +14,7 @@ export async function refreshTaxOffsetCachesForActiveShops(
   db: DbClient = prisma,
 ) {
   const shops = await db.shop.findMany({
+    where: { shopId: { not: "" } },
     select: { shopId: true },
   });
 

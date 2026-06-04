@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.server";
+import { listOutstandingArtistAllocations } from "./artistPayables.server";
 import { listOutstandingCauseAllocations } from "./causePayables.server";
 import { createReceiptStorage } from "./receiptStorage.server";
 import { calculateEstimatedTaxForPeriod } from "./taxTrueUpService.server";
@@ -7,6 +8,21 @@ import { normalizeTaxDeductionMode } from "./taxReserve.server";
 
 const ZERO = new Prisma.Decimal(0);
 const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
+
+type CauseAllocationDetail = {
+  kind: "order_line" | "true_up";
+  label?: string;
+  orderSnapshotId?: string;
+  shopifyOrderId?: string;
+  orderNumber?: string | null;
+  shopifyLineItemId?: string;
+  productTitle?: string;
+  variantTitle?: string;
+  quantity?: number;
+  grossLineAmount?: Prisma.Decimal;
+  netContributionAmount?: Prisma.Decimal;
+  allocatedAmount: Prisma.Decimal;
+};
 
 function addAllocation(
   allocations: Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>,
@@ -48,7 +64,7 @@ function computeAdjustedAllocationAmount({
 export type ReportingSummaryResult = Awaited<ReturnType<typeof buildReportingSummary>>;
 
 function floorCurrency(value: Prisma.Decimal) {
-  return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
+  return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 }
 
 export async function buildReportingSummary(shopId: string, requestedPeriodId?: string | null, db = prisma) {
@@ -76,7 +92,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
 
   const selectedPeriod = periods.find((period) => period.id === requestedPeriodId) ?? periods[0];
 
-  const [shop, snapshotLines, closedAllocations, expensesSummary, chargesSummary, charges, disbursements, taxTrueUps, carryForwardTrueUps, activeCauses, outstandingAllocations] =
+  const [shop, snapshotLines, orderTaxSummary, closedAllocations, expensesSummary, chargesSummary, charges, disbursements, taxTrueUps, carryForwardTrueUps, activeCauses, outstandingAllocations] =
     await Promise.all([
       db.shop.findUnique({
         where: { shopId },
@@ -96,12 +112,43 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           },
         },
         select: {
+          shopifyLineItemId: true,
+          productTitle: true,
+          variantTitle: true,
+          quantity: true,
+          subtotal: true,
           netContribution: true,
+          snapshot: {
+            select: {
+              id: true,
+              shopifyOrderId: true,
+              orderNumber: true,
+            },
+          },
           adjustments: { select: { netContribAdj: true } },
           causeAllocations: {
             select: { causeId: true, causeName: true, is501c3: true, amount: true },
           },
+          artistAllocations: {
+            select: {
+              artistId: true,
+              artistName: true,
+              creditName: true,
+              payoutAmount: true,
+              payoutEnabled: true,
+            },
+          },
         },
+      }),
+      db.orderSnapshot.aggregate({
+        where: {
+          shopId,
+          createdAt: {
+            gte: selectedPeriod.startDate,
+            lt: selectedPeriod.endDate,
+          },
+        },
+        _sum: { salesTaxCollected: true },
       }),
       db.causeAllocation.findMany({
         where: {
@@ -273,12 +320,164 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       ),
     ]);
 
+  const [closedArtistAllocations, artistPayments, activeArtists, outstandingArtistAllocations] = await Promise.all([
+    db.artistAllocation?.findMany
+      ? db.artistAllocation.findMany({
+          where: {
+            shopId,
+            periodId: selectedPeriod.id,
+          },
+          select: {
+            artistId: true,
+            artistName: true,
+            creditName: true,
+            allocated: true,
+            paid: true,
+          },
+        })
+      : Promise.resolve([]),
+    db.artistPayment?.findMany
+      ? db.artistPayment.findMany({
+          where: {
+            shopId,
+            periodId: selectedPeriod.id,
+          },
+          orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
+          select: {
+            id: true,
+            artistId: true,
+            amount: true,
+            paidAt: true,
+            paymentMethod: true,
+            referenceId: true,
+            notes: true,
+            artist: {
+              select: {
+                displayName: true,
+                creditName: true,
+              },
+            },
+            applications: {
+              select: {
+                amount: true,
+                artistAllocation: {
+                  select: {
+                    periodId: true,
+                    period: {
+                      select: {
+                        startDate: true,
+                        endDate: true,
+                      },
+                    },
+                  },
+                },
+              },
+              orderBy: {
+                artistAllocation: {
+                  period: {
+                    endDate: "asc",
+                  },
+                },
+              },
+            },
+          },
+        })
+      : Promise.resolve([]),
+    db.artist?.findMany
+      ? db.artist.findMany({
+          where: {
+            shopId,
+            status: { in: ["active", "draft"] },
+          },
+          orderBy: { displayName: "asc" },
+          select: {
+            id: true,
+            displayName: true,
+            creditName: true,
+            paymentEnabled: true,
+          },
+        })
+      : Promise.resolve([]),
+    db.artistAllocation?.findMany
+      ? listOutstandingArtistAllocations(
+          shopId,
+          {
+            throughPeriodEndDate: selectedPeriod.endDate,
+          },
+          db,
+        )
+      : Promise.resolve([]),
+  ]);
+
+  const packageAllocations = db.orderPackageAllocation?.findMany
+    ? await db.orderPackageAllocation.findMany({
+        where: {
+          shopId,
+          snapshot: {
+            createdAt: {
+              gte: selectedPeriod.startDate,
+              lt: selectedPeriod.endDate,
+            },
+          },
+        },
+        orderBy: [{ createdAt: "desc" }],
+        take: 25,
+        select: {
+          id: true,
+          packageName: true,
+          quantity: true,
+          materialCost: true,
+          source: true,
+          confidence: true,
+          reason: true,
+          snapshot: {
+            select: {
+              id: true,
+              orderNumber: true,
+            },
+          },
+        },
+      })
+    : [];
+
+  const packagingReviewItems = db.packagingReviewItem?.findMany
+    ? await db.packagingReviewItem.findMany({
+        where: {
+          shopId,
+          status: "open",
+          snapshot: {
+            createdAt: {
+              gte: selectedPeriod.startDate,
+              lt: selectedPeriod.endDate,
+            },
+          },
+        },
+        orderBy: [{ createdAt: "desc" }],
+        take: 25,
+        select: {
+          id: true,
+          reason: true,
+          severity: true,
+          createdAt: true,
+          snapshotId: true,
+          snapshot: {
+            select: {
+              orderNumber: true,
+            },
+          },
+        },
+      })
+    : [];
+
   const allocationMap = new Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>();
+  const artistAllocationMap = new Map<string, { artistId: string; artistName: string; creditName: string; allocated: Prisma.Decimal }>();
+  const allocationDetailMap = new Map<string, CauseAllocationDetail[]>();
   let totalNetContribution = ZERO;
 
   for (const line of snapshotLines) {
     const adjustmentTotal = line.adjustments.reduce((sum, adj) => sum.add(adj.netContribAdj), ZERO);
-    totalNetContribution = totalNetContribution.add(line.netContribution).add(adjustmentTotal);
+    const adjustedLineNetContribution = line.netContribution.add(adjustmentTotal);
+    totalNetContribution = totalNetContribution.add(adjustedLineNetContribution);
 
     for (const allocation of line.causeAllocations) {
       const adjusted = computeAdjustedAllocationAmount({
@@ -293,10 +492,39 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         is501c3: allocation.is501c3,
         allocated: adjusted,
       });
+
+      const details = allocationDetailMap.get(allocation.causeId) ?? [];
+      details.push({
+        kind: "order_line",
+        orderSnapshotId: line.snapshot.id,
+        shopifyOrderId: line.snapshot.shopifyOrderId,
+        orderNumber: line.snapshot.orderNumber ?? null,
+        shopifyLineItemId: line.shopifyLineItemId,
+        productTitle: line.productTitle,
+        variantTitle: line.variantTitle,
+        quantity: line.quantity,
+        grossLineAmount: line.subtotal,
+        netContributionAmount: adjustedLineNetContribution,
+        allocatedAmount: adjusted,
+      });
+      allocationDetailMap.set(allocation.causeId, details);
+    }
+
+    for (const allocation of line.artistAllocations ?? []) {
+      if (!allocation.payoutEnabled) continue;
+      const current = artistAllocationMap.get(allocation.artistId) ?? {
+        artistId: allocation.artistId,
+        artistName: allocation.artistName,
+        creditName: allocation.creditName,
+        allocated: ZERO,
+      };
+      current.allocated = current.allocated.add(allocation.payoutAmount);
+      artistAllocationMap.set(allocation.artistId, current);
     }
   }
 
   const expenseTotal = expensesSummary._sum.amount ?? ZERO;
+  const salesTaxCollected = orderTaxSummary._sum.salesTaxCollected ?? ZERO;
   const shopifyCharges = chargesSummary._sum.amount ?? ZERO;
   const useClosedAllocations = selectedPeriod.status === "CLOSED" && closedAllocations.length > 0;
   let allocationRows = useClosedAllocations
@@ -315,6 +543,23 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         disbursed: ZERO,
       }));
 
+  const useClosedArtistAllocations = selectedPeriod.status === "CLOSED" && closedArtistAllocations.length > 0;
+  const artistAllocationRows = useClosedArtistAllocations
+    ? closedArtistAllocations.map((allocation) => ({
+        artistId: allocation.artistId,
+        artistName: allocation.artistName,
+        creditName: allocation.creditName,
+        allocated: allocation.allocated,
+        paid: allocation.paid,
+      }))
+    : Array.from(artistAllocationMap.values()).map((allocation) => ({
+        artistId: allocation.artistId,
+        artistName: allocation.artistName,
+        creditName: allocation.creditName,
+        allocated: allocation.allocated,
+        paid: ZERO,
+      }));
+
   if (carryForwardTrueUps.length > 0) {
     const allocationMapWithCarryForward = new Map(
       allocationRows.map((allocation) => [
@@ -330,6 +575,13 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         const existing = allocationMapWithCarryForward.get(redistribution.causeId);
         if (existing) {
           existing.allocated = existing.allocated.add(redistribution.amount);
+          const details = allocationDetailMap.get(redistribution.causeId) ?? [];
+          details.push({
+            kind: "true_up",
+            label: "Tax true-up redistribution",
+            allocatedAmount: redistribution.amount,
+          });
+          allocationDetailMap.set(redistribution.causeId, details);
           continue;
         }
 
@@ -340,6 +592,13 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           allocated: redistribution.amount,
           disbursed: ZERO,
         });
+        allocationDetailMap.set(redistribution.causeId, [
+          {
+            kind: "true_up",
+            label: "Tax true-up redistribution",
+            allocatedAmount: redistribution.amount,
+          },
+        ]);
       }
     }
 
@@ -352,9 +611,12 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   );
 
   const deductionPool = expenseTotal.add(allocation501c3Total);
-  const taxableExposure = totalNetContribution.sub(deductionPool);
-  const widgetTaxSuppressed = taxableExposure.lessThanOrEqualTo(0);
   const taxEstimate = await calculateEstimatedTaxForPeriod(shopId, selectedPeriod.id, db);
+  const taxableExposure = taxEstimate.taxableBase.mul(taxEstimate.taxableWeight).toDecimalPlaces(
+    2,
+    Prisma.Decimal.ROUND_FLOOR,
+  );
+  const widgetTaxSuppressed = taxableExposure.lessThanOrEqualTo(0);
   const carryForwardSurplus = carryForwardTrueUps.reduce(
     (sum, trueUp) => (trueUp.delta.greaterThan(ZERO) ? sum.add(trueUp.delta) : sum),
     ZERO,
@@ -390,6 +652,24 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       })),
     })),
   );
+
+  const artistPaymentRows = artistPayments.map((payment) => ({
+    id: payment.id,
+    artistId: payment.artistId,
+    artistName: payment.artist.displayName,
+    creditName: payment.artist.creditName,
+    amount: payment.amount.toString(),
+    paidAt: payment.paidAt.toISOString(),
+    paymentMethod: payment.paymentMethod,
+    referenceId: payment.referenceId ?? null,
+    notes: payment.notes ?? null,
+    applications: payment.applications.map((application) => ({
+      periodId: application.artistAllocation.periodId,
+      periodStartDate: application.artistAllocation.period.startDate.toISOString(),
+      periodEndDate: application.artistAllocation.period.endDate.toISOString(),
+      amount: application.amount.toString(),
+    })),
+  }));
 
   const causePayablesMap = new Map<
     string,
@@ -468,6 +748,88 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
     };
   });
 
+  const artistPayablesMap = new Map<
+    string,
+    {
+      artistId: string;
+      artistName: string;
+      creditName: string;
+      currentOutstanding: Prisma.Decimal;
+      priorOutstanding: Prisma.Decimal;
+      periods: Array<{
+        periodId: string;
+        periodStartDate: string;
+        periodEndDate: string;
+        amount: string;
+      }>;
+    }
+  >();
+
+  for (const allocation of outstandingArtistAllocations) {
+    const existing = artistPayablesMap.get(allocation.artistId) ?? {
+      artistId: allocation.artistId,
+      artistName: allocation.artistName,
+      creditName: allocation.creditName,
+      currentOutstanding: ZERO,
+      priorOutstanding: ZERO,
+      periods: [],
+    };
+
+    if (allocation.periodId === selectedPeriod.id && selectedPeriod.status === "CLOSED") {
+      existing.currentOutstanding = existing.currentOutstanding.add(allocation.remaining);
+    } else {
+      existing.priorOutstanding = existing.priorOutstanding.add(allocation.remaining);
+    }
+
+    existing.periods.push({
+      periodId: allocation.periodId,
+      periodStartDate: allocation.periodStartDate.toISOString(),
+      periodEndDate: allocation.periodEndDate.toISOString(),
+      amount: allocation.remaining.toString(),
+    });
+    artistPayablesMap.set(allocation.artistId, existing);
+  }
+
+  if (selectedPeriod.status === "OPEN") {
+    for (const allocation of artistAllocationRows) {
+      const existing = artistPayablesMap.get(allocation.artistId) ?? {
+        artistId: allocation.artistId,
+        artistName: allocation.artistName,
+        creditName: allocation.creditName,
+        currentOutstanding: ZERO,
+        priorOutstanding: ZERO,
+        periods: [],
+      };
+
+      const netOutstanding = floorCurrency(
+        new Prisma.Decimal(allocation.allocated).sub(new Prisma.Decimal(allocation.paid ?? ZERO)),
+      );
+      existing.currentOutstanding = existing.currentOutstanding.add(
+        netOutstanding.greaterThan(ZERO) ? netOutstanding : ZERO,
+      );
+      artistPayablesMap.set(allocation.artistId, existing);
+    }
+  }
+
+  const artistPayables = Array.from(artistPayablesMap.values()).map((payable) => {
+    const totalOutstanding = payable.currentOutstanding.add(payable.priorOutstanding);
+    return {
+      artistId: payable.artistId,
+      artistName: payable.artistName,
+      creditName: payable.creditName,
+      currentOutstanding: payable.currentOutstanding.toString(),
+      priorOutstanding: payable.priorOutstanding.toString(),
+      totalOutstanding: totalOutstanding.toString(),
+      overdue: payable.priorOutstanding.greaterThan(ZERO),
+      periods: payable.periods,
+    };
+  });
+
+  const totalArtistPayout = artistAllocationRows.reduce(
+    (sum, allocation) => sum.add(allocation.allocated),
+    ZERO,
+  );
+
   return {
     periods: periods.map((period) => ({
       id: period.id,
@@ -490,16 +852,32 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       },
       track1: {
         totalNetContribution: totalNetContribution.toString(),
+        salesTaxCollected: salesTaxCollected.toString(),
         shopifyCharges: shopifyCharges.toString(),
         donationPool: totalNetContribution.sub(shopifyCharges).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
         taxTrueUpSurplusApplied: carryForwardSurplus.toString(),
         taxTrueUpShortfallApplied: carryForwardShortfall.toString(),
+        artistPayoutTotal: totalArtistPayout.toString(),
         allocations: allocationRows.map((allocation) => ({
           causeId: allocation.causeId,
           causeName: allocation.causeName,
           is501c3: allocation.is501c3,
           allocated: allocation.allocated.toString(),
           disbursed: allocation.disbursed.toString(),
+          details: (allocationDetailMap.get(allocation.causeId) ?? []).map((detail) => ({
+            kind: detail.kind,
+            label: detail.label ?? null,
+            orderSnapshotId: detail.orderSnapshotId,
+            shopifyOrderId: detail.shopifyOrderId,
+            orderNumber: detail.orderNumber ?? null,
+            shopifyLineItemId: detail.shopifyLineItemId,
+            productTitle: detail.productTitle,
+            variantTitle: detail.variantTitle,
+            quantity: detail.quantity,
+            grossLineAmount: detail.grossLineAmount?.toString() ?? null,
+            netContributionAmount: detail.netContributionAmount?.toString() ?? null,
+            allocatedAmount: detail.allocatedAmount.toString(),
+          })),
         })),
       },
       track2: {
@@ -520,8 +898,38 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         amount: charge.amount.toString(),
         processedAt: charge.processedAt?.toISOString() ?? null,
       })),
+      packaging: {
+        allocations: packageAllocations.map((allocation: any) => ({
+          id: allocation.id,
+          packageName: allocation.packageName,
+          quantity: allocation.quantity,
+          materialCost: allocation.materialCost.toString(),
+          source: allocation.source,
+          confidence: allocation.confidence,
+          reason: allocation.reason ?? null,
+          snapshotId: allocation.snapshot.id,
+          orderNumber: allocation.snapshot.orderNumber ?? "Unnumbered order",
+        })),
+        reviewItems: packagingReviewItems.map((item: any) => ({
+          id: item.id,
+          reason: item.reason,
+          severity: item.severity,
+          createdAt: item.createdAt.toISOString(),
+          snapshotId: item.snapshotId,
+          orderNumber: item.snapshot.orderNumber ?? "Unnumbered order",
+        })),
+      },
       disbursements: disbursementRows,
       causePayables,
+      artistAllocations: artistAllocationRows.map((allocation) => ({
+        artistId: allocation.artistId,
+        artistName: allocation.artistName,
+        creditName: allocation.creditName,
+        allocated: allocation.allocated.toString(),
+        paid: allocation.paid.toString(),
+      })),
+      artistPayments: artistPaymentRows,
+      artistPayables,
       taxTrueUps: taxTrueUps.map((trueUp) => ({
         id: trueUp.id,
         estimatedTax: trueUp.estimatedTax.toString(),
@@ -549,6 +957,12 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       activeCauses: activeCauses.map((cause) => ({
         id: cause.id,
         name: cause.name,
+      })),
+      activeArtists: activeArtists.map((artist) => ({
+        id: artist.id,
+        displayName: artist.displayName,
+        creditName: artist.creditName,
+        paymentEnabled: artist.paymentEnabled,
       })),
     },
   };

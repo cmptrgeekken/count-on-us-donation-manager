@@ -31,6 +31,13 @@ type AllocationDraft = {
   allocated: Prisma.Decimal;
 };
 
+type ArtistAllocationDraft = {
+  artistId: string;
+  artistName: string;
+  creditName: string;
+  allocated: Prisma.Decimal;
+};
+
 function addAllocation(
   allocations: Map<string, AllocationDraft>,
   input: AllocationDraft,
@@ -42,6 +49,22 @@ function addAllocation(
   }
 
   allocations.set(input.causeId, {
+    ...current,
+    allocated: current.allocated.add(input.allocated),
+  });
+}
+
+function addArtistAllocation(
+  allocations: Map<string, ArtistAllocationDraft>,
+  input: ArtistAllocationDraft,
+) {
+  const current = allocations.get(input.artistId);
+  if (!current) {
+    allocations.set(input.artistId, input);
+    return;
+  }
+
+  allocations.set(input.artistId, {
     ...current,
     allocated: current.allocated.add(input.allocated),
   });
@@ -235,6 +258,70 @@ export async function materializeCauseAllocationsForPeriod(
   return rows;
 }
 
+export async function materializeArtistAllocationsForPeriod(
+  shopId: string,
+  period: { id: string; startDate: Date; endDate: Date },
+  db: DbClient = prisma,
+) {
+  if (!("lineArtistAllocation" in db) || !("artistAllocation" in db)) {
+    return [];
+  }
+
+  const lineArtistAllocations = await db.lineArtistAllocation.findMany({
+    where: {
+      shopId,
+      payoutEnabled: true,
+      snapshotLine: {
+        snapshot: {
+          createdAt: {
+            gte: period.startDate,
+            lt: period.endDate,
+          },
+        },
+      },
+    },
+    select: {
+      artistId: true,
+      artistName: true,
+      creditName: true,
+      payoutAmount: true,
+    },
+  });
+
+  const allocations = new Map<string, ArtistAllocationDraft>();
+
+  for (const allocation of lineArtistAllocations) {
+    addArtistAllocation(allocations, {
+      artistId: allocation.artistId,
+      artistName: allocation.artistName,
+      creditName: allocation.creditName,
+      allocated: allocation.payoutAmount,
+    });
+  }
+
+  const rows = Array.from(allocations.values()).map((allocation) => ({
+    shopId,
+    periodId: period.id,
+    artistId: allocation.artistId,
+    artistName: allocation.artistName,
+    creditName: allocation.creditName,
+    allocated: allocation.allocated,
+  }));
+
+  await db.artistAllocation.deleteMany({
+    where: {
+      shopId,
+      periodId: period.id,
+    },
+  });
+
+  if (rows.length > 0) {
+    await db.artistAllocation.createMany({ data: rows });
+  }
+
+  return rows;
+}
+
 export async function closeReportingPeriod(
   shopId: string,
   periodId: string,
@@ -253,13 +340,21 @@ export async function closeReportingPeriod(
     }
 
     if (period.status === "CLOSED") {
-      const allocations = await tx.causeAllocation.findMany({
-        where: {
-          shopId,
-          periodId,
-        },
-      });
-      return { closed: false, period, allocations };
+      const [allocations, artistAllocations] = await Promise.all([
+        tx.causeAllocation.findMany({
+          where: {
+            shopId,
+            periodId,
+          },
+        }),
+        tx.artistAllocation.findMany({
+          where: {
+            shopId,
+            periodId,
+          },
+        }),
+      ]);
+      return { closed: false, period, allocations, artistAllocations };
     }
 
     const closingPeriod = await tx.reportingPeriod.update({
@@ -281,11 +376,18 @@ export async function closeReportingPeriod(
       data: { periodId: closingPeriod.id },
     });
 
-    const allocations = await materializeCauseAllocationsForPeriod(
-      shopId,
-      closingPeriod,
-      tx as DbClient,
-    );
+    const [allocations, artistAllocations] = await Promise.all([
+      materializeCauseAllocationsForPeriod(
+        shopId,
+        closingPeriod,
+        tx as DbClient,
+      ),
+      materializeArtistAllocationsForPeriod(
+        shopId,
+        closingPeriod,
+        tx as DbClient,
+      ),
+    ]);
 
     const closedPeriod = await tx.reportingPeriod.update({
       where: {
@@ -309,10 +411,11 @@ export async function closeReportingPeriod(
           startDate: closedPeriod.startDate.toISOString(),
           endDate: closedPeriod.endDate.toISOString(),
           allocationCount: allocations.length,
+          artistAllocationCount: artistAllocations.length,
         },
       },
     });
 
-    return { closed: true, period: closedPeriod, allocations };
+    return { closed: true, period: closedPeriod, allocations, artistAllocations };
   });
 }

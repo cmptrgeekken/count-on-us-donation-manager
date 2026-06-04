@@ -110,6 +110,7 @@ describe("analytical recalculation", () => {
             id: "variant-1",
             shopifyId: "gid://shopify/ProductVariant/1",
             product: {
+              id: "product-1",
               shopifyId: "gid://shopify/Product/1",
             },
           },
@@ -118,7 +119,7 @@ describe("analytical recalculation", () => {
       productCauseAssignment: {
         findMany: vi.fn().mockResolvedValue([
           {
-            shopifyProductId: "gid://shopify/Product/1",
+            productId: "product-1",
             percentage: decimal("100.00"),
             causeId: "cause-1",
             cause: { name: "Playwright Cause" },

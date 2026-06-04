@@ -1,3 +1,14 @@
 .cache
 build
 node_modules
+.env
+.env.*
+!.env.example
+!.env.production.example
+.git
+.github
+.shopify
+coverage
+test-results
+playwright-report
+backups

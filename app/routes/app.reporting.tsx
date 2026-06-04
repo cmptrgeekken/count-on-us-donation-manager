@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useNavigate, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db.server";
+import {
+  ArtistPaymentError,
+  artistPaymentErrorCodes,
+  logArtistPayment,
+} from "../services/artistPaymentService.server";
 import { queueAnalyticalRecalculation } from "../services/analyticalRecalculation.server";
 import {
   ACCEPTED_RECEIPT_CONTENT_TYPES,
@@ -59,6 +64,20 @@ type AllocationRow = {
   allocated: string;
   disbursed: string;
   remaining: string;
+  details: Array<{
+    kind: "order_line" | "true_up";
+    label: string | null;
+    orderSnapshotId?: string;
+    shopifyOrderId?: string;
+    orderNumber: string | null;
+    shopifyLineItemId?: string;
+    productTitle?: string;
+    variantTitle?: string;
+    quantity?: number;
+    grossLineAmount: string | null;
+    netContributionAmount: string | null;
+    allocatedAmount: string;
+  }>;
 };
 
 type ChargeRow = {
@@ -102,6 +121,14 @@ type DisbursementOption = {
   totalOutstanding: string;
 };
 
+type ArtistPaymentOption = {
+  artistId: string;
+  label: string;
+  currentOutstanding: string;
+  priorOutstanding: string;
+  totalOutstanding: string;
+};
+
 type CausePayablePeriodRow = {
   periodId: string;
   periodStartDate: string;
@@ -118,6 +145,43 @@ type CausePayableRow = {
   totalOutstanding: string;
   overdue: boolean;
   periods: CausePayablePeriodRow[];
+};
+
+type ArtistPayableRow = {
+  artistId: string;
+  artistName: string;
+  creditName: string;
+  currentOutstanding: string;
+  priorOutstanding: string;
+  totalOutstanding: string;
+  overdue: boolean;
+  periods: CausePayablePeriodRow[];
+};
+
+type ArtistAllocationRow = {
+  artistId: string;
+  artistName: string;
+  creditName: string;
+  allocated: string;
+  paid: string;
+};
+
+type ArtistPaymentRow = {
+  id: string;
+  artistId: string;
+  artistName: string;
+  creditName: string;
+  amount: string;
+  paidAt: string;
+  paymentMethod: string;
+  referenceId: string | null;
+  notes: string | null;
+  applications: Array<{
+    periodId: string;
+    periodStartDate: string;
+    periodEndDate: string;
+    amount: string;
+  }>;
 };
 
 type TaxTrueUpRow = {
@@ -177,6 +241,24 @@ const disbursementSchema = z.object({
   paymentMethod: z.string().trim().min(1, "Payment method is required."),
   referenceId: z.string().trim().optional(),
   receipt: z.string().trim().optional(),
+});
+
+const artistPaymentSchema = z.object({
+  periodId: z.string().trim().cuid("Reporting period id is invalid."),
+  artistId: z.string().trim().cuid("Artist id is invalid."),
+  amount: z
+    .string()
+    .trim()
+    .min(1, "Amount is required.")
+    .refine((value) => !Number.isNaN(Number(value)) && Number(value) > 0, "Amount must be greater than 0."),
+  paidAt: z
+    .string()
+    .trim()
+    .min(1, "Paid date is required.")
+    .refine((value) => !Number.isNaN(Date.parse(value)), "Paid date must be a valid date."),
+  paymentMethod: z.string().trim().min(1, "Payment method is required."),
+  referenceId: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
 });
 
 const taxTrueUpSchema = z.object({
@@ -364,6 +446,66 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
+  if (intent === "log-artist-payment") {
+    const parsed = artistPaymentSchema.safeParse({
+      periodId: formData.get("periodId")?.toString() ?? "",
+      artistId: formData.get("artistId")?.toString() ?? "",
+      amount: formData.get("amount")?.toString() ?? "",
+      paidAt: formData.get("paidAt")?.toString() ?? "",
+      paymentMethod: formData.get("paymentMethod")?.toString() ?? "",
+      referenceId: formData.get("referenceId")?.toString() ?? "",
+      notes: formData.get("notes")?.toString() ?? "",
+    });
+
+    if (!parsed.success) {
+      return Response.json(
+        {
+          ok: false,
+          message: parsed.error.issues[0]?.message ?? "Invalid artist payment.",
+          fieldErrors: parsed.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+
+    try {
+      await logArtistPayment(shopId, {
+        periodId: parsed.data.periodId,
+        artistId: parsed.data.artistId,
+        amount: parsed.data.amount,
+        paidAt: new Date(parsed.data.paidAt),
+        paymentMethod: parsed.data.paymentMethod,
+        referenceId: parsed.data.referenceId ?? "",
+        notes: parsed.data.notes ?? "",
+      });
+
+      return Response.json({ ok: true, message: "Artist payment logged." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to log artist payment.";
+      const fieldErrors: ReportingActionData["fieldErrors"] =
+        error instanceof ArtistPaymentError
+          ? error.code === artistPaymentErrorCodes.AMOUNT_EXCEEDS_REMAINING ||
+            error.code === artistPaymentErrorCodes.ZERO_TOTAL ||
+            error.code === artistPaymentErrorCodes.NEGATIVE_AMOUNT
+            ? { amount: [message] }
+            : error.code === artistPaymentErrorCodes.PERIOD_NOT_CLOSED || error.code === artistPaymentErrorCodes.PERIOD_NOT_FOUND
+              ? { periodId: [message] }
+              : error.code === artistPaymentErrorCodes.PAYABLE_NOT_FOUND
+                ? { artistId: [message] }
+                : undefined
+          : undefined;
+
+      return Response.json(
+        {
+          ok: false,
+          message,
+          fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+  }
+
   if (intent === "record-tax-true-up") {
     const parsed = taxTrueUpSchema.safeParse({
       periodId: formData.get("periodId")?.toString() ?? "",
@@ -461,13 +603,16 @@ export default function ReportingPage() {
   const { periods, selectedPeriodId, summary, analyticalRecalculationRun } = useLoaderData<typeof loader>();
   const closeFetcher = useFetcher<ReportingActionData>();
   const disbursementFetcher = useFetcher<ReportingActionData>();
+  const artistPaymentFetcher = useFetcher<ReportingActionData>();
   const trueUpFetcher = useFetcher<ReportingActionData>();
   const recalculationFetcher = useFetcher<ReportingActionData>();
   const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
   const revalidator = useRevalidator();
   const { formatMoney, formatPct, locale } = useAppLocalization();
   const closeDialogRef = useRef<HTMLDialogElement>(null);
   const disbursementFormRef = useRef<HTMLFormElement>(null);
+  const artistPaymentFormRef = useRef<HTMLFormElement>(null);
   const trueUpFormRef = useRef<HTMLFormElement>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<"csv" | "pdf" | null>(null);
@@ -488,6 +633,12 @@ export default function ReportingPage() {
       disbursementFormRef.current?.reset();
     }
   }, [disbursementFetcher.data]);
+
+  useEffect(() => {
+    if (artistPaymentFetcher.data?.ok) {
+      artistPaymentFormRef.current?.reset();
+    }
+  }, [artistPaymentFetcher.data]);
 
   useEffect(() => {
     if (trueUpFetcher.data?.ok) {
@@ -516,11 +667,14 @@ export default function ReportingPage() {
   const statusMessage =
     closeFetcher.data?.message ??
     disbursementFetcher.data?.message ??
+    artistPaymentFetcher.data?.message ??
     trueUpFetcher.data?.message ??
     recalculationFetcher.data?.message ??
     "";
   const disbursementStatusMessage =
     disbursementFetcher.data && !disbursementFetcher.data.ok ? disbursementFetcher.data.message : "";
+  const artistPaymentStatusMessage =
+    artistPaymentFetcher.data && !artistPaymentFetcher.data.ok ? artistPaymentFetcher.data.message : "";
   const trueUpStatusMessage = trueUpFetcher.data && !trueUpFetcher.data.ok ? trueUpFetcher.data.message : "";
 
   const periodOptions = useMemo(
@@ -535,7 +689,7 @@ export default function ReportingPage() {
   function setPeriod(periodId: string) {
     const params = new URLSearchParams(searchParams);
     params.set("periodId", periodId);
-    window.location.search = params.toString();
+    navigate(`/app/reporting?${params.toString()}`);
   }
 
   function closePeriod() {
@@ -596,6 +750,7 @@ export default function ReportingPage() {
           allocated: allocation.allocated,
           disbursed: allocation.disbursed,
           remaining: remaining.toString(),
+          details: allocation.details ?? [],
         };
       })
     : [];
@@ -603,7 +758,13 @@ export default function ReportingPage() {
   const disbursementCauseOptions = causePayables.filter((allocation) =>
     new Prisma.Decimal(allocation.totalOutstanding).greaterThan(0),
   );
+  const artistAllocations: ArtistAllocationRow[] = summary?.artistAllocations ?? [];
+  const artistPayables: ArtistPayableRow[] = summary?.artistPayables ?? [];
+  const artistPaymentArtistOptions = artistPayables.filter((allocation) =>
+    new Prisma.Decimal(allocation.totalOutstanding).greaterThan(0),
+  );
   const disbursements: DisbursementRow[] = summary?.disbursements ?? [];
+  const artistPayments: ArtistPaymentRow[] = summary?.artistPayments ?? [];
   const taxTrueUps: TaxTrueUpRow[] = summary?.taxTrueUps ?? [];
   const recalculationSummary = analyticalRecalculationRun?.summary ?? null;
   const disbursementOptions = disbursementCauseOptions.map<DisbursementOption>((allocation) => ({
@@ -615,6 +776,16 @@ export default function ReportingPage() {
   }));
   const [selectedDisbursementCauseId, setSelectedDisbursementCauseId] = useState(
     disbursementOptions[0]?.causeId ?? "",
+  );
+  const artistPaymentOptions = artistPaymentArtistOptions.map<ArtistPaymentOption>((allocation) => ({
+    artistId: allocation.artistId,
+    label: `${allocation.creditName} (${formatMoney(allocation.totalOutstanding)} outstanding)`,
+    currentOutstanding: allocation.currentOutstanding,
+    priorOutstanding: allocation.priorOutstanding,
+    totalOutstanding: allocation.totalOutstanding,
+  }));
+  const [selectedArtistPaymentArtistId, setSelectedArtistPaymentArtistId] = useState(
+    artistPaymentOptions[0]?.artistId ?? "",
   );
   const disbursementFieldStyle: CSSProperties = {
     width: "100%",
@@ -648,6 +819,11 @@ export default function ReportingPage() {
     null;
   const selectedTotalOutstandingAmount = floorCurrency(selectedDisbursementOption?.totalOutstanding ?? "0");
   const selectedRemainingAmountInputMax = selectedTotalOutstandingAmount;
+  const selectedArtistPaymentOption =
+    artistPaymentOptions.find((option) => option.artistId === selectedArtistPaymentArtistId) ??
+    artistPaymentOptions[0] ??
+    null;
+  const selectedArtistPaymentTotalOutstandingAmount = floorCurrency(selectedArtistPaymentOption?.totalOutstanding ?? "0");
   const disbursementTwoColumnGridStyle: CSSProperties = {
     display: "grid",
     gap: "0.9rem",
@@ -678,6 +854,21 @@ export default function ReportingPage() {
       setSelectedDisbursementCauseId(disbursementOptions[0]?.causeId ?? "");
     }
   }, [selectedPeriodId, selectedDisbursementCauseId, disbursementOptions]);
+
+  useEffect(() => {
+    if (artistPaymentOptions.length === 0) {
+      setSelectedArtistPaymentArtistId("");
+      return;
+    }
+
+    const currentStillValid = artistPaymentOptions.some(
+      (option) => option.artistId === selectedArtistPaymentArtistId,
+    );
+
+    if (!currentStillValid) {
+      setSelectedArtistPaymentArtistId(artistPaymentOptions[0]?.artistId ?? "");
+    }
+  }, [selectedPeriodId, selectedArtistPaymentArtistId, artistPaymentOptions]);
 
   if (!summary) {
     return (
@@ -730,6 +921,16 @@ export default function ReportingPage() {
         {disbursementFetcher.data?.ok && disbursementFetcher.data.message && (
           <s-banner tone="success">
             <s-text>{disbursementFetcher.data.message}</s-text>
+          </s-banner>
+        )}
+        {artistPaymentFetcher.data && !artistPaymentFetcher.data.ok && (
+          <s-banner tone="critical">
+            <s-text>{artistPaymentFetcher.data.message}</s-text>
+          </s-banner>
+        )}
+        {artistPaymentFetcher.data?.ok && artistPaymentFetcher.data.message && (
+          <s-banner tone="success">
+            <s-text>{artistPaymentFetcher.data.message}</s-text>
           </s-banner>
         )}
         {trueUpFetcher.data && !trueUpFetcher.data.ok && (
@@ -829,8 +1030,16 @@ export default function ReportingPage() {
                   <s-text color="subdued">{formatMoney(summary.track1.totalNetContribution)}</s-text>
                 </div>
                 <div>
+                  <strong>Sales tax collected</strong>
+                  <s-text color="subdued">{formatMoney(summary.track1.salesTaxCollected ?? "0")}</s-text>
+                </div>
+                <div>
                   <strong>Shopify charges</strong>
                   <s-text color="subdued">{formatMoney(summary.track1.shopifyCharges)}</s-text>
+                </div>
+                <div>
+                  <strong>Artist payouts</strong>
+                  <s-text color="subdued">{formatMoney(summary.track1.artistPayoutTotal ?? "0")}</s-text>
                 </div>
                 <div>
                   <strong>Donation pool (after carry-forward)</strong>
@@ -847,6 +1056,45 @@ export default function ReportingPage() {
                   <s-text color="subdued">{formatMoney(summary.track1.taxTrueUpShortfallApplied)}</s-text>
                 </div>
               </div>
+            </div>
+          </s-section>
+
+          <s-section heading="Packaging reconciliation">
+            <div style={{ display: "grid", gap: "1rem" }}>
+              {summary.packaging.reviewItems.length > 0 ? (
+                <s-banner tone="warning">
+                  <s-text>{summary.packaging.reviewItems.length} order(s) need packaging review for this reporting period.</s-text>
+                </s-banner>
+              ) : null}
+              {summary.packaging.allocations.length === 0 ? (
+                <s-text color="subdued">No package allocations have been recorded for this reporting period yet.</s-text>
+              ) : (
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header>Order</s-table-header>
+                    <s-table-header>Package</s-table-header>
+                    <s-table-header>Qty</s-table-header>
+                    <s-table-header>Confidence</s-table-header>
+                    <s-table-header format="currency">Material cost</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {summary.packaging.allocations.map((allocation: (typeof summary.packaging.allocations)[number]) => (
+                      <s-table-row key={allocation.id}>
+                        <s-table-cell>
+                          <Link to={`/app/order-history/${allocation.snapshotId}`}>{allocation.orderNumber}</Link>
+                        </s-table-cell>
+                        <s-table-cell>
+                          <strong>{allocation.packageName}</strong>
+                          {allocation.reason ? <div><s-text color="subdued">{allocation.reason}</s-text></div> : null}
+                        </s-table-cell>
+                        <s-table-cell>{allocation.quantity}</s-table-cell>
+                        <s-table-cell>{allocation.confidence}</s-table-cell>
+                        <s-table-cell>{formatMoney(allocation.materialCost)}</s-table-cell>
+                      </s-table-row>
+                    ))}
+                  </s-table-body>
+                </s-table>
+              )}
             </div>
           </s-section>
 
@@ -869,15 +1117,61 @@ export default function ReportingPage() {
                     <s-table-cell></s-table-cell>
                   </s-table-row>
                 ) : (
-                  allocationRows.map((allocation) => (
+                  allocationRows.flatMap((allocation) => [
                     <s-table-row key={allocation.causeId}>
                       <s-table-cell>{allocation.causeName}</s-table-cell>
                       <s-table-cell>{allocation.is501c3 ? "Yes" : "No"}</s-table-cell>
                       <s-table-cell>{formatMoney(allocation.allocated)}</s-table-cell>
                       <s-table-cell>{formatMoney(allocation.disbursed)}</s-table-cell>
                       <s-table-cell>{formatMoney(allocation.remaining)}</s-table-cell>
-                    </s-table-row>
-                  ))
+                    </s-table-row>,
+                    <s-table-row key={`${allocation.causeId}-details`}>
+                      <s-table-cell>
+                        <div style={{ display: "grid", gap: "0.45rem", paddingBlock: "0.25rem" }}>
+                          <strong>Contributing order lines</strong>
+                          {allocation.details.length === 0 ? (
+                            <s-text color="subdued">No line-level allocation detail is available for this cause.</s-text>
+                          ) : (
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns: "minmax(25rem, 3fr) minmax(7rem, 1fr) minmax(7rem, 1fr)",
+                                gap: "0.5rem 1rem",
+                                alignItems: "start",
+                              }}
+                            >
+                              <strong>Order / line item</strong>
+                              <strong>Gross</strong>
+                              <strong>Allocated</strong>
+                              {allocation.details.map((detail, detailIndex) => (
+                                <div
+                                  key={`${allocation.causeId}-${detail.kind}-${detail.orderSnapshotId ?? "adjustment"}-${detail.shopifyLineItemId ?? detailIndex}`}
+                                  style={{ display: "contents" }}
+                                >
+                                  <span>
+                                    {detail.kind === "true_up" ? (
+                                      detail.label ?? "Allocation adjustment"
+                                    ) : (
+                                      <>
+                                        {(detail.orderNumber ?? detail.shopifyOrderId)} · {detail.productTitle}
+                                        {detail.variantTitle ? ` / ${detail.variantTitle}` : ""} · Qty {detail.quantity}
+                                      </>
+                                    )}
+                                  </span>
+                                  <span>{detail.grossLineAmount ? formatMoney(detail.grossLineAmount) : "--"}</span>
+                                  <span>{formatMoney(detail.allocatedAmount)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                    </s-table-row>,
+                  ])
                 )}
               </s-table-body>
             </s-table>
@@ -923,6 +1217,98 @@ export default function ReportingPage() {
                           <div style={{ display: "grid", gap: "0.2rem" }}>
                             {payable.periods.map((period) => (
                               <span key={`${payable.causeId}-${period.periodId}`}>
+                                {formatDateRange(period.periodStartDate, period.periodEndDate, locale)}: {formatMoney(period.amount)}
+                              </span>
+                            ))}
+                          </div>
+                        </s-table-cell>
+                        <s-table-cell>{formatMoney(payable.totalOutstanding)}</s-table-cell>
+                      </s-table-row>
+                    ))
+                  )}
+                </s-table-body>
+              </s-table>
+            </div>
+          </s-section>
+
+          <s-section heading="Artist payout allocations">
+            <s-table>
+              <s-table-header-row>
+                <s-table-header listSlot="primary">Artist</s-table-header>
+                <s-table-header listSlot="secondary">Credit</s-table-header>
+                <s-table-header listSlot="labeled" format="currency">Allocated</s-table-header>
+                <s-table-header listSlot="labeled" format="currency">Paid</s-table-header>
+                <s-table-header listSlot="labeled" format="currency">Remaining</s-table-header>
+              </s-table-header-row>
+              <s-table-body>
+                {artistAllocations.length === 0 ? (
+                  <s-table-row>
+                    <s-table-cell>No artist payout allocations for this period.</s-table-cell>
+                    <s-table-cell></s-table-cell>
+                    <s-table-cell></s-table-cell>
+                    <s-table-cell></s-table-cell>
+                    <s-table-cell></s-table-cell>
+                  </s-table-row>
+                ) : (
+                  artistAllocations.map((allocation) => {
+                    const remaining = new Prisma.Decimal(allocation.allocated)
+                      .sub(new Prisma.Decimal(allocation.paid))
+                      .toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
+                    return (
+                      <s-table-row key={allocation.artistId}>
+                        <s-table-cell>{allocation.artistName}</s-table-cell>
+                        <s-table-cell>{allocation.creditName}</s-table-cell>
+                        <s-table-cell>{formatMoney(allocation.allocated)}</s-table-cell>
+                        <s-table-cell>{formatMoney(allocation.paid)}</s-table-cell>
+                        <s-table-cell>{formatMoney(remaining.toString())}</s-table-cell>
+                      </s-table-row>
+                    );
+                  })
+                )}
+              </s-table-body>
+            </s-table>
+          </s-section>
+
+          <s-section heading="Outstanding artist payables">
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <s-text color="subdued">
+                Artist payables are tracked separately from Cause disbursements and roll forward until paid.
+              </s-text>
+              {artistPayables.some((payable) => payable.overdue) ? (
+                <s-banner tone="warning">
+                  <s-text>Prior-period artist payout balances are still unpaid.</s-text>
+                </s-banner>
+              ) : null}
+              <s-table>
+                <s-table-header-row>
+                  <s-table-header listSlot="primary">Artist</s-table-header>
+                  <s-table-header listSlot="inline">Overdue</s-table-header>
+                  <s-table-header listSlot="secondary">Current period</s-table-header>
+                  <s-table-header listSlot="secondary">Prior periods</s-table-header>
+                  <s-table-header listSlot="secondary">Outstanding by period</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Total outstanding</s-table-header>
+                </s-table-header-row>
+                <s-table-body>
+                  {artistPayables.length === 0 ? (
+                    <s-table-row>
+                      <s-table-cell>No outstanding artist payables yet.</s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                    </s-table-row>
+                  ) : (
+                    artistPayables.map((payable) => (
+                      <s-table-row key={payable.artistId}>
+                        <s-table-cell>{payable.creditName}</s-table-cell>
+                        <s-table-cell>{payable.overdue ? "Needs attention" : "Current only"}</s-table-cell>
+                        <s-table-cell>{formatMoney(payable.currentOutstanding)}</s-table-cell>
+                        <s-table-cell>{formatMoney(payable.priorOutstanding)}</s-table-cell>
+                        <s-table-cell>
+                          <div style={{ display: "grid", gap: "0.2rem" }}>
+                            {payable.periods.map((period) => (
+                              <span key={`${payable.artistId}-${period.periodId}`}>
                                 {formatDateRange(period.periodStartDate, period.periodEndDate, locale)}: {formatMoney(period.amount)}
                               </span>
                             ))}
@@ -1309,6 +1695,204 @@ export default function ReportingPage() {
                 </s-table>
               </s-section>
 
+              <s-section heading="Log artist payment">
+                <div style={{ display: "grid", gap: "0.75rem" }}>
+                  <s-text color="subdued">
+                    Record artist payouts for this closed period. Payments auto-apply to the oldest outstanding artist payable first.
+                  </s-text>
+                  {artistPaymentArtistOptions.length === 0 ? (
+                    <s-banner tone="info">
+                      <s-text>All closed-period artist payables through this reporting period have already been fully paid.</s-text>
+                    </s-banner>
+                  ) : (
+                    <artistPaymentFetcher.Form
+                      ref={artistPaymentFormRef}
+                      method="post"
+                      style={{ display: "grid", gap: "0.9rem" }}
+                    >
+                      <input type="hidden" name="intent" value="log-artist-payment" />
+                      <input type="hidden" name="periodId" value={selectedPeriod.id} />
+                      <div
+                        aria-live="polite"
+                        aria-atomic="true"
+                        style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
+                      >
+                        {artistPaymentStatusMessage}
+                      </div>
+
+                      {artistPaymentFetcher.data && !artistPaymentFetcher.data.ok ? (
+                        <s-banner tone="critical">
+                          <s-text>{artistPaymentFetcher.data.message}</s-text>
+                        </s-banner>
+                      ) : null}
+
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="artist-payment-artist">Artist</label>
+                        <select
+                          id="artist-payment-artist"
+                          name="artistId"
+                          value={selectedArtistPaymentArtistId}
+                          onChange={(event) => setSelectedArtistPaymentArtistId(event.currentTarget.value)}
+                          style={disbursementFieldStyle}
+                        >
+                          {artistPaymentOptions.map((option) => (
+                            <option key={option.artistId} value={option.artistId}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        {selectedArtistPaymentOption ? (
+                          <div style={{ display: "grid", gap: "0.2rem" }}>
+                            <s-text color="subdued">
+                              Current period outstanding: {formatMoney(selectedArtistPaymentOption.currentOutstanding)}
+                            </s-text>
+                            <s-text color="subdued">
+                              Prior-period outstanding: {formatMoney(selectedArtistPaymentOption.priorOutstanding)}
+                            </s-text>
+                            <s-text color="subdued">
+                              Total outstanding eligible for auto-application: {formatMoney(selectedArtistPaymentOption.totalOutstanding)}
+                            </s-text>
+                          </div>
+                        ) : null}
+                        {artistPaymentFetcher.data?.fieldErrors?.artistId?.map((message) => (
+                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                        ))}
+                      </div>
+
+                      <div style={disbursementTwoColumnGridStyle}>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="artist-payment-amount">Amount</label>
+                          <input
+                            id="artist-payment-amount"
+                            name="amount"
+                            type="number"
+                            min="0"
+                            max={selectedArtistPaymentTotalOutstandingAmount}
+                            step="0.01"
+                            style={disbursementFieldStyle}
+                          />
+                          <s-text color="subdued" style={disbursementHelpTextStyle}>
+                            Max {formatMoney(selectedArtistPaymentTotalOutstandingAmount)}.
+                          </s-text>
+                          {artistPaymentFetcher.data?.fieldErrors?.amount?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="artist-payment-paid-at">Paid date</label>
+                          <input
+                            id="artist-payment-paid-at"
+                            name="paidAt"
+                            type="date"
+                            defaultValue={new Date().toISOString().slice(0, 10)}
+                            style={disbursementFieldStyle}
+                          />
+                          {artistPaymentFetcher.data?.fieldErrors?.paidAt?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div style={disbursementTwoColumnGridStyle}>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="artist-payment-method">Payment method</label>
+                          <input
+                            id="artist-payment-method"
+                            name="paymentMethod"
+                            type="text"
+                            placeholder="ACH, check, PayPal..."
+                            style={disbursementFieldStyle}
+                          />
+                          {artistPaymentFetcher.data?.fieldErrors?.paymentMethod?.map((message) => (
+                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                          ))}
+                        </div>
+                        <div style={{ display: "grid", gap: "0.35rem" }}>
+                          <label htmlFor="artist-payment-reference">Reference id</label>
+                          <input
+                            id="artist-payment-reference"
+                            name="referenceId"
+                            type="text"
+                            placeholder="Optional payout or check id"
+                            style={disbursementFieldStyle}
+                          />
+                        </div>
+                      </div>
+
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="artist-payment-notes">Notes</label>
+                        <textarea
+                          id="artist-payment-notes"
+                          name="notes"
+                          rows={2}
+                          style={{ ...disbursementFieldStyle, minHeight: "5rem", resize: "vertical" }}
+                        />
+                      </div>
+
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <button
+                          type="submit"
+                          disabled={artistPaymentFetcher.state !== "idle"}
+                          style={{
+                            ...disbursementSubmitStyle,
+                            cursor: artistPaymentFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                            opacity: artistPaymentFetcher.state !== "idle" ? 0.6 : 1,
+                          }}
+                        >
+                          Log artist payment
+                        </button>
+                      </div>
+                    </artistPaymentFetcher.Form>
+                  )}
+                </div>
+              </s-section>
+
+              <s-section heading="Artist payments">
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header listSlot="primary">Artist</s-table-header>
+                    <s-table-header listSlot="secondary">Paid</s-table-header>
+                    <s-table-header listSlot="secondary">Applied to</s-table-header>
+                    <s-table-header listSlot="secondary">Method</s-table-header>
+                    <s-table-header listSlot="secondary">Reference</s-table-header>
+                    <s-table-header listSlot="labeled" format="currency">Amount</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {artistPayments.length === 0 ? (
+                      <s-table-row>
+                        <s-table-cell>No artist payments logged for this period.</s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                      </s-table-row>
+                    ) : (
+                      artistPayments.map((payment) => (
+                        <s-table-row key={payment.id}>
+                          <s-table-cell>{payment.creditName}</s-table-cell>
+                          <s-table-cell>{formatDate(payment.paidAt, locale)}</s-table-cell>
+                          <s-table-cell>
+                            {payment.applications.length > 0 ? (
+                              <div style={{ display: "grid", gap: "0.2rem" }}>
+                                {payment.applications.map((application) => (
+                                  <span key={`${payment.id}-${application.periodId}`}>
+                                    {formatDateRange(application.periodStartDate, application.periodEndDate, locale)}: {formatMoney(application.amount)}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : "None"}
+                          </s-table-cell>
+                          <s-table-cell>{payment.paymentMethod}</s-table-cell>
+                          <s-table-cell>{payment.referenceId ?? "-"}</s-table-cell>
+                          <s-table-cell>{formatMoney(payment.amount)}</s-table-cell>
+                        </s-table-row>
+                      ))
+                    )}
+                  </s-table-body>
+                </s-table>
+              </s-section>
+
               <s-section heading="Tax true-up">
                 <div style={{ display: "grid", gap: "0.75rem" }}>
                   <s-text color="subdued">
@@ -1510,7 +2094,7 @@ export default function ReportingPage() {
             </div>
           </s-section>
 
-          <s-section heading="Track 2 — Tax estimation">
+          <s-section heading="Track 2 — Tax estimation for selected period">
             <div style={{ display: "grid", gap: "0.75rem" }}>
               <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
                 <div>

@@ -1,21 +1,37 @@
-FROM node:18-alpine
-RUN apk add --no-cache openssl
+FROM node:22-alpine AS base
 
-EXPOSE 3000
+RUN apk add --no-cache dumb-init openssl
 
 WORKDIR /app
 
 ENV NODE_ENV=production
 
-COPY package.json package-lock.json* ./
+FROM base AS deps
 
-RUN npm ci --omit=dev && npm cache clean --force
-# Remove CLI packages since we don't need them in production by default.
-# Remove this line if you want to run CLI commands in your container.
-RUN npm remove @shopify/cli
+COPY package.json package-lock.json* ./
+RUN npm ci --include=dev
+
+FROM deps AS build
 
 COPY . .
-
+RUN npx prisma generate
 RUN npm run build
 
+FROM base AS runtime
+
+ENV NPM_CONFIG_CACHE=/tmp/.npm
+
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+COPY --from=build --chown=node:node /app/build ./build
+COPY --from=build --chown=node:node /app/public ./public
+COPY --from=build --chown=node:node /app/prisma ./prisma
+COPY --from=build --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma
+
+USER node
+
+EXPOSE 3000
+
+ENTRYPOINT ["dumb-init", "--"]
 CMD ["npm", "run", "docker-start"]

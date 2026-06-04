@@ -33,3 +33,6 @@ playwright-report/
 test-results/
 playwright/.cache/
 .storage/
+
+# Local seed/import exports can include live-store financial data.
+seed-imports/

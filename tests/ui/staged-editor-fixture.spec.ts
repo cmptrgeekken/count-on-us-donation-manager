@@ -26,6 +26,7 @@ test.describe("staged editor fixture", () => {
     await page.goto("/ui-fixtures/staged-editor");
 
     await page.getByTestId("fixture-description").fill("Changed description");
+    await expect(page.getByTestId("fixture-save-bar")).toBeVisible();
     await page.getByTestId("fixture-discard").click();
 
     await expect(page.getByTestId("fixture-description")).toHaveValue("Laminated sticker set with backing card.");

@@ -44,6 +44,21 @@ type OrderLineItemPayload = {
   id?: string | number | null;
   quantity?: string | number | null;
   price?: string | number | null;
+  total_discount?: string | number | null;
+  discount_allocations?: Array<{
+    amount?: string | number | null;
+    amount_set?: {
+      shop_money?: {
+        amount?: string | number | null;
+      } | null;
+    } | null;
+  }>;
+  discounted_total?: string | number | null;
+  discounted_total_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
 };
 
 type ShopifyOrderPayload = {
@@ -65,6 +80,29 @@ const ZERO = new Prisma.Decimal(0);
 function toDecimal(value: string | number | Prisma.Decimal | null | undefined) {
   if (value === null || value === undefined || value === "") return ZERO;
   return value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
+}
+
+function getLineDiscount(lineItem: OrderLineItemPayload) {
+  if (lineItem.total_discount !== null && lineItem.total_discount !== undefined && lineItem.total_discount !== "") {
+    return toDecimal(lineItem.total_discount);
+  }
+
+  return (lineItem.discount_allocations ?? []).reduce((sum, allocation) => {
+    const amount = allocation.amount ?? allocation.amount_set?.shop_money?.amount;
+    return sum.add(toDecimal(amount));
+  }, ZERO);
+}
+
+function getDiscountedLineSubtotal(lineItem: OrderLineItemPayload) {
+  const explicitDiscountedTotal = lineItem.discounted_total ?? lineItem.discounted_total_set?.shop_money?.amount;
+  if (explicitDiscountedTotal !== null && explicitDiscountedTotal !== undefined && explicitDiscountedTotal !== "") {
+    return toDecimal(explicitDiscountedTotal);
+  }
+
+  const quantity = Math.max(0, Number(lineItem.quantity ?? 0));
+  const undiscountedSubtotal = toDecimal(lineItem.price).mul(quantity);
+  const discountedSubtotal = undiscountedSubtotal.sub(getLineDiscount(lineItem));
+  return discountedSubtotal.isNegative() ? ZERO : discountedSubtotal;
 }
 
 function normaliseStringId(value: string | number | null | undefined) {
@@ -462,8 +500,7 @@ export async function processOrderUpdate(
 
     const currentLines = new Map<string, { subtotal: Prisma.Decimal }>();
     for (const lineItem of orderPayload.line_items ?? []) {
-      const quantity = Math.max(0, Number(lineItem.quantity ?? 0));
-      const subtotal = toDecimal(lineItem.price).mul(quantity);
+      const subtotal = getDiscountedLineSubtotal(lineItem);
       for (const identifier of buildLineItemIdentifiers(lineItem)) {
         currentLines.set(identifier, { subtotal });
       }

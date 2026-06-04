@@ -80,6 +80,12 @@ describe("staged editor helpers", () => {
   it("rebuilds template-backed variant sections when the template changes", () => {
     const draft: VariantDraft = {
       productionTemplateId: "old-template",
+      preferredPackageId: null,
+      packedLength: "",
+      packedWidth: "",
+      packedHeight: "",
+      packedWeightGrams: "",
+      canSharePackage: true,
       laborMinutes: "",
       laborRate: "",
       mistakeBuffer: "",
@@ -141,6 +147,12 @@ describe("staged editor helpers", () => {
   it("detects meaningful variant state and derives additional line counts", () => {
     const emptyDraft: VariantDraft = {
       productionTemplateId: null,
+      preferredPackageId: null,
+      packedLength: "",
+      packedWidth: "",
+      packedHeight: "",
+      packedWeightGrams: "",
+      canSharePackage: true,
       laborMinutes: "",
       laborRate: "",
       mistakeBuffer: "",

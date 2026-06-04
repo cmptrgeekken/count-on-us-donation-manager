@@ -31,6 +31,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         _count: {
           select: { causeAssignments: true, variants: true },
         },
+        variants: {
+          select: {
+            id: true,
+            providerMappings: {
+              where: { status: "mapped" },
+              select: { provider: true },
+            },
+          },
+        },
       },
     }),
   ]);
@@ -50,6 +59,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       status: product.status,
       variantCount: product._count.variants,
       causeAssignmentCount: product._count.causeAssignments,
+      mappedVariantCount: product.variants.filter((variant) => variant.providerMappings.length > 0).length,
+      mappedProviderCount: new Set(
+        product.variants.flatMap((variant) => variant.providerMappings.map((mapping) => mapping.provider)),
+      ).size,
     })),
   });
 };
@@ -101,6 +114,8 @@ type ProductRow = {
   status: string;
   variantCount: number;
   causeAssignmentCount: number;
+  mappedVariantCount: number;
+  mappedProviderCount: number;
 };
 
 type SyncActionData = {
@@ -184,6 +199,7 @@ export default function ProductsPage() {
                 <s-table-header listSlot="primary">Product</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Variants</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Cause assignments</s-table-header>
+                <s-table-header listSlot="secondary">POD coverage</s-table-header>
                 <s-table-header listSlot="inline">Status</s-table-header>
                 <s-table-header>Actions</s-table-header>
               </s-table-header-row>
@@ -199,6 +215,20 @@ export default function ProductsPage() {
                     </s-table-cell>
                     <s-table-cell>{product.variantCount}</s-table-cell>
                     <s-table-cell>{product.causeAssignmentCount}</s-table-cell>
+                    <s-table-cell>
+                      {product.mappedVariantCount > 0 ? (
+                        <div style={{ display: "grid", gap: "0.2rem" }}>
+                          <strong>
+                            {product.mappedVariantCount} of {product.variantCount}
+                          </strong>
+                          <s-text color="subdued">
+                            {product.mappedProviderCount === 1 ? "1 provider mapped" : `${product.mappedProviderCount} providers mapped`}
+                          </s-text>
+                        </div>
+                      ) : (
+                        <s-text color="subdued">Manual only</s-text>
+                      )}
+                    </s-table-cell>
                     <s-table-cell>
                       <s-badge tone={product.status === "active" ? "success" : product.status === "draft" ? "warning" : "enabled"}>
                         {product.status === "active" ? "Active" : product.status === "draft" ? "Draft" : "Archived"}

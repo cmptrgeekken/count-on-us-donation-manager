@@ -103,6 +103,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const snapshot = await prisma.orderSnapshot.findFirst({
     where: { id: snapshotId, shopId },
     include: {
+      packageAllocations: {
+        orderBy: { createdAt: "asc" },
+      },
+      packagingReviewItems: {
+        orderBy: { createdAt: "desc" },
+      },
       lines: {
         orderBy: { productTitle: "asc" },
         include: {
@@ -128,6 +134,22 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       orderNumber: snapshot.orderNumber ?? "Unnumbered order",
       origin: snapshot.origin,
       createdAt: snapshot.createdAt.toISOString(),
+      packageAllocations: snapshot.packageAllocations.map((allocation) => ({
+        id: allocation.id,
+        packageName: allocation.packageName,
+        quantity: allocation.quantity,
+        materialCost: allocation.materialCost.toString(),
+        source: allocation.source,
+        confidence: allocation.confidence,
+        reason: allocation.reason ?? "",
+      })),
+      packagingReviewItems: snapshot.packagingReviewItems.map((item) => ({
+        id: item.id,
+        status: item.status,
+        reason: item.reason,
+        severity: item.severity,
+        createdAt: item.createdAt.toISOString(),
+      })),
       lines: snapshot.lines.map((line) => {
         const effectiveLaborCost = line.laborCost.add(
           sumDecimals(line.adjustments.map((adjustment) => adjustment.laborAdj ?? ZERO)),
@@ -176,15 +198,17 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           laborRate: line.laborRate?.toString() ?? null,
           podCostEstimated: line.podCostEstimated,
           podCostMissing: line.podCostMissing,
-          materialLines: line.materialLines.map((materialLine) => ({
-            id: materialLine.id,
-            materialName: materialLine.materialName,
-            materialType: materialLine.materialType,
-            costingModel: materialLine.costingModel,
-            quantity: materialLine.quantity.toString(),
-            usesPerVariant: materialLine.usesPerVariant?.toString() ?? null,
-            lineCost: materialLine.lineCost.toString(),
-          })),
+          materialLines: line.materialLines
+            .filter((materialLine) => materialLine.materialType !== "shipping")
+            .map((materialLine) => ({
+              id: materialLine.id,
+              materialName: materialLine.materialName,
+              materialType: materialLine.materialType,
+              costingModel: materialLine.costingModel,
+              quantity: materialLine.quantity.toString(),
+              usesPerVariant: materialLine.usesPerVariant?.toString() ?? null,
+              lineCost: materialLine.lineCost.toString(),
+            })),
           equipmentLines: line.equipmentLines.map((equipmentLine) => ({
             id: equipmentLine.id,
             equipmentName: equipmentLine.equipmentName,
@@ -284,6 +308,46 @@ export default function OrderSnapshotDetailPage() {
           </div>
         </s-section>
 
+        <s-section heading="Package allocations">
+          <div style={{ display: "grid", gap: "1rem" }}>
+            {snapshot.packageAllocations.length === 0 ? (
+              <s-text color="subdued">No package allocation has been recorded for this snapshot.</s-text>
+            ) : (
+              <s-table>
+                <s-table-header-row>
+                  <s-table-header>Package</s-table-header>
+                  <s-table-header>Qty</s-table-header>
+                  <s-table-header>Source</s-table-header>
+                  <s-table-header>Confidence</s-table-header>
+                  <s-table-header format="currency">Material cost</s-table-header>
+                </s-table-header-row>
+                <s-table-body>
+                  {snapshot.packageAllocations.map((allocation: (typeof snapshot.packageAllocations)[number]) => (
+                    <s-table-row key={allocation.id}>
+                      <s-table-cell>
+                        <strong>{allocation.packageName}</strong>
+                        {allocation.reason ? <div><s-text color="subdued">{allocation.reason}</s-text></div> : null}
+                      </s-table-cell>
+                      <s-table-cell>{allocation.quantity}</s-table-cell>
+                      <s-table-cell>{allocation.source}</s-table-cell>
+                      <s-table-cell>{allocation.confidence}</s-table-cell>
+                      <s-table-cell>{formatMoney(allocation.materialCost)}</s-table-cell>
+                    </s-table-row>
+                  ))}
+                </s-table-body>
+              </s-table>
+            )}
+
+            {snapshot.packagingReviewItems.length > 0 ? (
+              <s-banner tone="warning">
+                <s-text>
+                  Packaging review: {snapshot.packagingReviewItems.map((item: (typeof snapshot.packagingReviewItems)[number]) => item.reason.replaceAll("_", " ")).join(", ")}
+                </s-text>
+              </s-banner>
+            ) : null}
+          </div>
+        </s-section>
+
         <s-section heading="Line details">
           <div style={{ display: "grid", gap: "1rem" }}>
             {snapshot.lines.map((line: (typeof snapshot.lines)[number]) => (
@@ -314,7 +378,6 @@ export default function OrderSnapshotDetailPage() {
                 >
                   <SummaryTile label="Labor" value={formatMoney(line.effectiveLaborCost)} />
                   <SummaryTile label="Materials" value={formatMoney(line.effectiveMaterialCost)} />
-                  <SummaryTile label="Packaging" value={formatMoney(line.effectivePackagingCost)} />
                   <SummaryTile label="Equipment" value={formatMoney(line.effectiveEquipmentCost)} />
                   <SummaryTile label="Buffer" value={formatMoney(line.mistakeBufferAmount)} />
                   <SummaryTile label="Effective total cost" value={formatMoney(line.effectiveTotalCost)} />

@@ -7,6 +7,7 @@ const ASSET_ROOT = path.resolve(process.cwd(), "extensions/count-on-us-product-w
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
+  const showLineItemDetails = url.searchParams.get("lineDetails") === "1";
   const [css, script] = await Promise.all([
     readFile(path.join(ASSET_ROOT, "assets", "donation-widget.css"), "utf8"),
     readFile(path.join(ASSET_ROOT, "assets", "product-donation-widget.js"), "utf8"),
@@ -120,11 +121,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     css,
     script,
     payload,
+    showLineItemDetails,
   });
 };
 
 export default function ProductDonationWidgetFixtureRoute() {
-  const { host, css, script, payload } = useLoaderData<typeof loader>();
+  const { host, css, script, payload, showLineItemDetails } = useLoaderData<typeof loader>();
 
   const fetchShim = `
     const fixturePayload = ${JSON.stringify(payload)};
@@ -162,123 +164,99 @@ export default function ProductDonationWidgetFixtureRoute() {
   `;
 
   return (
-    <html lang="en">
-      <head>
-        <meta charSet="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <title>Product Donation Widget Fixture</title>
-        <style dangerouslySetInnerHTML={{ __html: css }} />
-      </head>
-      <body style={{ fontFamily: "system-ui, sans-serif", background: "#f6f3eb", margin: 0, padding: "2rem" }}>
-        <main style={{ maxWidth: "48rem", margin: "0 auto", display: "grid", gap: "1rem" }}>
-          <h1 style={{ margin: 0, fontSize: "1.5rem" }}>Product donation widget fixture</h1>
-          <form action="/cart/add" method="post" style={{ display: "grid", gap: "0.75rem" }}>
-            <label style={{ display: "grid", gap: "0.35rem" }}>
-              <span>Variant</span>
-              <select name="id" defaultValue="101">
-                <option value="101">Sticker</option>
-                <option value="202">Canvas print</option>
-              </select>
-            </label>
-            <label style={{ display: "grid", gap: "0.35rem" }}>
-              <span>Quantity</span>
-              <input name="quantity" type="number" min="1" defaultValue="1" />
-            </label>
+    <>
+      <style dangerouslySetInnerHTML={{ __html: css }} />
+      <main style={{ maxWidth: "48rem", margin: "0 auto", display: "grid", gap: "1rem", padding: "2rem" }}>
+        <h1 style={{ margin: 0, fontSize: "1.5rem" }}>Product donation widget fixture</h1>
+        <form action="/cart/add" method="post" style={{ display: "grid", gap: "0.75rem" }}>
+          <label style={{ display: "grid", gap: "0.35rem" }}>
+            <span>Variant</span>
+            <select name="id" defaultValue="101">
+              <option value="101">Sticker</option>
+              <option value="202">Canvas print</option>
+            </select>
+          </label>
+          <label style={{ display: "grid", gap: "0.35rem" }}>
+            <span>Quantity</span>
+            <input name="quantity" type="number" min="1" defaultValue="1" />
+          </label>
+
+          <div
+            className="count-on-us-widget"
+            data-count-on-us-widget
+            data-product-id="gid://shopify/Product/1"
+            data-selected-variant-id="gid://shopify/ProductVariant/101"
+            data-selected-quantity="1"
+            data-show-line-item-details={showLineItemDetails ? "true" : "false"}
+            data-proxy-base="/apps/count-on-us"
+          >
+            <div className="count-on-us-widget__header">
+              <h3 className="count-on-us-widget__heading">See your donation impact</h3>
+              <p className="count-on-us-widget__description">
+                Preview the cost breakdown, estimated donation by cause, and estimated tax reserve for this product.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              className="count-on-us-widget__toggle"
+              data-count-on-us-toggle
+              aria-expanded="false"
+              aria-controls="count-on-us-widget-panel-fixture"
+            >
+              <span>See how we calculate this</span>
+              <span aria-hidden="true">+</span>
+            </button>
 
             <div
-              className="count-on-us-widget"
-              data-count-on-us-widget
-              data-product-id="gid://shopify/Product/1"
-              data-selected-variant-id="gid://shopify/ProductVariant/101"
-              data-selected-quantity="1"
-              data-proxy-base="/apps/count-on-us"
-            >
-              <div className="count-on-us-widget__header">
-                <h3 className="count-on-us-widget__heading">See your donation impact</h3>
-                <p className="count-on-us-widget__description">
-                  Preview the cost breakdown, estimated donation by cause, and estimated tax reserve for this product.
-                </p>
-              </div>
+              id="count-on-us-widget-panel-fixture"
+              className="count-on-us-widget__panel"
+              data-count-on-us-panel
+              hidden
+            ></div>
 
-              <button
-                type="button"
-                className="count-on-us-widget__toggle"
-                data-count-on-us-toggle
-                aria-expanded="false"
-                aria-controls="count-on-us-widget-panel-fixture"
-              >
-                <span>See how we calculate this</span>
-                <span aria-hidden="true">+</span>
-              </button>
+            <div className="count-on-us-widget__visually-hidden" aria-live="polite" data-count-on-us-live></div>
+          </div>
+        </form>
+        <p style={{ margin: 0, color: "#4b5563" }}>Host: {host}</p>
+      </main>
 
-              <div
-                id="count-on-us-widget-panel-fixture"
-                className="count-on-us-widget__panel"
-                data-count-on-us-panel
-                hidden
-              ></div>
+      <script dangerouslySetInnerHTML={{ __html: fetchShim }} />
+      <script dangerouslySetInnerHTML={{ __html: script }} />
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `
+            window.__COUNT_ON_US_PRODUCT_WIDGET_READY__ = false;
 
-              <div className="count-on-us-widget__visually-hidden" aria-live="polite" data-count-on-us-live></div>
-            </div>
-          </form>
-          <p style={{ margin: 0, color: "#4b5563" }}>Host: {host}</p>
-        </main>
+            const markReady = () => {
+              const widget = document.querySelector("[data-count-on-us-widget]");
+              if (!widget) return false;
 
-        <script dangerouslySetInnerHTML={{ __html: fetchShim }} />
-        <script dangerouslySetInnerHTML={{ __html: script }} />
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              window.__COUNT_ON_US_PRODUCT_WIDGET_READY__ = false;
-              window.__COUNT_ON_US_PRODUCT_WIDGET_OPEN__ = false;
+              if (widget.dataset.widgetInteractive === "true" && widget.dataset.widgetBound === "true") {
+                window.__COUNT_ON_US_PRODUCT_WIDGET_READY__ = true;
+                return true;
+              }
 
-              const markReady = () => {
-                const widget = document.querySelector("[data-count-on-us-widget]");
-                if (!widget) return false;
+              return false;
+            };
 
-                if (widget.dataset.widgetInteractive === "true" && widget.dataset.widgetBound === "true") {
-                  window.__COUNT_ON_US_PRODUCT_WIDGET_READY__ = true;
-                  return true;
-                }
+            const triggerBoot = () => {
+              document.dispatchEvent(new Event("DOMContentLoaded", { bubbles: true }));
+              window.dispatchEvent(new Event("load"));
+            };
 
-                return false;
-              };
+            triggerBoot();
 
-              const triggerBoot = () => {
-                document.dispatchEvent(new Event("DOMContentLoaded", { bubbles: true }));
-                window.dispatchEvent(new Event("load"));
-              };
-
-              const openWidget = () => {
-                const toggle = document.querySelector("[data-count-on-us-toggle]");
-                const panel = document.querySelector("[data-count-on-us-panel]");
-                if (!toggle || !panel) return false;
-
-                if (toggle.getAttribute("aria-expanded") !== "true") {
-                  toggle.click();
-                }
-
-                if (toggle.getAttribute("aria-expanded") === "true" && !panel.hidden) {
-                  window.__COUNT_ON_US_PRODUCT_WIDGET_OPEN__ = true;
-                  return true;
-                }
-
-                return false;
-              };
-
+            const ensureReady = () => {
+              if (markReady()) return;
               triggerBoot();
+              window.setTimeout(ensureReady, 50);
+            };
 
-              const ensureReady = () => {
-                if (markReady() && openWidget()) return;
-                triggerBoot();
-                window.setTimeout(ensureReady, 50);
-              };
-
-              ensureReady();
-            `,
-          }}
-        />
-      </body>
-    </html>
+            ensureReady();
+          `,
+        }}
+      />
+    </>
   );
 }

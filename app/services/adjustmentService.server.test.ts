@@ -238,6 +238,51 @@ describe("processOrderUpdate", () => {
     expect(recomputeTaxOffsetCache).toHaveBeenCalled();
   });
 
+  it("uses discounted line subtotals when calculating order update adjustments", async () => {
+    const db = createDb({
+      snapshot: {
+        id: "snapshot-1",
+        lines: [
+          {
+            id: "snapshot-line-1",
+            shopifyLineItemId: "gid://shopify/LineItem/22",
+            quantity: 2,
+            subtotal: decimal("100"),
+            laborCost: decimal("10"),
+            materialCost: decimal("20"),
+            packagingCost: decimal("5"),
+            equipmentCost: decimal("0"),
+            netContribution: decimal("65"),
+            adjustments: [],
+          },
+        ],
+      },
+    });
+
+    const result = await processOrderUpdate(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/123",
+        subtotal_price: "40.00",
+        line_items: [{ id: 22, quantity: 2, price: "50.00", total_discount: "60.00" }],
+      },
+      db,
+    );
+
+    expect(result).toEqual({ created: 1, skipped: 0 });
+    expect(db.__spies.adjustmentCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          laborAdj: decimal("-6"),
+          materialAdj: decimal("-12"),
+          packagingAdj: decimal("-3"),
+          equipmentAdj: decimal("-0"),
+          netContribAdj: decimal("-39"),
+        }),
+      }),
+    );
+  });
+
   it("caps refunds at the original snapshotted quantity", async () => {
     const db = createDb({
       snapshot: {

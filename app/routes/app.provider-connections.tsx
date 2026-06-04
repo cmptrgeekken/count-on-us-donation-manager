@@ -2,12 +2,15 @@ import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 
-import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { jobQueue } from "../jobs/queue.server";
+import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 import {
   disconnectProviderConnection,
   getProviderConnectionsPageData,
+  savePrintifyManualMapping,
   savePrintifyConnection,
 } from "../services/providerConnections.server";
+import { queueProviderSyncRun } from "../services/providerSync.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -18,6 +21,65 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
+  const isBypass = isPlaywrightBypassRequest(request);
+  const testFetch: typeof fetch | undefined = isBypass
+    ? (async (input) => {
+        const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+        if (url.includes("/v1/shops.json")) {
+          return new Response(
+            JSON.stringify({
+              data: [{ id: 1234, title: "Fixture Shop" }],
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+              },
+            },
+          );
+        }
+
+        if (url.includes("/v1/shops/1234/products.json")) {
+          return new Response(
+            JSON.stringify({
+              current_page: 1,
+              last_page: 1,
+              data: [
+                {
+                  id: "printify_product_1",
+                  title: "Provider Fixture Product",
+                  blueprint_id: 11,
+                  print_provider_id: 22,
+                  updated_at: "2026-04-10T15:00:00Z",
+                  variants: [
+                    {
+                      id: 7001,
+                      title: "Mapped-ready Variant",
+                      sku: "SKU-READY-001",
+                      cost: 875,
+                    },
+                  ],
+                },
+              ],
+            }),
+            {
+              status: 200,
+              headers: {
+                "Content-Type": "application/json",
+              },
+            },
+          );
+        }
+
+        return new Response(JSON.stringify({ message: "Not found" }), {
+          status: 404,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        });
+      }) as typeof fetch
+    : undefined;
 
   if (intent === "save-printify-credentials") {
     try {
@@ -25,7 +87,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         shopId: session.shop,
         apiKey: formData.get("apiKey")?.toString() ?? "",
         displayName: formData.get("displayName")?.toString() ?? null,
-      });
+      }, undefined, testFetch);
     } catch (error) {
       if (error instanceof Response) {
         return Response.json({ ok: false, message: await error.text() });
@@ -35,7 +97,59 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     return Response.json({
       ok: true,
-      message: "Printify credentials saved. Live validation and sync will land in a follow-up provider tranche.",
+      message: "Printify credentials validated and saved. Run a sync to import SKU matches and cached POD costs.",
+    });
+  }
+
+  if (intent === "refresh-provider") {
+    const provider = formData.get("provider")?.toString();
+    if (provider !== "printful" && provider !== "printify") {
+      return Response.json({ ok: false, message: "Unknown provider." });
+    }
+
+    try {
+      await queueProviderSyncRun(
+        {
+          shopId: session.shop,
+          provider,
+          trigger: "manual",
+        },
+        undefined,
+        jobQueue,
+      );
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return Response.json({
+      ok: true,
+      message:
+        provider === "printify"
+          ? "Printify sync queued. This refreshes account state, SKU matches, and cached POD costs."
+          : "Printful provider refresh is not available yet.",
+    });
+  }
+
+  if (intent === "save-printify-mapping") {
+    try {
+      await savePrintifyManualMapping({
+        shopId: session.shop,
+        variantId: formData.get("variantId")?.toString() ?? "",
+        catalogVariantId: formData.get("catalogVariantId")?.toString() ?? "",
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return Response.json({
+      ok: true,
+      message: "Printify mapping saved. The selected variant will now use provider-backed POD costs.",
     });
   }
 
@@ -68,20 +182,83 @@ function formatTimestamp(value: string | null) {
   return new Date(value).toLocaleString();
 }
 
+function formatEstimatedExpiry(value: string | null) {
+  if (!value) return "Not available";
+
+  const expiry = new Date(value);
+  const now = new Date();
+  const diffMs = expiry.getTime() - now.getTime();
+  const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffDays < 0) {
+    return `${expiry.toLocaleDateString()} (estimated expired)`;
+  }
+
+  if (diffDays === 0) {
+    return `${expiry.toLocaleDateString()} (estimated today)`;
+  }
+
+  return `${expiry.toLocaleDateString()} (estimated in ${diffDays} day${diffDays === 1 ? "" : "s"})`;
+}
+
 export default function ProviderConnectionsPage() {
-  const { totalVariantCount, variantsWithSkuCount, summaries } = useLoaderData<typeof loader>();
+  const {
+    totalVariantCount,
+    variantsWithSkuCount,
+    printifyCatalogVariants,
+    printifyDiagnostics,
+    printifyUnresolvedVariants,
+    summaries,
+  } = useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const syncFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const mappingFetcher = useFetcher<{ ok: boolean; message: string }>();
   const disconnectFetcher = useFetcher<{ ok: boolean; message: string }>();
   const statusRef = useRef<HTMLDivElement>(null);
-  const saveFormRef = useRef<HTMLFormElement>(null);
   const printify = summaries.find((summary: (typeof summaries)[number]) => summary.provider === "printify");
   const printful = summaries.find((summary: (typeof summaries)[number]) => summary.provider === "printful");
 
   const [printifyApiKey, setPrintifyApiKey] = useState("");
   const [printifyDisplayName, setPrintifyDisplayName] = useState(printify?.displayName ?? "");
   const [printifyFormError, setPrintifyFormError] = useState<string | null>(null);
+  type PrintifyCatalogVariant = (typeof printifyCatalogVariants)[number];
   const saveErrorMessage = printifyFormError ?? (saveFetcher.data && !saveFetcher.data.ok ? saveFetcher.data.message : null);
-  const globalStatus = disconnectFetcher.data ?? (saveFetcher.data?.ok ? saveFetcher.data : null);
+  const globalStatus =
+    disconnectFetcher.data ??
+    mappingFetcher.data ??
+    syncFetcher.data ??
+    (saveFetcher.data?.ok ? saveFetcher.data : null);
+
+  function submitPrintifyCredentials() {
+    const trimmedApiKey = printifyApiKey.trim();
+    if (!trimmedApiKey) {
+      setPrintifyFormError("Printify API key is required.");
+      return;
+    }
+
+    setPrintifyFormError(null);
+    const formData = new FormData();
+    formData.append("intent", "save-printify-credentials");
+    formData.append("displayName", printifyDisplayName);
+    formData.append("apiKey", trimmedApiKey);
+    saveFetcher.submit(formData, { method: "post" });
+  }
+
+  function submitPrintifySync() {
+    const formData = new FormData();
+    formData.append("intent", "refresh-provider");
+    formData.append("provider", "printify");
+    syncFetcher.submit(formData, { method: "post" });
+  }
+
+  function getCatalogOptionsForVariant(variant: (typeof printifyUnresolvedVariants)[number]) {
+    const preferredIds = new Set(variant.suggestedCatalogVariantIds);
+    const preferred = printifyCatalogVariants.filter((catalogVariant: PrintifyCatalogVariant) => preferredIds.has(catalogVariant.id));
+    const fallback = printifyCatalogVariants.filter(
+      (catalogVariant: PrintifyCatalogVariant) => !preferredIds.has(catalogVariant.id) && !catalogVariant.isMapped,
+    );
+    return [...preferred, ...fallback].slice(0, 50);
+  }
 
   return (
     <>
@@ -100,13 +277,14 @@ export default function ProviderConnectionsPage() {
         <s-section heading="Provider Connections">
           <div style={{ display: "grid", gap: "0.75rem" }}>
             <s-text>
-              This page now stores provider configuration state and connection metadata. Full provider sync, live validation,
-              variant mapping, and POD cost resolution are still being built.
+              Provider Connections now validates Printify credentials and tracks sync state. The active rollout focus is
+              importing provider mappings and POD cost inputs cleanly before we broaden the UI further.
             </s-text>
             <s-banner tone="info">
               <s-text>
-                Current scope: save Printify API credentials, review variant SKU coverage, and track provider readiness without
-                pretending sync is already live.
+                Current scope: validate Printify credentials, import Printify SKUs, auto-match unique SKU overlaps, and
+                cache provider fulfillment costs. Shopify variants that are not fulfilled through Printify can remain
+                unmapped and continue using manual cost configuration.
               </s-text>
             </s-banner>
             {saveErrorMessage ? (
@@ -138,7 +316,10 @@ export default function ProviderConnectionsPage() {
             </div>
           </div>
           <div style={{ marginTop: "0.75rem" }}>
-            <s-text>Auto-match will depend on clean SKU coverage. Variants without SKUs will stay unmapped until corrected.</s-text>
+            <s-text>
+              SKU coverage only affects automatic provider matching. Variants without SKUs can still stay manual; add or
+              clean up SKUs when you want Printify-backed costs to sync automatically.
+            </s-text>
           </div>
         </s-section>
 
@@ -149,8 +330,12 @@ export default function ProviderConnectionsPage() {
                 <strong>Status</strong>
                 <s-text>{printify?.note}</s-text>
               </div>
-              <s-badge tone={printify?.configured ? "success" : "warning"}>
-                {printify?.configured ? "Configured" : "Not configured"}
+              <s-badge tone={printify?.status === "validated" ? "success" : printify?.configured ? "info" : "warning"}>
+                {printify?.status === "validated"
+                  ? "Validated"
+                  : printify?.configured
+                    ? "Stored"
+                    : "Not configured"}
               </s-badge>
             </div>
 
@@ -164,15 +349,92 @@ export default function ProviderConnectionsPage() {
                 <div>{printify?.unmappedVariantCount ?? variantsWithSkuCount}</div>
               </div>
               <div>
+                <strong>Token added</strong>
+                <div>{formatTimestamp(printify?.credentialUpdatedAt ?? null)}</div>
+              </div>
+              <div>
+                <strong>Estimated expiry</strong>
+                <div>{formatEstimatedExpiry(printify?.credentialExpiresAt ?? null)}</div>
+              </div>
+              <div>
+                <strong>Validated</strong>
+                <div>{formatTimestamp(printify?.lastValidatedAt ?? null)}</div>
+              </div>
+              <div>
                 <strong>Last sync</strong>
                 <div>{formatTimestamp(printify?.lastSyncedAt ?? null)}</div>
+              </div>
+              <div>
+                <strong>Cached POD lines</strong>
+                <div>{printify?.latestCachedCostCount ?? 0}</div>
+              </div>
+              <div>
+                <strong>Cached provider variants</strong>
+                <div>{printifyDiagnostics.providerCatalogVariantCount}</div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+              <div>
+                <strong>Local missing SKU</strong>
+                <div>{printifyDiagnostics.localMissingSkuCount}</div>
+              </div>
+              <div>
+                <strong>Local duplicate SKU groups</strong>
+                <div>{printifyDiagnostics.localDuplicateSkuCount}</div>
+              </div>
+              <div>
+                <strong>Provider missing SKU</strong>
+                <div>{printifyDiagnostics.providerMissingSkuCount}</div>
+              </div>
+              <div>
+                <strong>Provider duplicate SKU groups</strong>
+                <div>{printifyDiagnostics.providerDuplicateSkuCount}</div>
               </div>
             </div>
 
             {printify?.configured ? (
               <s-banner tone="info">
                 <s-text>
-                  Stored credential hint: {printify.credentialHint ?? "Stored"}. No live validation has run yet.
+                  Stored credential hint: {printify.credentialHint ?? "Stored"}.
+                  {printify?.providerAccountName ? ` Connected account: ${printify.providerAccountName}.` : ""}
+                </s-text>
+              </s-banner>
+            ) : null}
+            {printify?.lastValidationError ? (
+              <s-banner tone="critical">
+                <s-text>{printify.lastValidationError}</s-text>
+              </s-banner>
+            ) : null}
+            {printify?.status === "sync_failed" ? (
+              <s-banner tone="critical">
+                <s-text>
+                  Printify credentials may no longer be working. Reconnect the token if this keeps failing, especially if the
+                  estimated expiry date has passed.
+                </s-text>
+              </s-banner>
+            ) : null}
+            {printify?.lastSyncError ? (
+              <s-banner tone="warning">
+                <s-text>{printify.lastSyncError}</s-text>
+              </s-banner>
+            ) : null}
+            {printify?.latestSyncRunStatus === null && printify?.configured ? (
+              <s-banner tone="info">
+                <s-text>Run your first Printify sync to populate SKU matches and cached POD cost lines.</s-text>
+              </s-banner>
+            ) : null}
+            {printify?.latestSyncRunStatus === "completed" && printifyUnresolvedVariants.length === 0 ? (
+              <s-banner tone="success">
+                <s-text>All uniquely matchable SKU overlaps are currently mapped to Printify.</s-text>
+              </s-banner>
+            ) : null}
+            {printify?.latestSyncRunStatus === "completed" && printifyUnresolvedVariants.length > 0 ? (
+              <s-banner tone="warning">
+                <s-text>
+                  {printifyUnresolvedVariants.length} variant{printifyUnresolvedVariants.length === 1 ? "" : "s"} still
+                  could not be auto-matched to Printify. Review these only if you expect them to use provider-backed POD
+                  costs.
                 </s-text>
               </s-banner>
             ) : null}
@@ -184,20 +446,12 @@ export default function ProviderConnectionsPage() {
             ) : null}
 
             <saveFetcher.Form
-              ref={saveFormRef}
               method="post"
               onSubmit={(event) => {
-                const trimmedApiKey = printifyApiKey.trim();
-                if (!trimmedApiKey) {
-                  event.preventDefault();
-                  setPrintifyFormError("Printify API key is required.");
-                  return;
-                }
-
-                setPrintifyFormError(null);
+                event.preventDefault();
+                submitPrintifyCredentials();
               }}
             >
-              <input type="hidden" name="intent" value="save-printify-credentials" />
               <div style={{ display: "grid", gap: "0.75rem" }}>
                 <div style={{ display: "grid", gap: "0.35rem" }}>
                   <label htmlFor="printify-display-name">Shop label</label>
@@ -247,22 +501,21 @@ export default function ProviderConnectionsPage() {
                   />
                 </div>
                 <s-text>
-                  Credentials are encrypted before persistence. Saving here records connection readiness only; validation and
-                  sync are still pending.
+                  Credentials are encrypted before persistence. Saving here now validates the API key and records the current
+                  Printify account metadata.
                 </s-text>
-                <div>
+                <s-banner tone="info">
+                  <s-text>
+                    Required Printify token scopes for the current rollout: <code>shops.read</code> and <code>products.read</code>.
+                    Printify personal access tokens currently expire after 1 year.
+                  </s-text>
+                </s-banner>
+                <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
                   <button
                     type="button"
                     disabled={saveFetcher.state !== "idle"}
                     onClick={() => {
-                      const trimmedApiKey = printifyApiKey.trim();
-                      if (!trimmedApiKey) {
-                        setPrintifyFormError("Printify API key is required.");
-                        return;
-                      }
-
-                      setPrintifyFormError(null);
-                      saveFormRef.current?.requestSubmit();
+                      submitPrintifyCredentials();
                     }}
                     style={{
                       appearance: "none",
@@ -279,6 +532,27 @@ export default function ProviderConnectionsPage() {
                   >
                     {printify?.configured ? "Update Printify credentials" : "Save Printify credentials"}
                   </button>
+                  {printify?.status === "validated" || printify?.status === "sync_failed" ? (
+                    <button
+                      type="button"
+                      disabled={syncFetcher.state !== "idle"}
+                      onClick={submitPrintifySync}
+                      style={{
+                        appearance: "none",
+                        border: "1px solid var(--p-color-border, #d2d5d8)",
+                        borderRadius: "999px",
+                        padding: "0.7rem 1.1rem",
+                        background: "var(--p-color-bg-surface, #fff)",
+                        color: "var(--p-color-text, #303030)",
+                        font: "inherit",
+                        fontWeight: 600,
+                        cursor: syncFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                        opacity: syncFetcher.state !== "idle" ? 0.6 : 1,
+                      }}
+                    >
+                      Sync Printify catalog
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </saveFetcher.Form>
@@ -290,6 +564,95 @@ export default function ProviderConnectionsPage() {
                   Disconnect Printify
                 </s-button>
               </disconnectFetcher.Form>
+            ) : null}
+
+            {printify?.latestSyncRunStatus === "completed" && printifyUnresolvedVariants.length > 0 ? (
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <strong>Needs review</strong>
+                <div style={{ display: "grid", gap: "0.75rem" }}>
+                  {printifyUnresolvedVariants.map((variant: (typeof printifyUnresolvedVariants)[number]) => (
+                    <div
+                      key={variant.variantId}
+                      style={{
+                        border: "1px solid var(--p-color-border, #d0d5dd)",
+                        borderRadius: "0.75rem",
+                        padding: "0.85rem 1rem",
+                        background: "var(--p-color-bg-surface-secondary, #f6f6f7)",
+                        display: "grid",
+                        gap: "0.25rem",
+                      }}
+                    >
+                      <strong>
+                        {variant.productTitle} · {variant.variantTitle}
+                      </strong>
+                      <s-text>SKU: {variant.sku ?? "Missing SKU"}</s-text>
+                      <s-text>{variant.reason}</s-text>
+                      {getCatalogOptionsForVariant(variant).length > 0 ? (
+                        <mappingFetcher.Form method="post">
+                          <input type="hidden" name="intent" value="save-printify-mapping" />
+                          <input type="hidden" name="variantId" value={variant.variantId} />
+                          <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.5rem" }}>
+                            <label htmlFor={`catalog-variant-${variant.variantId}`}>Manual Printify mapping</label>
+                            <select
+                              id={`catalog-variant-${variant.variantId}`}
+                              name="catalogVariantId"
+                              defaultValue={getCatalogOptionsForVariant(variant)[0]?.id ?? ""}
+                              style={{
+                                width: "100%",
+                                boxSizing: "border-box",
+                                padding: "0.75rem",
+                                borderRadius: "0.75rem",
+                                border: "1px solid var(--p-color-border, #c9cccf)",
+                                background: "var(--p-color-bg-surface, #fff)",
+                                color: "var(--p-color-text, #303030)",
+                                font: "inherit",
+                              }}
+                            >
+                              {getCatalogOptionsForVariant(variant).map((catalogVariant) => (
+                                <option key={catalogVariant.id} value={catalogVariant.id}>
+                                  {catalogVariant.providerProductTitle ?? "Untitled product"} · {catalogVariant.providerVariantTitle ?? "Untitled variant"}
+                                  {catalogVariant.providerSku ? ` · SKU ${catalogVariant.providerSku}` : " · No SKU"}
+                                  {catalogVariant.baseCost ? ` · ${catalogVariant.baseCost} ${catalogVariant.currency}` : ""}
+                                  {catalogVariant.isMapped ? " · already mapped" : ""}
+                                </option>
+                              ))}
+                            </select>
+                            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+                              <button
+                                type="submit"
+                                disabled={mappingFetcher.state !== "idle"}
+                                style={{
+                                  appearance: "none",
+                                  border: 0,
+                                  borderRadius: "999px",
+                                  padding: "0.7rem 1.1rem",
+                                  background: "var(--p-color-bg-fill-brand, #303030)",
+                                  color: "var(--p-color-text-on-color, #fff)",
+                                  font: "inherit",
+                                  fontWeight: 600,
+                                  cursor: mappingFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                                  opacity: mappingFetcher.state !== "idle" ? 0.6 : 1,
+                                }}
+                              >
+                                Save manual mapping
+                              </button>
+                              <s-text>Choose the Printify variant that should drive POD cost resolution for this Shopify variant.</s-text>
+                            </div>
+                          </div>
+                        </mappingFetcher.Form>
+                      ) : (
+                        <s-banner tone="info">
+                          <s-text>No cached Printify variants are available to map yet. Run a sync first, then review again.</s-text>
+                        </s-banner>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <s-text>
+                  Unresolved variants continue using manual cost configuration where available until a provider mapping is
+                  saved.
+                </s-text>
+              </div>
             ) : null}
           </div>
         </s-section>

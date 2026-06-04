@@ -21,7 +21,7 @@ import {
 import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
-import { resolveCosts } from "../services/costEngine.server";
+import { buildAdminVariantEstimate, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import {
@@ -100,6 +100,27 @@ type TemplateEquipmentOverrideLine = {
   hasOverride: boolean;
 };
 
+type SerializedProviderCostLine = {
+  costLineType: string;
+  description: string | null;
+  amount: string;
+  currency: string;
+  syncedAt: string;
+};
+
+type SerializedProviderMapping = {
+  id: string;
+  provider: string;
+  status: string;
+  matchMethod: string | null;
+  providerProductTitle: string | null;
+  providerVariantTitle: string | null;
+  providerSku: string | null;
+  connectionStatus: string;
+  lastCostSyncedAt: string | null;
+  latestCostLines: SerializedProviderCostLine[];
+};
+
 function buildCountMap<T extends string>(values: T[]) {
   const counts = new Map<T, number>();
 
@@ -153,9 +174,19 @@ function serializeVariantEquipmentLine(
   };
 }
 
+function formatProviderName(provider: string) {
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
 const variantDraftSchema = z.object({
   productionTemplateId: z.string().nullable().optional(),
   shippingTemplateId: z.string().nullable().optional(),
+  preferredPackageId: z.string().nullable().optional(),
+  packedLength: z.string(),
+  packedWidth: z.string(),
+  packedHeight: z.string(),
+  packedWeightGrams: z.string(),
+  canSharePackage: z.boolean(),
   laborMinutes: z.string(),
   laborRate: z.string(),
   mistakeBuffer: z.string(),
@@ -201,6 +232,19 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     where: { id: variantId, shopId },
     include: {
       product: { select: { title: true } },
+      providerMappings: {
+        orderBy: [{ updatedAt: "desc" }],
+        include: {
+          connection: {
+            select: {
+              status: true,
+            },
+          },
+          costLines: {
+            orderBy: [{ syncedAt: "desc" }, { createdAt: "desc" }],
+          },
+        },
+      },
       costConfig: {
         include: {
           productionTemplate: {
@@ -220,7 +264,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const [templates, materials, equipment] = await Promise.all([
+  const [templates, materials, equipment, packages] = await Promise.all([
     prisma.costTemplate.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
@@ -238,6 +282,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
       select: { id: true, name: true, hourlyRate: true, perUseCost: true },
+    }),
+    prisma.shippingPackage.findMany({
+      where: { shopId, status: "active" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, length: true, width: true, height: true },
     }),
   ]);
 
@@ -344,6 +393,34 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       .map(serializeVariantEquipmentLine);
   }
 
+  const serializedProviderMappings: SerializedProviderMapping[] = variant.providerMappings.map((mapping) => {
+    const latestSyncedAt = mapping.costLines[0]?.syncedAt ?? null;
+    const latestCostLines = latestSyncedAt
+      ? mapping.costLines
+          .filter((line) => line.syncedAt.getTime() === latestSyncedAt.getTime())
+          .map((line) => ({
+            costLineType: line.costLineType,
+            description: line.description ?? null,
+            amount: line.amount.toString(),
+            currency: line.currency,
+            syncedAt: line.syncedAt.toISOString(),
+          }))
+      : [];
+
+    return {
+      id: mapping.id,
+      provider: mapping.provider,
+      status: mapping.status,
+      matchMethod: mapping.matchMethod ?? null,
+      providerProductTitle: mapping.providerProductTitle ?? null,
+      providerVariantTitle: mapping.providerVariantTitle ?? null,
+      providerSku: mapping.providerSku ?? null,
+      connectionStatus: mapping.connection.status,
+      lastCostSyncedAt: mapping.lastCostSyncedAt?.toISOString() ?? null,
+      latestCostLines,
+    };
+  });
+
   return Response.json({
     variant: {
       id: variant.id,
@@ -351,6 +428,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       title: variant.title,
       sku: variant.sku ?? "",
       price: variant.price.toString(),
+      providerMappings: serializedProviderMappings,
     },
     shopDefaults: {
       defaultLaborRate: shop?.defaultLaborRate?.toString() ?? "",
@@ -361,6 +439,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           id: config.id,
           productionTemplateId: config.productionTemplateId,
           shippingTemplateId: config.shippingTemplateId,
+          preferredPackageId: config.preferredPackageId,
+          packedLength: config.packedLength?.toString() ?? "",
+          packedWidth: config.packedWidth?.toString() ?? "",
+          packedHeight: config.packedHeight?.toString() ?? "",
+          packedWeightGrams: config.packedWeightGrams?.toString() ?? "",
+          canSharePackage: config.canSharePackage,
           templateName: config.productionTemplate?.name ?? null,
           laborMinutes: config.laborMinutes?.toString() ?? "",
           laborRate: config.laborRate?.toString() ?? "",
@@ -409,6 +493,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       hourlyRate: item.hourlyRate?.toString() ?? null,
       perUseCost: item.perUseCost?.toString() ?? null,
     })),
+    packages: packages.map((pkg) => ({
+      id: pkg.id,
+      name: pkg.name,
+      dimensions: `${pkg.length} x ${pkg.width} x ${pkg.height}`,
+    })),
   });
 };
 
@@ -419,7 +508,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const variant = await prisma.variant.findFirst({
     where: { id: variantId, shopId },
-    select: { shopId: true, price: true },
+    select: { shopId: true },
   });
   if (!variant) {
     return Response.json({ ok: false, message: "Not found." }, { status: 404 });
@@ -573,6 +662,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const draft = parsedDraft.data;
     const normalizedProductionTemplateId = draft.productionTemplateId?.trim() || null;
     const normalizedShippingTemplateId = draft.shippingTemplateId?.trim() || null;
+    const normalizedPreferredPackageId = draft.preferredPackageId?.trim() || null;
     const selectedTemplate = normalizedProductionTemplateId
       ? await prisma.costTemplate.findFirst({
           where: { id: normalizedProductionTemplateId, shopId },
@@ -604,6 +694,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     if (selectedShippingTemplate && selectedShippingTemplate.type !== "shipping") {
       return Response.json({ ok: false, message: "Shipping override must reference a shipping template." }, { status: 400 });
+    }
+
+    if (normalizedPreferredPackageId) {
+      const preferredPackage = await prisma.shippingPackage.findFirst({
+        where: { id: normalizedPreferredPackageId, shopId, status: "active" },
+        select: { id: true },
+      });
+      if (!preferredPackage) {
+        return Response.json({ ok: false, message: "Preferred package not found." }, { status: 404 });
+      }
     }
 
     const materialMap = new Map((selectedTemplate?.materialLines ?? []).map((line) => [line.id, line.materialId]));
@@ -652,6 +752,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         draft.laborMinutes ||
         draft.laborRate ||
         draft.mistakeBuffer ||
+        normalizedPreferredPackageId ||
+        draft.packedLength ||
+        draft.packedWidth ||
+        draft.packedHeight ||
+        draft.packedWeightGrams ||
+        draft.canSharePackage === false ||
         draft.materialLines.length ||
         draft.equipmentLines.length ||
         draft.templateMaterialLines.some((line) => line.hasOverride) ||
@@ -724,6 +830,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           data: {
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
+            preferredPackageId: normalizedPreferredPackageId,
+            packedLength: parseOptionalNonNegativeNumber(draft.packedLength, "Packed length"),
+            packedWidth: parseOptionalNonNegativeNumber(draft.packedWidth, "Packed width"),
+            packedHeight: parseOptionalNonNegativeNumber(draft.packedHeight, "Packed height"),
+            packedWeightGrams: parseOptionalNonNegativeNumber(draft.packedWeightGrams, "Packed weight"),
+            canSharePackage: draft.canSharePackage,
             laborMinutes: parseOptionalNonNegativeNumber(draft.laborMinutes, "Labor minutes"),
             laborRate: parseOptionalNonNegativeNumber(draft.laborRate, "Labor rate"),
             mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer, "Mistake buffer"),
@@ -737,6 +849,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             variantId,
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
+            preferredPackageId: normalizedPreferredPackageId,
+            packedLength: parseOptionalNonNegativeNumber(draft.packedLength, "Packed length"),
+            packedWidth: parseOptionalNonNegativeNumber(draft.packedWidth, "Packed width"),
+            packedHeight: parseOptionalNonNegativeNumber(draft.packedHeight, "Packed height"),
+            packedWeightGrams: parseOptionalNonNegativeNumber(draft.packedWeightGrams, "Packed weight"),
+            canSharePackage: draft.canSharePackage,
             laborMinutes: parseOptionalNonNegativeNumber(draft.laborMinutes, "Labor minutes"),
             laborRate: parseOptionalNonNegativeNumber(draft.laborRate, "Labor rate"),
             mistakeBuffer: parseOptionalPercent(draft.mistakeBuffer, "Mistake buffer"),
@@ -1211,23 +1329,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   if (intent === "preview-cost") {
-    const result = await resolveCosts(
-      shopId,
-      variantId,
-      variant.price,
-      "preview",
-      prisma as Parameters<typeof resolveCosts>[4],
-    );
+    const estimate = await buildAdminVariantEstimate(shopId, variantId);
+    if (!estimate) {
+      return Response.json({ ok: false, message: "Not found." }, { status: 404 });
+    }
     return Response.json({
       ok: true,
-      preview: {
-        laborCost: result.laborCost.toFixed(2),
-        materialCost: result.materialCost.toFixed(2),
-        packagingCost: result.packagingCost.toFixed(2),
-        equipmentCost: result.equipmentCost.toFixed(2),
-        mistakeBufferAmount: result.mistakeBufferAmount.toFixed(2),
-        totalCost: result.totalCost.toFixed(2),
-      },
+      preview: estimate,
     });
   }
 
@@ -1248,6 +1356,12 @@ type AvailableEquipment = {
   name: string;
   hourlyRate: string | null;
   perUseCost: string | null;
+};
+
+type AvailablePackage = {
+  id: string;
+  name: string;
+  dimensions: string;
 };
 
 function describeMaterialLine(line: {
@@ -1275,6 +1389,12 @@ function describeEquipmentLine(line: {
 function buildVariantDraft(config: {
   productionTemplateId?: string | null;
   shippingTemplateId?: string | null;
+  preferredPackageId?: string | null;
+  packedLength: string;
+  packedWidth: string;
+  packedHeight: string;
+  packedWeightGrams: string;
+  canSharePackage: boolean;
   laborMinutes: string;
   laborRate: string;
   mistakeBuffer: string;
@@ -1286,6 +1406,12 @@ function buildVariantDraft(config: {
   return {
     productionTemplateId: config?.productionTemplateId ?? null,
     shippingTemplateId: config?.shippingTemplateId ?? null,
+    preferredPackageId: config?.preferredPackageId ?? null,
+    packedLength: config?.packedLength ?? "",
+    packedWidth: config?.packedWidth ?? "",
+    packedHeight: config?.packedHeight ?? "",
+    packedWeightGrams: config?.packedWeightGrams ?? "",
+    canSharePackage: config?.canSharePackage ?? true,
     laborMinutes: config?.laborMinutes ?? "",
     laborRate: config?.laborRate ?? "",
     mistakeBuffer: config?.mistakeBuffer ?? "",
@@ -1301,10 +1427,14 @@ function serializeVariantDraftState(draft: VariantDraft) {
 }
 
 export default function VariantDetailPage() {
-  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment } =
+  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment, packages } =
     useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
-  const previewFetcher = useFetcher<{ ok: boolean; message: string; preview?: Record<string, string> }>();
+  const previewFetcher = useFetcher<{
+    ok: boolean;
+    message: string;
+    preview?: VariantEstimatePayload;
+  }>();
   const revalidator = useRevalidator();
 
   const { formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
@@ -1351,6 +1481,10 @@ export default function VariantDetailPage() {
   const isSaving = saveFetcher.state !== "idle";
   const productionTemplates = templates.filter((template: TemplateCatalogEntry) => template.type !== "shipping");
   const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
+  const packageOptions = [
+    { label: "No preferred package", value: "" },
+    ...packages.map((pkg: AvailablePackage) => ({ label: `${pkg.name} (${pkg.dimensions})`, value: pkg.id })),
+  ];
   const effectiveTemplateSelection = resolveEffectiveTemplateSelection(
     {
       productionTemplateId: draft.productionTemplateId ?? null,
@@ -1652,6 +1786,90 @@ export default function VariantDetailPage() {
 
         <Card>
           <BlockStack gap="400">
+            <BlockStack gap="100">
+              <InlineStack gap="200" blockAlign="center">
+                <Text as="h2" variant="headingMd">Provider mappings</Text>
+                {variant.providerMappings.length > 0 ? (
+                  <Badge tone="info">
+                    {variant.providerMappings.length} active mapping{variant.providerMappings.length === 1 ? "" : "s"}
+                  </Badge>
+                ) : null}
+              </InlineStack>
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Provider mappings are optional. Automatic Printify matching only happens when a Shopify variant and a
+                provider variant share a unique SKU.
+              </Text>
+            </BlockStack>
+            <Divider />
+            {variant.providerMappings.length === 0 ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                No provider mapping is saved for this variant yet. Manual cost configuration remains in effect unless you
+                choose to map this variant through a POD provider.
+              </Text>
+            ) : (
+              <BlockStack gap="400">
+                {variant.providerMappings.map((mapping: SerializedProviderMapping) => (
+                  <BlockStack key={mapping.id} gap="200">
+                    <InlineStack align="space-between" blockAlign="center">
+                      <InlineStack gap="200" blockAlign="center">
+                        <Text as="p" variant="bodyMd" fontWeight="semibold">{formatProviderName(mapping.provider)}</Text>
+                        <Badge tone={mapping.status === "mapped" ? "success" : "warning"}>
+                          {mapping.status === "mapped" ? "Mapped" : mapping.status}
+                        </Badge>
+                        <Badge tone={mapping.connectionStatus === "validated" ? "info" : "warning"}>
+                          {mapping.connectionStatus === "validated" ? "Connection healthy" : "Connection needs review"}
+                        </Badge>
+                      </InlineStack>
+                      <Text as="p" variant="bodySm" tone="subdued">
+                        {mapping.lastCostSyncedAt
+                          ? `Costs synced ${new Date(mapping.lastCostSyncedAt).toLocaleString()}`
+                          : "No cached provider costs yet"}
+                      </Text>
+                    </InlineStack>
+
+                    <BlockStack gap="100">
+                      {mapping.providerProductTitle ? (
+                        <Text as="p" variant="bodyMd">Provider product: {mapping.providerProductTitle}</Text>
+                      ) : null}
+                      {mapping.providerVariantTitle ? (
+                        <Text as="p" variant="bodyMd">Provider variant: {mapping.providerVariantTitle}</Text>
+                      ) : null}
+                      {mapping.providerSku ? (
+                        <Text as="p" variant="bodyMd">Provider SKU: {mapping.providerSku}</Text>
+                      ) : null}
+                      {mapping.matchMethod ? (
+                        <Text as="p" variant="bodyMd" tone="subdued">
+                          Match method: {mapping.matchMethod === "sku" ? "Unique SKU match" : mapping.matchMethod}
+                        </Text>
+                      ) : null}
+                    </BlockStack>
+
+                    {mapping.latestCostLines.length > 0 ? (
+                      <BlockStack gap="100">
+                        <Text as="h3" variant="headingSm">Latest cached POD costs</Text>
+                        {mapping.latestCostLines.map((line) => (
+                          <InlineStack key={`${mapping.id}-${line.costLineType}-${line.description ?? "line"}`} align="space-between">
+                            <Text as="p" variant="bodyMd">
+                              {line.description ?? line.costLineType}
+                            </Text>
+                            <Text as="p" variant="bodyMd">{formatMoney(line.amount)}</Text>
+                          </InlineStack>
+                        ))}
+                      </BlockStack>
+                    ) : (
+                      <Text as="p" variant="bodyMd" tone="subdued">
+                        No cached POD costs have been stored for this mapping yet.
+                      </Text>
+                    )}
+                  </BlockStack>
+                ))}
+              </BlockStack>
+            )}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
               <Text as="h2" variant="headingMd">Production Template</Text>
               <InlineStack gap="200">
@@ -1752,6 +1970,84 @@ export default function VariantDetailPage() {
                 No shipping template is currently effective for this variant.
               </Text>
             )}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="400">
+            <BlockStack gap="100">
+              <Text as="h2" variant="headingMd">Package Profile</Text>
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Used by automatic cartonization for future order snapshots. Shipping templates remain estimate-only.
+              </Text>
+            </BlockStack>
+            <Divider />
+            <BlockStack gap="400">
+              <Select
+                label="Preferred package"
+                options={packageOptions}
+                value={draft.preferredPackageId ?? ""}
+                onChange={(value) => setDraft((current) => ({ ...current, preferredPackageId: value || null }))}
+              />
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Packed length"
+                    type="number"
+                    min={0}
+                    step={0.001}
+                    value={draft.packedLength}
+                    onChange={(value) => setDraft((current) => ({ ...current, packedLength: value }))}
+                    autoComplete="off"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Packed width"
+                    type="number"
+                    min={0}
+                    step={0.001}
+                    value={draft.packedWidth}
+                    onChange={(value) => setDraft((current) => ({ ...current, packedWidth: value }))}
+                    autoComplete="off"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Packed height"
+                    type="number"
+                    min={0}
+                    step={0.001}
+                    value={draft.packedHeight}
+                    onChange={(value) => setDraft((current) => ({ ...current, packedHeight: value }))}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Packed weight (g)"
+                    type="number"
+                    min={0}
+                    step={0.001}
+                    value={draft.packedWeightGrams}
+                    onChange={(value) => setDraft((current) => ({ ...current, packedWeightGrams: value }))}
+                    autoComplete="off"
+                  />
+                </div>
+                <div style={{ flex: 1, display: "flex", alignItems: "end" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <input
+                      type="checkbox"
+                      checked={draft.canSharePackage}
+                      onChange={(event) => setDraft((current) => ({ ...current, canSharePackage: event.currentTarget.checked }))}
+                    />
+                    <span>Can share a package with other items</span>
+                  </label>
+                </div>
+              </InlineStack>
+            </BlockStack>
           </BlockStack>
         </Card>
 
@@ -2062,32 +2358,84 @@ export default function VariantDetailPage() {
             ) : !preview ? (
               <Text as="p" variant="bodyMd" tone="subdued">Click Refresh to calculate the current cost breakdown.</Text>
             ) : (
-              <BlockStack gap="200">
+              <BlockStack gap="300">
                 <InlineStack align="space-between">
-                  <Text as="p" variant="bodyMd">Labor</Text>
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">Estimated sale price</Text>
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">{formatMoney(preview.reconciliation.estimatedTotal)}</Text>
+                </InlineStack>
+                <Divider />
+                <InlineStack align="space-between">
+                  <Text as="p" variant="bodyMd">Assembly / labor</Text>
                   <Text as="p" variant="bodyMd">{formatMoney(preview.laborCost)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Materials (production)</Text>
-                  <Text as="p" variant="bodyMd">{formatMoney(preview.materialCost)}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.materials)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Packaging (shipping materials)</Text>
-                  <Text as="p" variant="bodyMd">{formatMoney(preview.packagingCost)}</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.packaging)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
-                  <Text as="p" variant="bodyMd">Equipment</Text>
-                  <Text as="p" variant="bodyMd">{formatMoney(preview.equipmentCost)}</Text>
+                  <Text as="p" variant="bodyMd">Equipment / maintenance</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.equipment)}</Text>
+                </InlineStack>
+                <InlineStack align="space-between">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text as="p" variant="bodyMd">POD fulfillment</Text>
+                    {preview.podCostEstimated ? <Badge tone="info">Cached estimate</Badge> : null}
+                    {preview.podCostMissing ? <Badge tone="warning">Missing cost data</Badge> : null}
+                  </InlineStack>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.podCostTotal)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Mistake buffer</Text>
                   <Text as="p" variant="bodyMd">{formatMoney(preview.mistakeBufferAmount)}</Text>
                 </InlineStack>
+                <InlineStack align="space-between">
+                  <Text as="p" variant="bodyMd">Approx. Shopify/payment fees</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.shopifyFees)}</Text>
+                </InlineStack>
+                <InlineStack align="space-between">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text as="p" variant="bodyMd">Approx. tax buffer withheld</Text>
+                    {preview.taxReserve.suppressed ? <Badge tone="info">Suppressed</Badge> : null}
+                  </InlineStack>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.taxReserve.estimatedAmount)}</Text>
+                </InlineStack>
                 <Divider />
                 <InlineStack align="space-between">
-                  <Text as="p" variant="bodyMd" fontWeight="semibold">Total cost</Text>
-                  <Text as="p" variant="bodyMd" fontWeight="semibold">{formatMoney(preview.totalCost)}</Text>
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">Approx. assigned donations</Text>
+                  <Text as="p" variant="bodyMd" fontWeight="semibold">{formatMoney(preview.reconciliation.allocatedDonations)}</Text>
                 </InlineStack>
+                {preview.causes.length > 0 ? (
+                  <BlockStack gap="200">
+                    {preview.causes.map((cause) => (
+                      <InlineStack key={cause.causeId} align="space-between">
+                        <Text as="p" variant="bodySm">{cause.name} ({cause.donationPercentage}%)</Text>
+                        <Text as="p" variant="bodySm">{formatMoney(cause.estimatedDonationAmount)}</Text>
+                      </InlineStack>
+                    ))}
+                  </BlockStack>
+                ) : (
+                  <Text as="p" variant="bodyMd" tone="subdued">No active cause assignments are configured for this product.</Text>
+                )}
+                <details>
+                  <summary>Advanced reconciliation</summary>
+                  <div style={{ display: "grid", gap: "0.5rem", marginTop: "0.75rem" }}>
+                    <InlineStack align="space-between">
+                      <Text as="p" variant="bodySm">Retained / unassigned</Text>
+                      <Text as="p" variant="bodySm">{formatMoney(preview.reconciliation.retainedByShop)}</Text>
+                    </InlineStack>
+                    <InlineStack align="space-between">
+                      <Text as="p" variant="bodySm">Rounding remainder</Text>
+                      <Text as="p" variant="bodySm">{formatMoney(preview.reconciliation.remainder)}</Text>
+                    </InlineStack>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      Processing fee estimate uses {preview.shopifyFees.processingRate}% plus {formatMoney(preview.shopifyFees.processingFlatFee)}.
+                    </Text>
+                  </div>
+                </details>
               </BlockStack>
             )}
           </BlockStack>

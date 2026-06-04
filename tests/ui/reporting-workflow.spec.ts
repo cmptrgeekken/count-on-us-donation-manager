@@ -97,8 +97,9 @@ test("reporting dashboard can record a surplus tax true-up", async ({ page, requ
   await expect(page.getByRole("heading", { name: "Tax true-up" })).toBeVisible();
   await expect(trueUpSection.getByText("$10.00")).toBeVisible();
 
-  await page.locator("#true-up-actual-tax").fill("8");
-  await page.locator("#true-up-filed-at").fill("2026-04-08");
+  await page.getByLabel("Actual tax paid").fill("8");
+  await expect(page.getByLabel("Actual tax paid")).toHaveValue("8");
+  await page.getByLabel("Filed date").fill("2026-04-08");
   await page.locator('input[name^="redistribution:"]').first().fill("2");
   await page.getByRole("button", { name: "Record tax true-up" }).click();
 

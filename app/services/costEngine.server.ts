@@ -6,7 +6,7 @@
  * - Accepts a Prisma client to allow callers to pass a transaction client.
  * - Returns a fully materialised cost structure.
  * - "snapshot" mode: includes netContribution and raw library values.
- * - "preview" mode: display-safe — omits netContribution, purchasePrice, perUnitCost.
+ * - "preview" mode: display-safe at API assembly time — omits netContribution from CostEngine output.
  */
 import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
@@ -22,7 +22,9 @@ export type ResolvedMaterialLine = {
   yield: Prisma.Decimal | null;
   usesPerVariant: Prisma.Decimal | null;
   lineCost: Prisma.Decimal;
-  // snapshot mode only:
+  unitDescription?: string | null;
+  purchaseLink?: string | null;
+  totalUsesPerUnit?: Prisma.Decimal | null;
   purchasePrice?: Prisma.Decimal;
   purchaseQty?: Prisma.Decimal;
   perUnitCost?: Prisma.Decimal;
@@ -34,24 +36,40 @@ export type ResolvedEquipmentLine = {
   minutes: Prisma.Decimal | null;
   uses: Prisma.Decimal | null;
   lineCost: Prisma.Decimal;
-  // snapshot mode only:
+  purchaseLink?: string | null;
   hourlyRate?: Prisma.Decimal | null;
   perUseCost?: Prisma.Decimal | null;
+};
+
+export type ResolvedPodLine = {
+  provider: string;
+  costLineType: string;
+  description: string | null;
+  amount: Prisma.Decimal;
+  currency: string;
 };
 
 export type CostResult = {
   laborCost: Prisma.Decimal;
   materialCost: Prisma.Decimal;      // production materials only (before mistake buffer)
-  packagingCost: Prisma.Decimal;     // max shipping material line (ADR-003 packaging rule)
+  packagingCost: Prisma.Decimal;     // sum of shipping material lines in preview; order flows may override
   equipmentCost: Prisma.Decimal;
   mistakeBufferAmount: Prisma.Decimal; // applied to production materials only
-  podCost: Prisma.Decimal;           // stubbed at 0 until Phase 2.9
+  podCost: Prisma.Decimal;
+  podLines: ResolvedPodLine[];
+  podCostEstimated: boolean;
+  podCostMissing: boolean;
   totalCost: Prisma.Decimal;
   materialLines: ResolvedMaterialLine[];
   equipmentLines: ResolvedEquipmentLine[];
   // snapshot mode only:
   netContribution?: Prisma.Decimal;
 };
+
+export type PodCostResolution = Pick<
+  CostResult,
+  "podCost" | "podLines" | "podCostEstimated" | "podCostMissing"
+>;
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -113,6 +131,75 @@ function computeEquipmentLineCost(params: {
   return cost;
 }
 
+async function resolvePodCosts(
+  shopId: string,
+  variantId: string,
+  db: PrismaClient,
+): Promise<PodCostResolution> {
+  const mappings = await db.providerVariantMapping.findMany({
+    where: {
+      shopId,
+      variantId,
+    },
+    include: {
+      connection: {
+        select: {
+          status: true,
+        },
+      },
+      costLines: {
+        orderBy: [{ syncedAt: "desc" }, { createdAt: "desc" }],
+      },
+    },
+  });
+
+  const activeMappings = mappings.filter(
+    (mapping) =>
+      mapping.connection.status === "validated" &&
+      mapping.status !== "inactive" &&
+      Boolean(mapping.providerVariantId),
+  );
+
+  const podLines: ResolvedPodLine[] = [];
+  let podCostMissing = false;
+
+  for (const mapping of activeMappings) {
+    const latestSyncedAt = mapping.costLines[0]?.syncedAt;
+    if (!latestSyncedAt) {
+      podCostMissing = true;
+      continue;
+    }
+
+    const latestLines = mapping.costLines.filter(
+      (line) => line.syncedAt.getTime() === latestSyncedAt.getTime(),
+    );
+
+    if (latestLines.length === 0) {
+      podCostMissing = true;
+      continue;
+    }
+
+    for (const line of latestLines) {
+      podLines.push({
+        provider: mapping.provider,
+        costLineType: line.costLineType,
+        description: line.description ?? null,
+        amount: line.amount,
+        currency: line.currency,
+      });
+    }
+  }
+
+  const podCost = podLines.reduce((sum, line) => sum.add(line.amount), ZERO);
+
+  return {
+    podCost,
+    podLines,
+    podCostEstimated: podLines.length > 0,
+    podCostMissing,
+  };
+}
+
 export async function resolveCosts(
   shopId: string,
   variantId: string,
@@ -120,6 +207,7 @@ export async function resolveCosts(
   mode: CostEngineMode,
   db: PrismaClient,
   packagingCostOverride?: Prisma.Decimal,
+  podCostOverride?: PodCostResolution,
 ): Promise<CostResult> {
   // Step 1: Load VariantCostConfig with all lines and library items
   const config = await db.variantCostConfig.findUnique({
@@ -147,20 +235,29 @@ export async function resolveCosts(
       equipmentLines: { include: { equipment: true, templateLine: true } },
     },
   });
-
+  const {
+    podCost,
+    podLines,
+    podCostEstimated,
+    podCostMissing,
+  } = podCostOverride ?? await resolvePodCosts(shopId, variantId, db);
   // No config — return all zeros (valid, not configured yet)
   if (!config) {
+    const totalCost = podCost;
     return {
       laborCost: ZERO,
       materialCost: ZERO,
       packagingCost: ZERO,
       equipmentCost: ZERO,
       mistakeBufferAmount: ZERO,
-      podCost: ZERO,
-      totalCost: ZERO,
+      podCost,
+      podLines,
+      podCostEstimated,
+      podCostMissing,
+      totalCost,
       materialLines: [],
       equipmentLines: [],
-      ...(mode === "snapshot" ? { netContribution: salePrice.neg() } : {}),
+      ...(mode === "snapshot" ? { netContribution: salePrice.sub(totalCost) } : {}),
     };
   }
 
@@ -271,13 +368,14 @@ export async function resolveCosts(
       yield: l.yield_,
       usesPerVariant: l.usesPerVariant,
       lineCost,
+      unitDescription: l.material.unitDescription ?? null,
+      purchaseLink: l.material.purchaseLink ?? null,
+      totalUsesPerUnit: l.material.totalUsesPerUnit,
     };
 
-    if (mode === "snapshot") {
-      line.purchasePrice = l.material.purchasePrice;
-      line.purchaseQty = l.material.purchaseQty;
-      line.perUnitCost = l.material.perUnitCost;
-    }
+    line.purchasePrice = l.material.purchasePrice;
+    line.purchaseQty = l.material.purchaseQty;
+    line.perUnitCost = l.material.perUnitCost;
 
     return line;
   });
@@ -355,27 +453,23 @@ export async function resolveCosts(
       minutes: l.minutes,
       uses: l.uses,
       lineCost,
+      purchaseLink: l.equipment.purchaseLink ?? null,
     };
 
-    if (mode === "snapshot") {
-      line.hourlyRate = l.equipment.hourlyRate;
-      line.perUseCost = l.equipment.perUseCost;
-    }
+    line.hourlyRate = l.equipment.hourlyRate;
+    line.perUseCost = l.equipment.perUseCost;
 
     return line;
   });
 
-  // Step 4: POD (stubbed — Phase 2.9)
-  const podCost = ZERO;
-
-  // Step 5: Packaging rule — max cost among shipping material lines (ADR-003)
+  // Step 5: Packaging preview — sum shipping material lines.
   const shippingLineCosts = resolvedMaterialLines
     .filter((l) => l.type === "shipping")
     .map((l) => l.lineCost);
 
   const computedPackagingCost =
     shippingLineCosts.length > 0
-      ? shippingLineCosts.reduce((max, c) => (c.gt(max) ? c : max), ZERO)
+      ? shippingLineCosts.reduce((sum, c) => sum.add(c), ZERO)
       : ZERO;
 
   const packagingCost =
@@ -423,6 +517,9 @@ export async function resolveCosts(
     equipmentCost,
     mistakeBufferAmount,
     podCost,
+    podLines,
+    podCostEstimated,
+    podCostMissing,
     totalCost,
     materialLines: resolvedMaterialLines,
     equipmentLines: resolvedEquipmentLines,

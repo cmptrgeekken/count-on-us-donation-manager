@@ -163,3 +163,24 @@ test("cart donation summary refreshes when a new cart line is added", async ({ p
   await page.locator(".cart-item").nth(2).locator('input[name="updates[]"]').dispatchEvent("change");
   await expect(page.locator(".cart-item").nth(2)).toContainText("Donations apply");
 });
+
+test("cart donation summary annotations stay aligned when the cart repeats the same product with different variants", async ({
+  page,
+}) => {
+  await page.goto("/ui-fixtures/cart-donation-summary?mode=duplicate-product");
+  await page.waitForFunction(
+    () => (window as Window & { __COUNT_ON_US_CART_SUMMARY_READY__?: boolean }).__COUNT_ON_US_CART_SUMMARY_READY__ === true,
+  );
+
+  await page.getByRole("button", { name: "See donation details" }).click();
+  await page.keyboard.press("Escape");
+
+  await expect(page.locator(".cart-item")).toHaveCount(3);
+  await expect(page.locator(".cart-item").nth(0).locator("[data-count-on-us-cart-annotation]")).toHaveCount(1);
+  await expect(page.locator(".cart-item").nth(1).locator("[data-count-on-us-cart-annotation]")).toHaveCount(1);
+  await expect(page.locator(".cart-item").nth(2).locator("[data-count-on-us-cart-annotation]")).toHaveCount(1);
+
+  await page.locator(".cart-item").nth(2).getByLabel("Show supported causes").focus();
+  await expect(page.locator(".cart-item").nth(2).getByRole("tooltip")).toContainText("60% to Neighborhood Arts");
+  await expect(page.locator(".cart-item").nth(2).getByRole("tooltip")).toContainText("40% to Community Library");
+});

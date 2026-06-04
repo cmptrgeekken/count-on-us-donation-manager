@@ -42,6 +42,7 @@ describe("refreshTaxOffsetCachesForActiveShops", () => {
     const result = await refreshTaxOffsetCachesForActiveShops(db as any);
 
     expect(db.shop.findMany).toHaveBeenCalledWith({
+      where: { shopId: { not: "" } },
       select: { shopId: true },
     });
     expect(recomputeTaxOffsetCache).toHaveBeenNthCalledWith(1, "shop-1", expect.any(Object));

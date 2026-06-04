@@ -80,6 +80,8 @@ async function resetShopData(shopId) {
   await prisma.$transaction([
     deleteByShop(prisma.adjustment),
     deleteByShop(prisma.lineCauseAllocation),
+    deleteByShop(prisma.packagingReviewItem),
+    deleteByShop(prisma.orderPackageAllocation),
     prisma.orderSnapshotMaterialLine.deleteMany({
       where: { snapshotLine: { snapshot: { shopId } } },
     }),
@@ -110,6 +112,8 @@ async function resetShopData(shopId) {
       where: { template: { shopId } },
     }),
     deleteByShop(prisma.costTemplate),
+    deleteByShop(prisma.shippingPackageMaterialLine),
+    deleteByShop(prisma.shippingPackage),
     deleteByShop(prisma.materialLibraryItem),
     deleteByShop(prisma.equipmentLibraryItem),
     deleteByShop(prisma.cause),
@@ -138,6 +142,24 @@ async function clearSeedArtifacts(shopId, shopKey) {
           shopId,
           shopifyOrderId: { startsWith: `${seedGidPrefix}Order/` },
         },
+      },
+    },
+  });
+
+  await prisma.packagingReviewItem.deleteMany({
+    where: {
+      snapshot: {
+        shopId,
+        shopifyOrderId: { startsWith: `${seedGidPrefix}Order/` },
+      },
+    },
+  });
+
+  await prisma.orderPackageAllocation.deleteMany({
+    where: {
+      snapshot: {
+        shopId,
+        shopifyOrderId: { startsWith: `${seedGidPrefix}Order/` },
       },
     },
   });
@@ -526,12 +548,38 @@ async function seed(shopId, options) {
     });
   }
 
+  const seedPackage = await prisma.shippingPackage.create({
+    data: {
+      shopId,
+      name: "Seeded rigid mailer",
+      length: decimal("12.00"),
+      width: decimal("9.00"),
+      height: decimal("1.00"),
+      emptyWeightGrams: decimal("45.00"),
+      maxWeightGrams: decimal("450.00"),
+      source: "seed",
+      materialLines: {
+        create: {
+          shopId,
+          materialId: materialShip.id,
+          quantity: decimal("1.00"),
+        },
+      },
+    },
+  });
+
   const config = await prisma.variantCostConfig.create({
     data: {
       shopId,
       variantId: products[0].variants[0].id,
       productionTemplateId: productionTemplate.id,
       shippingTemplateId: shippingTemplate.id,
+      preferredPackageId: seedPackage.id,
+      packedLength: decimal("4.00"),
+      packedWidth: decimal("4.00"),
+      packedHeight: decimal("0.10"),
+      packedWeightGrams: decimal("20.00"),
+      canSharePackage: true,
       laborMinutes: decimal("8.00"),
       laborRate: decimal("22.00"),
       mistakeBuffer: decimal("0.03"),
@@ -667,6 +715,12 @@ async function seed(shopId, options) {
         },
       });
 
+      await prisma.packagingReviewItem.deleteMany({
+        where: { snapshotId: snapshot.id },
+      });
+      await prisma.orderPackageAllocation.deleteMany({
+        where: { snapshotId: snapshot.id },
+      });
       await prisma.lineCauseAllocation.deleteMany({
         where: { snapshotLine: { snapshotId: snapshot.id } },
       });
@@ -698,9 +752,24 @@ async function seed(shopId, options) {
         },
       });
 
+      await prisma.orderPackageAllocation.create({
+        data: {
+          shopId,
+          snapshotId: snapshot.id,
+          packageId: seedPackage.id,
+          packageName: seedPackage.name,
+          quantity: 1,
+          materialCost: packagingCost,
+          source: "seed",
+          confidence: "high",
+          allocationSignature: `${snapshot.id}:seed-package`,
+        },
+      });
+
       const causeSplit = faker.number.int({ min: 55, max: 85 });
-      const primaryAllocation = netContribution.mul(decimal(causeSplit)).div(decimal(100));
-      const secondaryAllocation = netContribution.sub(primaryAllocation);
+      const allocationBase = Prisma.Decimal.max(netContribution, decimal(0));
+      const primaryAllocation = allocationBase.mul(decimal(causeSplit)).div(decimal(100));
+      const secondaryAllocation = allocationBase.sub(primaryAllocation);
 
       const allocations = [
         { cause: causes[0], percentage: causeSplit, amount: primaryAllocation },
