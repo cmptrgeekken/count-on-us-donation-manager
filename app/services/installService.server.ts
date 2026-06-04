@@ -75,31 +75,38 @@ export async function handlePostInstall(
   }
 
   // Case 3: fresh install
-  const shop = await prisma.shop.create({
-    data: {
-      shopId,
-      shopifyDomain: shopId,
-    },
-  });
+  await prisma.$transaction(async (tx) => {
+    const shop = await tx.shop.upsert({
+      where: { shopId },
+      create: {
+        shopId,
+        shopifyDomain: shopId,
+      },
+      update: {},
+      select: { id: true },
+    });
 
-  await prisma.wizardState.create({
-    data: {
-      shopId,
-      currentStep: 0,
-      completedSteps: [],
-      skippedSteps: [],
-    },
-  });
+    await tx.wizardState.upsert({
+      where: { shopId },
+      create: {
+        shopId,
+        currentStep: 0,
+        completedSteps: [],
+        skippedSteps: [],
+      },
+      update: {},
+    });
 
-  await prisma.auditLog.create({
-    data: {
-      shopId,
-      entity: "Shop",
-      entityId: shop.id,
-      action: "CREATE",
-      actor: "system",
-      payload: { shopId },
-    },
+    await tx.auditLog.create({
+      data: {
+        shopId,
+        entity: "Shop",
+        entityId: shop.id,
+        action: "CREATE",
+        actor: "system",
+        payload: { shopId },
+      },
+    });
   });
 
   await detectAndStorePlan(shopId, admin);
