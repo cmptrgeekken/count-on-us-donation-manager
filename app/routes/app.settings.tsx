@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
@@ -93,7 +94,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  return Response.json({
+  return jsonResponse({
     planTier: shop?.planTier ?? "Unknown",
     paymentRate: shop?.paymentRate ? (Number(shop.paymentRate) * 100).toFixed(2) : null,
     planOverride: shop?.planOverride ?? false,
@@ -128,7 +129,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Manual rate override enabled." });
+    return jsonResponse({ ok: true, message: "Manual rate override enabled." });
   }
 
   if (intent === "disable-override") {
@@ -146,7 +147,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Manual override removed. Daily detection will resume." });
+    return jsonResponse({ ok: true, message: "Manual override removed. Daily detection will resume." });
   }
 
   if (intent === "update-rate") {
@@ -155,7 +156,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       paymentRate = parsePercentInputToRate(formData.get("paymentRate")?.toString(), "Rate");
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
       }
       throw error;
     }
@@ -175,7 +176,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Payment rate updated." });
+    return jsonResponse({ ok: true, message: "Payment rate updated." });
   }
 
   if (intent === "update-managed-markets-date") {
@@ -187,7 +188,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
       }
       throw error;
     }
@@ -207,7 +208,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: managedMarketsEnableDate
         ? "Managed Markets enable date updated."
@@ -229,7 +230,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
       }
       throw error;
     }
@@ -255,7 +256,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Cost defaults updated." });
+    return jsonResponse({ ok: true, message: "Cost defaults updated." });
   }
 
     if (intent === "update-tax-settings") {
@@ -269,13 +270,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         );
       } catch (error) {
         if (error instanceof Response) {
-          return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+          return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
         }
         throw error;
       }
 
       if (!["dont_deduct", "non_501c3_only", "all_causes"].includes(taxDeductionMode)) {
-        return Response.json({ ok: false, message: "Tax deduction mode is invalid." }, { status: 400 });
+        return jsonResponse({ ok: false, message: "Tax deduction mode is invalid." }, { status: 400 });
       }
 
       const normalizedRate =
@@ -286,7 +287,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
 
       if (effectiveTaxRate !== null && effectiveTaxRate.greaterThan(new Prisma.Decimal(100))) {
-        return Response.json({ ok: false, message: "Effective tax rate must be between 0 and 100." }, { status: 400 });
+        return jsonResponse({ ok: false, message: "Effective tax rate must be between 0 and 100." }, { status: 400 });
       }
 
       await prisma.shop.update({
@@ -310,7 +311,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
       });
 
-      return Response.json({ ok: true, message: "Tax settings updated." });
+      return jsonResponse({ ok: true, message: "Tax settings updated." });
     }
 
   if (intent === "update-email-settings") {
@@ -335,7 +336,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: postPurchaseEmailEnabled
         ? "Post-purchase donation email enabled."
@@ -345,7 +346,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "refresh-shop-currency") {
     if (!admin) {
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: "Shopify admin is unavailable in local fixture mode." },
         { status: 400 },
       );
@@ -357,7 +358,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (typeof currency !== "string" || currency.length !== 3) {
       console.error("[Settings] Failed to refresh shop currency:", json);
-      return Response.json({ ok: false, message: "Unable to refresh shop currency from Shopify." }, { status: 502 });
+      return jsonResponse({ ok: false, message: "Unable to refresh shop currency from Shopify." }, { status: 502 });
     }
 
     await prisma.shop.update({
@@ -375,10 +376,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: `Shop currency refreshed to ${currency}.` });
+    return jsonResponse({ ok: true, message: `Shop currency refreshed to ${currency}.` });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 export default function Settings() {

@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
@@ -169,7 +170,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     },
   });
 
-  return Response.json({
+  return jsonResponse({
     product: {
       id: product.id,
       shopifyId: product.shopifyId,
@@ -218,7 +219,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const isPlaywrightBypass = isPlaywrightBypassRequest(request);
 
   if (!admin && !isPlaywrightBypass) {
-    return Response.json({ ok: false, message: "Shopify admin context is required." }, { status: 500 });
+    return jsonResponse({ ok: false, message: "Shopify admin context is required." }, { status: 500 });
   }
 
   const product = await prisma.product.findFirst({
@@ -227,14 +228,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   });
 
   if (!product) {
-    return Response.json({ ok: false, message: "Product not found." }, { status: 404 });
+    return jsonResponse({ ok: false, message: "Product not found." }, { status: 404 });
   }
 
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
 
   if (intent !== "save-assignments" && intent !== "save-artist-assignments") {
-    return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
   }
 
   if (intent === "save-artist-assignments") {
@@ -243,13 +244,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     try {
       parsedJson = JSON.parse(rawAssignments);
     } catch {
-      return Response.json({ ok: false, message: "Invalid artist assignments." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Invalid artist assignments." }, { status: 400 });
     }
 
     const parsed = artistAssignmentsSchema.safeParse({ assignments: parsedJson });
 
     if (!parsed.success) {
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid artist assignments." },
         { status: 400 },
       );
@@ -259,20 +260,20 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const artistIds = artistAssignments.map((assignment) => assignment.artistId);
 
     if (new Set(artistIds).size !== artistIds.length) {
-      return Response.json({ ok: false, message: "Each Artist can only be assigned once per product." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Each Artist can only be assigned once per product." }, { status: 400 });
     }
 
     const total = artistAssignments.reduce((sum, assignment) => sum + Number(assignment.collaborationShare), 0);
     if (artistAssignments.length > 0 && total !== 100) {
-      return Response.json({ ok: false, message: "Artist collaboration shares must total 100%." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Artist collaboration shares must total 100%." }, { status: 400 });
     }
 
     if (artistAssignments.some((assignment) => Number.isNaN(Number(assignment.collaborationShare)) || Number(assignment.collaborationShare) <= 0)) {
-      return Response.json({ ok: false, message: "Each Artist collaboration share must be greater than 0." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Each Artist collaboration share must be greater than 0." }, { status: 400 });
     }
 
     if (artistAssignments.some((assignment) => assignment.payoutRateOverride && (Number.isNaN(Number(assignment.payoutRateOverride)) || Number(assignment.payoutRateOverride) < 0 || Number(assignment.payoutRateOverride) > 100))) {
-      return Response.json({ ok: false, message: "Artist payout overrides must be between 0 and 100%." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Artist payout overrides must be between 0 and 100%." }, { status: 400 });
     }
 
     const artists = artistIds.length
@@ -291,13 +292,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       : [];
 
     if (artists.length !== artistIds.length) {
-      return Response.json({ ok: false, message: "One or more selected Artists are unavailable." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "One or more selected Artists are unavailable." }, { status: 404 });
     }
 
     for (const artist of artists) {
       const causeTotal = artist.causeAssignments.reduce((sum, assignment) => sum + Number(assignment.percentage), 0);
       if (causeTotal !== 100) {
-        return Response.json({ ok: false, message: `${artist.displayName} must have Cause percentages totaling 100%.` }, { status: 400 });
+        return jsonResponse({ ok: false, message: `${artist.displayName} must have Cause percentages totaling 100%.` }, { status: 400 });
       }
     }
 
@@ -400,17 +401,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         } catch (error) {
           console.error("[ProductDonations] Shopify sync failed after saving artist assignments:", error);
           await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);
-          return Response.json({
+          return jsonResponse({
             ok: true,
             message: "Artist assignments saved locally. Shopify storefront sync failed; save again later to retry the storefront rollup.",
           });
         }
       }
 
-      return Response.json({ ok: true, message: "Product Artist assignments saved." });
+      return jsonResponse({ ok: true, message: "Product Artist assignments saved." });
     } catch (error) {
       console.error("[ProductDonations] Failed to save artist assignments:", error);
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: error instanceof Error ? error.message : "Unable to save Artist assignments." },
         { status: 502 },
       );
@@ -422,7 +423,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   });
 
   if (activeArtistAssignmentCount > 0) {
-    return Response.json(
+    return jsonResponse(
       { ok: false, message: "This product is routed through Artist assignments. Clear Artist assignments before editing direct Cause assignments." },
       { status: 400 },
     );
@@ -433,12 +434,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   try {
     parsedJson = JSON.parse(rawAssignments);
   } catch {
-    return Response.json({ ok: false, message: "Invalid assignments." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Invalid assignments." }, { status: 400 });
   }
   const parsed = assignmentsSchema.safeParse({ assignments: parsedJson });
 
   if (!parsed.success) {
-    return Response.json(
+    return jsonResponse(
       { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid assignments." },
       { status: 400 },
     );
@@ -448,16 +449,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const causeIds = assignments.map((assignment) => assignment.causeId);
 
   if (new Set(causeIds).size !== causeIds.length) {
-    return Response.json({ ok: false, message: "Each Cause can only be assigned once per product." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Each Cause can only be assigned once per product." }, { status: 400 });
   }
 
   const total = assignments.reduce((sum, assignment) => sum + Number(assignment.percentage), 0);
   if (Number.isNaN(total) || total > 100) {
-    return Response.json({ ok: false, message: "Cause percentages must total 100% or less." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Cause percentages must total 100% or less." }, { status: 400 });
   }
 
   if (assignments.some((assignment) => Number.isNaN(Number(assignment.percentage)) || Number(assignment.percentage) <= 0)) {
-    return Response.json({ ok: false, message: "Each Cause percentage must be greater than 0." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Each Cause percentage must be greater than 0." }, { status: 400 });
   }
 
   const causes = causeIds.length
@@ -468,7 +469,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     : [];
 
   if (causes.length !== causeIds.length) {
-    return Response.json({ ok: false, message: "One or more selected Causes are unavailable." }, { status: 404 });
+    return jsonResponse({ ok: false, message: "One or more selected Causes are unavailable." }, { status: 404 });
   }
 
   const causeMap = new Map(causes.map((cause) => [cause.id, cause]));
@@ -541,18 +542,18 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         });
       }
 
-      return Response.json({ ok: true, message: "Product Cause assignments saved." });
+      return jsonResponse({ ok: true, message: "Product Cause assignments saved." });
     } catch (error) {
       console.error("[ProductDonations] Shopify sync failed after saving cause assignments:", error);
       await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);
 
-      return Response.json(
+      return jsonResponse(
         { ok: true, message: "Cause assignments saved locally. Shopify storefront sync failed; save again later to retry the storefront rollup." },
       );
     }
   } catch (error) {
     console.error("[ProductDonations] Failed to save assignments:", error);
-    return Response.json(
+    return jsonResponse(
       { ok: false, message: error instanceof Error ? error.message : "Unable to save Cause assignments." },
       { status: 502 },
     );

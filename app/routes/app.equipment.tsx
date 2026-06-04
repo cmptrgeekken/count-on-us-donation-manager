@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
@@ -30,7 +31,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  return Response.json({
+  return jsonResponse({
     equipment: equipment.map((e) => ({
       id: e.id,
       name: e.name,
@@ -59,7 +60,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       purchaseLink: formData.get("purchaseLink")?.toString().trim() ?? "",
     });
     if (!parsed.success) {
-      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
     }
 
     const name = parsed.data.name;
@@ -78,13 +79,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       equipmentCost = parseOptionalNonNegativeMoney(equipmentCostStr, "Equipment cost");
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
       }
       throw error;
     }
 
     if (hourlyRate === null && perUseCost === null) {
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: "At least one of hourly rate or per-use cost must be set." },
         { status: 400 },
       );
@@ -111,7 +112,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           actor: "merchant",
         },
       });
-      return Response.json({ ok: true, message: "Equipment created." });
+      return jsonResponse({ ok: true, message: "Equipment created." });
     }
 
     const id = formData.get("id")?.toString() ?? "";
@@ -125,13 +126,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         actor: "merchant",
       },
     });
-    return Response.json({ ok: true, message: "Equipment updated." });
+    return jsonResponse({ ok: true, message: "Equipment updated." });
   }
 
   if (intent === "deactivate" || intent === "reactivate") {
     const parsed = equipmentIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
     if (!parsed.success) {
-      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
     }
     const id = parsed.data.id;
     const status = intent === "deactivate" ? "inactive" : "active";
@@ -145,7 +146,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         actor: "merchant",
       },
     });
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: intent === "deactivate" ? "Equipment deactivated." : "Equipment reactivated.",
     });
@@ -154,7 +155,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "delete") {
     const parsed = equipmentIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
     if (!parsed.success) {
-      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
     }
 
     const item = await prisma.equipmentLibraryItem.findFirst({
@@ -165,11 +166,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!item) {
-      return Response.json({ ok: false, message: "Equipment not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Equipment not found." }, { status: 404 });
     }
 
     if (item._count.templateLines > 0 || item._count.variantLines > 0) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: `This equipment is still used in ${item._count.templateLines} template(s) and ${item._count.variantLines} variant config(s). Remove those references before deleting it.`,
@@ -189,10 +190,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Equipment deleted." });
+    return jsonResponse({ ok: true, message: "Equipment deleted." });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 type EquipmentItem = {

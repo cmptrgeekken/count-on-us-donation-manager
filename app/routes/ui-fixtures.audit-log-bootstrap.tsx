@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { prisma } from "../db.server";
 
 const FIXTURE_SHOP = "fixture-audit-log.myshopify.com";
@@ -33,7 +34,7 @@ export const loader = async () => {
     })),
   });
 
-  return Response.json({
+  return jsonResponse({
     auditLogUrl: `/app/audit-log?__playwrightShop=${FIXTURE_SHOP}`,
   });
 };

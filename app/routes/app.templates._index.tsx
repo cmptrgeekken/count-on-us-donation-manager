@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
@@ -34,7 +35,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  return Response.json({
+  return jsonResponse({
     templates: templates.map((t) => ({
       id: t.id,
       name: t.name,
@@ -62,7 +63,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       type: formData.get("type")?.toString() ?? "production",
     });
     if (!parsed.success) {
-      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
     }
 
     const name = parsed.data.name;
@@ -83,13 +84,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Template created.", id: template.id });
+    return jsonResponse({ ok: true, message: "Template created.", id: template.id });
   }
 
   if (intent === "deactivate" || intent === "reactivate") {
     const parsed = templateIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
     if (!parsed.success) {
-      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
     }
     const id = parsed.data.id;
     const status = intent === "deactivate" ? "inactive" : "active";
@@ -105,7 +106,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: intent === "deactivate" ? "Template deactivated." : "Template reactivated.",
     });
@@ -114,7 +115,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "delete") {
     const parsed = templateIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
     if (!parsed.success) {
-      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
     }
 
     const template = await prisma.costTemplate.findFirst({
@@ -133,7 +134,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!template) {
-      return Response.json({ ok: false, message: "Template not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Template not found." }, { status: 404 });
     }
 
     const assignedVariantCount =
@@ -141,7 +142,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const defaultForTemplateCount = template._count.productionTemplates;
 
     if (assignedVariantCount > 0 || defaultForTemplateCount > 0) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: `This template is still assigned to ${assignedVariantCount} variant(s) and used as the default shipping template for ${defaultForTemplateCount} production template(s). Remove those references before deleting it.`,
@@ -161,10 +162,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Template deleted." });
+    return jsonResponse({ ok: true, message: "Template deleted." });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 type Template = {

@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
@@ -111,7 +112,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       )
     : variants.map(() => null);
 
-  return Response.json({
+  return jsonResponse({
     variants: variants.map((v, index) => ({
       id: v.id,
       shopifyId: v.shopifyId,
@@ -145,10 +146,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const variantIds = formData.getAll("variantId").map(String);
 
     if (!templateId) {
-      return Response.json({ ok: false, message: "No template selected." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "No template selected." }, { status: 400 });
     }
     if (variantIds.length === 0) {
-      return Response.json({ ok: false, message: "No variants selected." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "No variants selected." }, { status: 400 });
     }
 
     const template = await prisma.costTemplate.findFirst({
@@ -157,7 +158,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!template) {
-      return Response.json({ ok: false, message: "Template not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Template not found." }, { status: 404 });
     }
 
     for (const variantId of variantIds) {
@@ -179,10 +180,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: `Template assigned to ${variantIds.length} variant(s).` });
+    return jsonResponse({ ok: true, message: `Template assigned to ${variantIds.length} variant(s).` });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 type VariantRow = {

@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { Prisma } from "@prisma/client";
 
@@ -16,7 +17,7 @@ function errorResponse(
   message: string,
   headers?: Headers,
 ) {
-  return Response.json(
+  return jsonResponse(
     {
       error: {
         code,
@@ -106,5 +107,5 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const headers = new Headers(rateLimit.headers);
   headers.set("Cache-Control", "private, no-store");
 
-  return Response.json({ data: payload }, { headers });
+  return jsonResponse({ data: payload }, { headers });
 };

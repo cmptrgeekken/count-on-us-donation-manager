@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useRouteError } from "@remix-run/react";
 
@@ -47,7 +48,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  return Response.json({
+  return jsonResponse({
     activeStatus: status,
     submissions: await Promise.all(
       submissions.map(async (submission) => ({
@@ -108,7 +109,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const submissionId = formData.get("submissionId")?.toString() ?? "";
 
   if (!submissionId) {
-    return Response.json({ ok: false, message: "Submission ID is required." } satisfies ActionData, { status: 400 });
+    return jsonResponse({ ok: false, message: "Submission ID is required." } satisfies ActionData, { status: 400 });
   }
 
   try {
@@ -116,19 +117,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const status = formData.get("status")?.toString() ?? "new";
       const internalNotes = formData.get("internalNotes")?.toString() ?? "";
       await updateArtistSubmissionStatus(shopId, { submissionId, status, internalNotes });
-      return Response.json({ ok: true, message: "Submission updated." } satisfies ActionData);
+      return jsonResponse({ ok: true, message: "Submission updated." } satisfies ActionData);
     }
 
     if (intent === "convert") {
       const artist = await convertArtistSubmissionToDraftArtist(shopId, submissionId);
-      return Response.json({ ok: true, message: `Created draft Artist ${artist.displayName}.` } satisfies ActionData);
+      return jsonResponse({ ok: true, message: `Created draft Artist ${artist.displayName}.` } satisfies ActionData);
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update submission.";
-    return Response.json({ ok: false, message } satisfies ActionData, { status: 400 });
+    return jsonResponse({ ok: false, message } satisfies ActionData, { status: 400 });
   }
 
-  return Response.json({ ok: false, message: "Unsupported action." } satisfies ActionData, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unsupported action." } satisfies ActionData, { status: 400 });
 };
 
 const fieldStyle = {

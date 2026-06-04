@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
@@ -421,7 +422,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     };
   });
 
-  return Response.json({
+  return jsonResponse({
     variant: {
       id: variant.id,
       productTitle: variant.product.title,
@@ -511,7 +512,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     select: { shopId: true },
   });
   if (!variant) {
-    return Response.json({ ok: false, message: "Not found." }, { status: 404 });
+    return jsonResponse({ ok: false, message: "Not found." }, { status: 404 });
   }
 
   const formData = await request.formData();
@@ -648,12 +649,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   if (intent === "save-variant-draft") {
     const rawDraft = formData.get("draft")?.toString();
     if (!rawDraft) {
-      return Response.json({ ok: false, message: "Draft data is required." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Draft data is required." }, { status: 400 });
     }
 
     const parsedDraft = variantDraftSchema.safeParse(JSON.parse(rawDraft));
     if (!parsedDraft.success) {
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: parsedDraft.error.issues[0]?.message ?? "Invalid variant data." },
         { status: 400 },
       );
@@ -681,19 +682,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       : null;
 
     if (normalizedProductionTemplateId && !selectedTemplate) {
-      return Response.json({ ok: false, message: "Production template not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Production template not found." }, { status: 404 });
     }
 
     if (selectedTemplate && selectedTemplate.type === "shipping") {
-      return Response.json({ ok: false, message: "Production template must be a production template." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Production template must be a production template." }, { status: 400 });
     }
 
     if (normalizedShippingTemplateId && !selectedShippingTemplate) {
-      return Response.json({ ok: false, message: "Shipping template not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Shipping template not found." }, { status: 404 });
     }
 
     if (selectedShippingTemplate && selectedShippingTemplate.type !== "shipping") {
-      return Response.json({ ok: false, message: "Shipping override must reference a shipping template." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Shipping override must reference a shipping template." }, { status: 400 });
     }
 
     if (normalizedPreferredPackageId) {
@@ -702,7 +703,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         select: { id: true },
       });
       if (!preferredPackage) {
-        return Response.json({ ok: false, message: "Preferred package not found." }, { status: 404 });
+        return jsonResponse({ ok: false, message: "Preferred package not found." }, { status: 404 });
       }
     }
 
@@ -711,13 +712,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     for (const line of draft.templateMaterialLines) {
       if (!materialMap.has(line.templateLineId) || materialMap.get(line.templateLineId) !== line.materialId) {
-        return Response.json({ ok: false, message: "One or more material overrides are invalid." }, { status: 400 });
+        return jsonResponse({ ok: false, message: "One or more material overrides are invalid." }, { status: 400 });
       }
     }
 
     for (const line of draft.templateEquipmentLines) {
       if (!equipmentMap.has(line.templateLineId) || equipmentMap.get(line.templateLineId) !== line.equipmentId) {
-        return Response.json({ ok: false, message: "One or more equipment overrides are invalid." }, { status: 400 });
+        return jsonResponse({ ok: false, message: "One or more equipment overrides are invalid." }, { status: 400 });
       }
     }
 
@@ -725,11 +726,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const additionalEquipmentIds = [...new Set(draft.equipmentLines.map((line) => line.equipmentId))];
 
     if (additionalMaterialIds.length !== draft.materialLines.length) {
-      return Response.json({ ok: false, message: "Each additional material can only appear once on a variant." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Each additional material can only appear once on a variant." }, { status: 400 });
     }
 
     if (additionalEquipmentIds.length !== draft.equipmentLines.length) {
-      return Response.json({ ok: false, message: "Each additional equipment item can only appear once on a variant." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Each additional equipment item can only appear once on a variant." }, { status: 400 });
     }
 
     const [materialsFound, equipmentFound, existingConfig] = await Promise.all([
@@ -739,11 +740,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     ]);
 
     if (materialsFound.length !== additionalMaterialIds.length) {
-      return Response.json({ ok: false, message: "One or more additional materials could not be found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "One or more additional materials could not be found." }, { status: 404 });
     }
 
     if (equipmentFound.length !== additionalEquipmentIds.length) {
-      return Response.json({ ok: false, message: "One or more additional equipment items could not be found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "One or more additional equipment items could not be found." }, { status: 404 });
     }
 
     const hasMeaningfulDraft = Boolean(
@@ -778,7 +779,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         });
       }
 
-      return Response.json({
+      return jsonResponse({
         ok: true,
         message: "Variant configuration saved.",
         savedAt: new Date().toISOString(),
@@ -896,7 +897,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       });
     });
 
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: "Variant configuration saved.",
       savedAt: new Date().toISOString(),
@@ -957,7 +958,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         payload: { templateId },
       },
     });
-    return Response.json({ ok: true, message: "Template assigned." });
+    return jsonResponse({ ok: true, message: "Template assigned." });
   }
 
   if (intent === "remove-template") {
@@ -1004,7 +1005,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "TEMPLATE_REMOVED", actor: "merchant" },
       });
     }
-    return Response.json({ ok: true, message: "Template removed." });
+    return jsonResponse({ ok: true, message: "Template removed." });
   }
 
   if (intent === "update-labor") {
@@ -1019,7 +1020,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       parsedLaborRate = parseOptionalNonNegativeMoney(laborRate, "Labor rate");
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
       }
       throw error;
     }
@@ -1034,7 +1035,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "LABOR_UPDATED", actor: "merchant" },
     });
-    return Response.json({ ok: true, message: "Labor updated." });
+    return jsonResponse({ ok: true, message: "Labor updated." });
   }
 
   if (intent === "update-mistake-buffer") {
@@ -1045,7 +1046,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       buffer = parseOptionalPercentInputToRate(bufferStr, "Mistake buffer");
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
       }
       throw error;
     }
@@ -1055,7 +1056,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       where: { id: config.id, shopId },
       data: { mistakeBuffer: buffer },
     });
-    return Response.json({ ok: true, message: "Mistake buffer updated." });
+    return jsonResponse({ ok: true, message: "Mistake buffer updated." });
   }
 
   if (intent === "save-material-override") {
@@ -1119,13 +1120,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "MATERIAL_OVERRIDE_SAVED", actor: "merchant" },
     });
-    return Response.json({ ok: true, message: "Material override saved." });
+    return jsonResponse({ ok: true, message: "Material override saved." });
   }
 
   if (intent === "reset-material-override") {
     const templateLineId = formData.get("templateLineId")?.toString() ?? "";
     const config = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId }, select: { id: true } });
-    if (!config) return Response.json({ ok: false, message: "Configuration not found." }, { status: 404 });
+    if (!config) return jsonResponse({ ok: false, message: "Configuration not found." }, { status: 404 });
     const templateLine = await requireTemplateMaterialLine(config.id, templateLineId);
 
     await prisma.variantMaterialLine.deleteMany({
@@ -1141,7 +1142,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "MATERIAL_OVERRIDE_RESET", actor: "merchant" },
     });
-    return Response.json({ ok: true, message: "Material override reset." });
+    return jsonResponse({ ok: true, message: "Material override reset." });
   }
 
   if (intent === "add-material-line") {
@@ -1173,7 +1174,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "MATERIAL_LINE_ADDED", actor: "merchant" },
     });
-    return Response.json({ ok: true, message: "Material line added." });
+    return jsonResponse({ ok: true, message: "Material line added." });
   }
 
   if (intent === "remove-material-line") {
@@ -1182,7 +1183,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       where: { id: lineId, shopId, templateLineId: null },
       select: { configId: true },
     });
-    if (!line) return Response.json({ ok: false, message: "Line not found." }, { status: 404 });
+    if (!line) return jsonResponse({ ok: false, message: "Line not found." }, { status: 404 });
 
     await prisma.$transaction([
       prisma.variantMaterialLine.deleteMany({ where: { id: lineId, shopId } }),
@@ -1195,7 +1196,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: line.configId, action: "MATERIAL_LINE_REMOVED", actor: "merchant" },
     });
-    return Response.json({ ok: true, message: "Material line removed." });
+    return jsonResponse({ ok: true, message: "Material line removed." });
   }
 
   if (intent === "save-equipment-override") {
@@ -1253,13 +1254,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "EQUIPMENT_OVERRIDE_SAVED", actor: "merchant" },
     });
-    return Response.json({ ok: true, message: "Equipment override saved." });
+    return jsonResponse({ ok: true, message: "Equipment override saved." });
   }
 
   if (intent === "reset-equipment-override") {
     const templateLineId = formData.get("templateLineId")?.toString() ?? "";
     const config = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId }, select: { id: true } });
-    if (!config) return Response.json({ ok: false, message: "Configuration not found." }, { status: 404 });
+    if (!config) return jsonResponse({ ok: false, message: "Configuration not found." }, { status: 404 });
     const templateLine = await requireTemplateEquipmentLine(config.id, templateLineId);
 
     await prisma.variantEquipmentLine.deleteMany({
@@ -1275,7 +1276,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "EQUIPMENT_OVERRIDE_RESET", actor: "merchant" },
     });
-    return Response.json({ ok: true, message: "Equipment override reset." });
+    return jsonResponse({ ok: true, message: "Equipment override reset." });
   }
 
   if (intent === "add-equipment-line") {
@@ -1303,7 +1304,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: config.id, action: "EQUIPMENT_LINE_ADDED", actor: "merchant" },
     });
-    return Response.json({ ok: true, message: "Equipment line added." });
+    return jsonResponse({ ok: true, message: "Equipment line added." });
   }
 
   if (intent === "remove-equipment-line") {
@@ -1312,7 +1313,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       where: { id: lineId, shopId, templateLineId: null },
       select: { configId: true },
     });
-    if (!line) return Response.json({ ok: false, message: "Line not found." }, { status: 404 });
+    if (!line) return jsonResponse({ ok: false, message: "Line not found." }, { status: 404 });
 
     await prisma.$transaction([
       prisma.variantEquipmentLine.deleteMany({ where: { id: lineId, shopId } }),
@@ -1325,21 +1326,21 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.auditLog.create({
       data: { shopId, entity: "VariantCostConfig", entityId: line.configId, action: "EQUIPMENT_LINE_REMOVED", actor: "merchant" },
     });
-    return Response.json({ ok: true, message: "Equipment line removed." });
+    return jsonResponse({ ok: true, message: "Equipment line removed." });
   }
 
   if (intent === "preview-cost") {
     const estimate = await buildAdminVariantEstimate(shopId, variantId);
     if (!estimate) {
-      return Response.json({ ok: false, message: "Not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Not found." }, { status: 404 });
     }
-    return Response.json({
+    return jsonResponse({
       ok: true,
       preview: estimate,
     });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 type AvailableMaterial = {

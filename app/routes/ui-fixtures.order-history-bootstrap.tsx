@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 
 import { Prisma } from "@prisma/client";
@@ -127,7 +128,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   ]);
 
-  return Response.json({
+  return jsonResponse({
     shopId,
     historyUrl: `${baseUrl}/app/order-history?__playwrightShop=${encodeURIComponent(shopId)}`,
     detailUrl: `${baseUrl}/app/order-history/${webhookSnapshot.id}?__playwrightShop=${encodeURIComponent(shopId)}`,

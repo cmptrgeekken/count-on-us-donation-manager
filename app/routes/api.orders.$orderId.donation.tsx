@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { unauthenticated } from "../shopify.server";
 import {
@@ -36,7 +37,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const confirmed = await buildConfirmedOrderDonationSummary(orderId, shopifyDomain);
   if (confirmed) {
     return cors(
-      Response.json(
+      jsonResponse(
         { data: confirmed },
         {
           status: 200,
@@ -50,7 +51,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const order = await fetchOrderForPostPurchaseEstimate(orderId, admin as Parameters<typeof fetchOrderForPostPurchaseEstimate>[1]);
   if (!order) {
     return cors(
-      Response.json(
+      jsonResponse(
         { error: { code: "NOT_FOUND", message: "Order not found." } },
         {
           status: 404,
@@ -63,7 +64,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const pending = await buildPendingOrderDonationSummary(order, shopifyDomain);
   if (!pending) {
     return cors(
-      Response.json(
+      jsonResponse(
         { error: { code: "NO_DONATION_PRODUCTS", message: "No donation products found for this order." } },
         {
           status: 404,
@@ -74,7 +75,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   }
 
   return cors(
-    Response.json(
+    jsonResponse(
       { data: pending },
       {
         status: 202,

@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useLoaderData } from "@remix-run/react";
 import { useEffect, useState } from "react";
 import type { LoaderFunctionArgs } from "@remix-run/node";
@@ -10,7 +11,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const mode = (url.searchParams.get("mode") as PreviewMode) || "confirmed";
   const surface = (url.searchParams.get("surface") as PreviewSurface) || "thank-you";
 
-  return Response.json({
+  return jsonResponse({
     mode,
     surface,
   });

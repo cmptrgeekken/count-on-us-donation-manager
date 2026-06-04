@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
@@ -304,7 +305,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       })
     : null;
 
-  return Response.json({
+  return jsonResponse({
     ...reporting,
     analyticalRecalculationRun: analyticalRecalculationRun
       ? {
@@ -328,22 +329,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const periodId = formData.get("periodId")?.toString() ?? "";
     const parsedPeriodId = periodIdSchema.safeParse(periodId);
     if (!parsedPeriodId.success) {
-      return Response.json({ ok: false, message: parsedPeriodId.error.issues[0]?.message ?? "Reporting period id is required." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsedPeriodId.error.issues[0]?.message ?? "Reporting period id is required." }, { status: 400 });
     }
 
     await closeReportingPeriod(shopId, parsedPeriodId.data);
-    return Response.json({ ok: true, message: "Reporting period closed." });
+    return jsonResponse({ ok: true, message: "Reporting period closed." });
   }
 
   if (intent === "run-analytical-recalculation") {
     const periodId = formData.get("periodId")?.toString() ?? "";
     const parsedPeriodId = periodIdSchema.safeParse(periodId);
     if (!parsedPeriodId.success) {
-      return Response.json({ ok: false, message: parsedPeriodId.error.issues[0]?.message ?? "Reporting period id is required." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsedPeriodId.error.issues[0]?.message ?? "Reporting period id is required." }, { status: 400 });
     }
 
     await queueAnalyticalRecalculation(shopId, parsedPeriodId.data);
-    return Response.json({ ok: true, message: "Analytical recalculation queued." });
+    return jsonResponse({ ok: true, message: "Analytical recalculation queued." });
   }
 
   if (intent === "log-disbursement") {
@@ -361,7 +362,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!parsed.success) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: parsed.error.issues[0]?.message ?? "Invalid disbursement.",
@@ -372,7 +373,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     if (receiptEntry instanceof File && receiptEntry.size > MAX_RECEIPT_BYTES) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: "Receipt file must be 10 MB or smaller.",
@@ -387,7 +388,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       receiptEntry.size > 0 &&
       !ACCEPTED_RECEIPT_CONTENT_TYPES.has(receiptEntry.type || "application/octet-stream")
     ) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: "Receipt must be a PDF, PNG, or JPEG file.",
@@ -417,7 +418,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             : null,
       });
 
-      return Response.json({ ok: true, message: "Disbursement logged." });
+      return jsonResponse({ ok: true, message: "Disbursement logged." });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to log disbursement.";
       const fieldErrors: ReportingActionData["fieldErrors"] =
@@ -435,7 +436,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                     : undefined
           : undefined;
 
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message,
@@ -458,7 +459,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!parsed.success) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: parsed.error.issues[0]?.message ?? "Invalid artist payment.",
@@ -479,7 +480,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         notes: parsed.data.notes ?? "",
       });
 
-      return Response.json({ ok: true, message: "Artist payment logged." });
+      return jsonResponse({ ok: true, message: "Artist payment logged." });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to log artist payment.";
       const fieldErrors: ReportingActionData["fieldErrors"] =
@@ -495,7 +496,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                 : undefined
           : undefined;
 
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message,
@@ -516,7 +517,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!parsed.success) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: parsed.error.issues[0]?.message ?? "Invalid tax true-up.",
@@ -532,7 +533,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     } catch (error) {
       if (error instanceof Response) {
         const message = await error.text();
-        return Response.json(
+        return jsonResponse(
           {
             ok: false,
             message,
@@ -567,7 +568,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         redistributions,
       });
 
-      return Response.json({ ok: true, message: "Tax true-up recorded." });
+      return jsonResponse({ ok: true, message: "Tax true-up recorded." });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to record tax true-up.";
       const fieldErrors: ReportingActionData["fieldErrors"] =
@@ -585,7 +586,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
                   : undefined
           : undefined;
 
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message,
@@ -596,7 +597,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 export default function ReportingPage() {

@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { z } from "zod";
@@ -82,7 +83,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   ]);
 
-  return Response.json({
+  return jsonResponse({
     artists: artists.map((artist) => ({
       id: artist.id,
       displayName: artist.displayName,
@@ -120,7 +121,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent")?.toString();
 
   if (intent !== "create" && intent !== "update") {
-    return Response.json({ ok: false, message: "Unsupported action." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Unsupported action." }, { status: 400 });
   }
 
   const causes = await prisma.cause.findMany({
@@ -150,7 +151,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   });
 
   if (!parsed.success) {
-    return Response.json(
+    return jsonResponse(
       {
         ok: false,
         message: parsed.error.issues[0]?.message ?? "Invalid artist details.",
@@ -165,12 +166,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     causeAssignments = readCauseAssignments(formData, causeIds);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Invalid Cause assignments.";
-    return Response.json({ ok: false, message, fieldErrors: { causes: [message] } }, { status: 400 });
+    return jsonResponse({ ok: false, message, fieldErrors: { causes: [message] } }, { status: 400 });
   }
 
   const totalCausePercentage = causeAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
   if (parsed.data.status === "active" && totalCausePercentage !== 100) {
-    return Response.json(
+    return jsonResponse(
       {
         ok: false,
         message: "Active Artists must have Cause percentages totaling 100%.",
@@ -181,7 +182,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (totalCausePercentage > 100) {
-    return Response.json(
+    return jsonResponse(
       {
         ok: false,
         message: "Cause percentages must total 100% or less.",
@@ -264,7 +265,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return savedArtist;
   });
 
-  return Response.json({
+  return jsonResponse({
     ok: true,
     message: intent === "create" ? `Artist ${artist.displayName} created.` : `Artist ${artist.displayName} updated.`,
   });

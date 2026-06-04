@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
@@ -106,7 +107,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   ]);
   const taxOffsetCache = existingTaxOffsetCache ?? await recomputeTaxOffsetCache(shopId);
 
-  return Response.json({
+  return jsonResponse({
     expenses: expenses.map((expense) => ({
       id: expense.id,
       category: expense.category,
@@ -142,7 +143,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!parsed.success) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: parsed.error.issues[0]?.message ?? "Invalid expense.",
@@ -180,7 +181,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return { expense, summary };
     });
 
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: "Expense created.",
       summary: {
@@ -198,7 +199,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!parsed.success) {
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid expense." },
         { status: 400 },
       );
@@ -211,7 +212,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!expense) {
-      return Response.json({ ok: false, message: "Expense not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Expense not found." }, { status: 404 });
     }
 
     const summary = await prisma.$transaction(async (tx) => {
@@ -234,7 +235,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return nextSummary;
     });
 
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: "Expense deleted.",
       summary: {
@@ -246,7 +247,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 export default function ExpensesPage() {
