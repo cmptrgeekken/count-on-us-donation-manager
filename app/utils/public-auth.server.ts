@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { authenticate } from "../shopify.server";
 
 function getPlaywrightBypassShop(request: Request) {
@@ -27,7 +28,7 @@ export async function authenticatePublicAppProxyRequest(request: Request) {
   const shopifyDomain = context.session?.shop ?? url.searchParams.get("shop")?.trim();
 
   if (!shopifyDomain) {
-    throw Response.json(
+    throw jsonResponse(
       {
         error: {
           code: "UNAUTHORIZED",

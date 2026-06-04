@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "../db.server";
@@ -59,7 +60,7 @@ export const loader = async () => {
     },
   });
 
-  return Response.json({
+  return jsonResponse({
     dashboardUrl: `/app/dashboard?__playwrightShop=${FIXTURE_SHOP}`,
   });
 };

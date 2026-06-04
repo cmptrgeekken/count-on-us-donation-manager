@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { prisma } from "../db.server";
@@ -44,7 +45,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   ]);
 
-  return Response.json({
+  return jsonResponse({
     catalogSynced: shop?.catalogSynced ?? false,
     latestCatalogSync: latestCatalogSync
       ? {
@@ -74,7 +75,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent")?.toString();
 
   if (intent !== "sync-catalog") {
-    return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
   }
 
   await prisma.auditLog.create({
@@ -100,7 +101,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     );
   }
 
-  return Response.json({
+  return jsonResponse({
     ok: true,
     message:
       "Catalog sync queued. Shopify products and variants will be added or refreshed without deleting your existing local seed data.",

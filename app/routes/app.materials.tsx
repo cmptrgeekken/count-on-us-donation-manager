@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
@@ -35,7 +36,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  return Response.json({
+  return jsonResponse({
     materials: materials.map((m) => ({
       id: m.id,
       name: m.name,
@@ -71,7 +72,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       purchaseLink: formData.get("purchaseLink")?.toString().trim() ?? "",
     });
     if (!parsed.success) {
-      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid material." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid material." }, { status: 400 });
     }
 
     const { name, type, costingModel } = parsed.data;
@@ -105,7 +106,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
       }
       throw error;
     }
@@ -137,7 +138,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           actor: "merchant",
         },
       });
-      return Response.json({ ok: true, message: "Material created." });
+      return jsonResponse({ ok: true, message: "Material created." });
     }
 
     const id = formData.get("id")?.toString() ?? "";
@@ -151,13 +152,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         actor: "merchant",
       },
     });
-    return Response.json({ ok: true, message: "Material updated." });
+    return jsonResponse({ ok: true, message: "Material updated." });
   }
 
   if (intent === "deactivate" || intent === "reactivate") {
     const parsed = materialIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
     if (!parsed.success) {
-      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid material." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid material." }, { status: 400 });
     }
     const id = parsed.data.id;
     const status = intent === "deactivate" ? "inactive" : "active";
@@ -171,7 +172,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         actor: "merchant",
       },
     });
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: intent === "deactivate" ? "Material deactivated." : "Material reactivated.",
     });
@@ -180,7 +181,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "delete") {
     const parsed = materialIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
     if (!parsed.success) {
-      return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid material." }, { status: 400 });
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid material." }, { status: 400 });
     }
 
     const material = await prisma.materialLibraryItem.findFirst({
@@ -191,11 +192,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!material) {
-      return Response.json({ ok: false, message: "Material not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Material not found." }, { status: 404 });
     }
 
     if (material._count.templateLines > 0 || material._count.variantLines > 0) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: `This material is still used in ${material._count.templateLines} template(s) and ${material._count.variantLines} variant config(s). Remove those references before deleting it.`,
@@ -215,10 +216,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       },
     });
 
-    return Response.json({ ok: true, message: "Material deleted." });
+    return jsonResponse({ ok: true, message: "Material deleted." });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 type Material = {

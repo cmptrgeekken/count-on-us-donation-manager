@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
@@ -92,7 +93,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  return Response.json({
+  return jsonResponse({
     causes: causes.map((cause) => ({
       id: cause.id,
       name: cause.name,
@@ -117,7 +118,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const isPlaywrightBypass = isPlaywrightBypassRequest(request);
 
   if (!admin && !isPlaywrightBypass) {
-    return Response.json({ ok: false, message: "Shopify admin context is required." }, { status: 500 });
+    return jsonResponse({ ok: false, message: "Shopify admin context is required." }, { status: 500 });
   }
 
   const formData = await request.formData();
@@ -136,7 +137,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!parsed.success) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: parsed.error.issues[0]?.message ?? "Invalid cause details.",
@@ -205,7 +206,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               },
             });
           }
-          return Response.json({ ok: true, message: "Cause created." });
+          return jsonResponse({ ok: true, message: "Cause created." });
         } catch (error) {
           await prisma.auditLog.create({
             data: {
@@ -219,7 +220,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               },
             },
           });
-          return Response.json(
+          return jsonResponse(
             { ok: false, message: "Cause saved locally, but Shopify sync failed. Retry by editing the Cause again." },
             { status: 502 },
           );
@@ -231,7 +232,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
 
       if (!idParsed.success) {
-        return Response.json(
+        return jsonResponse(
           { ok: false, message: idParsed.error.issues[0]?.message ?? "Invalid Cause." },
           { status: 400 },
         );
@@ -244,7 +245,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
 
       if (!existing) {
-        return Response.json({ ok: false, message: "Cause not found." }, { status: 404 });
+        return jsonResponse({ ok: false, message: "Cause not found." }, { status: 404 });
       }
 
       await prisma.cause.update({
@@ -299,7 +300,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           });
         }
 
-        return Response.json({ ok: true, message: "Cause updated." });
+        return jsonResponse({ ok: true, message: "Cause updated." });
       } catch (error) {
         await prisma.auditLog.create({
           data: {
@@ -313,14 +314,14 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             },
           },
         });
-        return Response.json(
+        return jsonResponse(
           { ok: false, message: "Cause saved locally, but Shopify sync failed. Retry by editing the Cause again." },
           { status: 502 },
         );
       }
     } catch (error) {
       console.error("[Causes] Failed to sync cause metaobject:", error);
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: error instanceof Error ? error.message : "Unable to sync Cause with Shopify." },
         { status: 502 },
       );
@@ -333,7 +334,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!idParsed.success) {
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: idParsed.error.issues[0]?.message ?? "Invalid Cause." },
         { status: 400 },
       );
@@ -352,11 +353,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!cause) {
-      return Response.json({ ok: false, message: "Cause not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Cause not found." }, { status: 404 });
     }
 
     if (intent === "deactivate" && cause._count.productAssignments > 0) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message: `Remove this Cause from ${cause._count.productAssignments} product assignment(s) before deactivating it.`,
@@ -423,7 +424,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           });
         }
 
-        return Response.json({
+        return jsonResponse({
           ok: true,
           message: intent === "deactivate" ? "Cause deactivated." : "Cause reactivated.",
         });
@@ -441,7 +442,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           },
         });
 
-        return Response.json(
+        return jsonResponse(
           {
             ok: false,
             message:
@@ -454,7 +455,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     } catch (error) {
       console.error("[Causes] Failed to sync Cause status to Shopify:", error);
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: error instanceof Error ? error.message : "Unable to sync Cause status with Shopify." },
         { status: 502 },
       );
@@ -467,7 +468,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!idParsed.success) {
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: idParsed.error.issues[0]?.message ?? "Invalid Cause." },
         { status: 400 },
       );
@@ -483,11 +484,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!cause) {
-      return Response.json({ ok: false, message: "Cause not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Cause not found." }, { status: 404 });
     }
 
     if (cause._count.productAssignments > 0 || cause._count.lineAllocations > 0) {
-      return Response.json(
+      return jsonResponse(
         {
           ok: false,
           message:
@@ -541,17 +542,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             },
           },
         });
-        return Response.json(
+        return jsonResponse(
           { ok: false, message: "Cause deleted locally, but Shopify cleanup failed." },
           { status: 502 },
         );
       }
     }
 
-    return Response.json({ ok: true, message: "Cause deleted." });
+    return jsonResponse({ ok: true, message: "Cause deleted." });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 export default function CausesPage() {

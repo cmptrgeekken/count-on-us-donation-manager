@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useLoaderData } from "@remix-run/react";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import {
@@ -68,7 +69,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   }
 
   const page = await buildDonationReceiptsPage(shopifyDomain);
-  return Response.json(page, {
+  return jsonResponse(page, {
     headers: rateLimit.headers,
   });
 };

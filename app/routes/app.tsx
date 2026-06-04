@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, Outlet, useLoaderData, useRouteError } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
@@ -15,7 +16,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     select: { currency: true },
   });
 
-  return Response.json(
+  return jsonResponse(
     {
       apiKey: process.env.SHOPIFY_API_KEY || "",
       localization: {

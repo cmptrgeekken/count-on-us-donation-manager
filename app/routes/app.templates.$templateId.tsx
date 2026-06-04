@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
@@ -160,7 +161,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     }),
   ]);
 
-  return Response.json({
+  return jsonResponse({
     template: serializeTemplate(template),
     availableMaterials: materials.map((item) => ({
       id: item.id,
@@ -194,24 +195,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   });
 
   if (!template) {
-    return Response.json({ ok: false, message: "Not found." }, { status: 404 });
+    return jsonResponse({ ok: false, message: "Not found." }, { status: 404 });
   }
 
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
 
   if (intent !== "save-template-draft") {
-    return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
   }
 
   const rawDraft = formData.get("draft")?.toString();
   if (!rawDraft) {
-    return Response.json({ ok: false, message: "Draft data is required." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Draft data is required." }, { status: 400 });
   }
 
   const parsedDraft = templateDraftSchema.safeParse(JSON.parse(rawDraft));
   if (!parsedDraft.success) {
-    return Response.json(
+    return jsonResponse(
       { ok: false, message: parsedDraft.error.issues[0]?.message ?? "Invalid template data." },
       { status: 400 },
     );
@@ -223,7 +224,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const existingEquipmentLines = new Map(template.equipmentLines.map((line) => [line.id, line]));
 
   if (template.type === "shipping" && normalizedDefaultShippingTemplateId) {
-    return Response.json(
+    return jsonResponse(
       { ok: false, message: "Shipping templates cannot define a default shipping template." },
       { status: 400 },
     );
@@ -236,11 +237,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     });
 
     if (!shippingTemplate) {
-      return Response.json({ ok: false, message: "Default shipping template not found." }, { status: 404 });
+      return jsonResponse({ ok: false, message: "Default shipping template not found." }, { status: 404 });
     }
 
     if (shippingTemplate.type !== "shipping") {
-      return Response.json(
+      return jsonResponse(
         { ok: false, message: "Default shipping template must reference a shipping template." },
         { status: 400 },
       );
@@ -249,23 +250,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const materialIds = draft.materialLines.map((line) => line.materialId);
   if (new Set(materialIds).size !== materialIds.length) {
-    return Response.json({ ok: false, message: "Each material can only appear once in a template." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Each material can only appear once in a template." }, { status: 400 });
   }
 
   const equipmentIds = draft.equipmentLines.map((line) => line.equipmentId);
   if (new Set(equipmentIds).size !== equipmentIds.length) {
-    return Response.json({ ok: false, message: "Each equipment item can only appear once in a template." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Each equipment item can only appear once in a template." }, { status: 400 });
   }
 
   for (const line of draft.materialLines) {
     if (existingMaterialLines.has(line.id) && existingMaterialLines.get(line.id)?.materialId !== line.materialId) {
-      return Response.json({ ok: false, message: "Existing material lines cannot change their material." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Existing material lines cannot change their material." }, { status: 400 });
     }
   }
 
   for (const line of draft.equipmentLines) {
     if (existingEquipmentLines.has(line.id) && existingEquipmentLines.get(line.id)?.equipmentId !== line.equipmentId) {
-      return Response.json({ ok: false, message: "Existing equipment lines cannot change their equipment." }, { status: 400 });
+      return jsonResponse({ ok: false, message: "Existing equipment lines cannot change their equipment." }, { status: 400 });
     }
   }
 
@@ -278,11 +279,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   ]);
 
   if (materialRecords.length !== newMaterialIds.length) {
-    return Response.json({ ok: false, message: "One or more materials could not be found." }, { status: 404 });
+    return jsonResponse({ ok: false, message: "One or more materials could not be found." }, { status: 404 });
   }
 
   if (equipmentRecords.length !== newEquipmentIds.length) {
-    return Response.json({ ok: false, message: "One or more equipment items could not be found." }, { status: 404 });
+    return jsonResponse({ ok: false, message: "One or more equipment items could not be found." }, { status: 404 });
   }
 
   await prisma.$transaction(async (tx) => {
@@ -373,7 +374,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     });
   });
 
-  return Response.json({
+  return jsonResponse({
     ok: true,
     message: "Template saved.",
     savedAt: new Date().toISOString(),

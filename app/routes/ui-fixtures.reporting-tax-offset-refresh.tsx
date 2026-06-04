@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { refreshTaxOffsetCacheForShop } from "../services/reportingService.server";
@@ -11,7 +12,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopId = session.shop;
   const cache = await refreshTaxOffsetCacheForShop(shopId);
 
-  return Response.json({
+  return jsonResponse({
     ok: true,
     shopId,
     cache: {

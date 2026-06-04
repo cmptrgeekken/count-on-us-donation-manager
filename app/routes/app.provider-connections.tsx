@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
@@ -14,7 +15,7 @@ import { queueProviderSyncRun } from "../services/providerSync.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
-  return Response.json(await getProviderConnectionsPageData(session.shop));
+  return jsonResponse(await getProviderConnectionsPageData(session.shop));
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -90,12 +91,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }, undefined, testFetch);
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() });
+        return jsonResponse({ ok: false, message: await error.text() });
       }
       throw error;
     }
 
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: "Printify credentials validated and saved. Run a sync to import SKU matches and cached POD costs.",
     });
@@ -104,7 +105,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "refresh-provider") {
     const provider = formData.get("provider")?.toString();
     if (provider !== "printful" && provider !== "printify") {
-      return Response.json({ ok: false, message: "Unknown provider." });
+      return jsonResponse({ ok: false, message: "Unknown provider." });
     }
 
     try {
@@ -119,12 +120,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
       }
       throw error;
     }
 
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message:
         provider === "printify"
@@ -142,12 +143,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
       }
       throw error;
     }
 
-    return Response.json({
+    return jsonResponse({
       ok: true,
       message: "Printify mapping saved. The selected variant will now use provider-backed POD costs.",
     });
@@ -156,7 +157,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "disconnect-provider") {
     const provider = formData.get("provider")?.toString();
     if (provider !== "printful" && provider !== "printify") {
-      return Response.json({ ok: false, message: "Unknown provider." });
+      return jsonResponse({ ok: false, message: "Unknown provider." });
     }
 
     try {
@@ -166,15 +167,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
     } catch (error) {
       if (error instanceof Response) {
-        return Response.json({ ok: false, message: await error.text() });
+        return jsonResponse({ ok: false, message: await error.text() });
       }
       throw error;
     }
 
-    return Response.json({ ok: true, message: `${provider === "printify" ? "Printify" : "Printful"} disconnected.` });
+    return jsonResponse({ ok: true, message: `${provider === "printify" ? "Printify" : "Printful"} disconnected.` });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." });
+  return jsonResponse({ ok: false, message: "Unknown action." });
 };
 
 function formatTimestamp(value: string | null) {

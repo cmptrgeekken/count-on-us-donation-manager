@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, Form, useLoaderData, useRouteError } from "@remix-run/react";
@@ -23,7 +24,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const setupWizard = await getSetupWizardProgress(shopId);
 
   if (!catalogSynced) {
-    return Response.json({
+    return jsonResponse({
       catalogSynced: false,
       productCount: 0,
       variantCount: 0,
@@ -38,7 +39,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     prisma.variantCostConfig.count({ where: { shopId } }),
   ]);
 
-  return Response.json({ catalogSynced: true, productCount, variantCount, configuredCount, setupWizard });
+  return jsonResponse({ catalogSynced: true, productCount, variantCount, configuredCount, setupWizard });
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -55,25 +56,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     stepIndex < 0 ||
     stepIndex >= setupWizardSteps.length
   ) {
-    return Response.json({ ok: false, message: "Invalid setup wizard action." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Invalid setup wizard action." }, { status: 400 });
   }
 
   if (intent === "complete-setup-step") {
     await updateSetupWizardState({ shopId, stepIndex, action: "complete" });
-    return Response.json({ ok: true, message: "Setup step marked complete." });
+    return jsonResponse({ ok: true, message: "Setup step marked complete." });
   }
 
   if (intent === "skip-setup-step") {
     await updateSetupWizardState({ shopId, stepIndex, action: "skip" });
-    return Response.json({ ok: true, message: "Setup step skipped for now." });
+    return jsonResponse({ ok: true, message: "Setup step skipped for now." });
   }
 
   if (intent === "resume-setup-step") {
     await updateSetupWizardState({ shopId, stepIndex, action: "resume" });
-    return Response.json({ ok: true, message: "Setup step resumed." });
+    return jsonResponse({ ok: true, message: "Setup step resumed." });
   }
 
-  return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
 };
 
 export default function Dashboard() {

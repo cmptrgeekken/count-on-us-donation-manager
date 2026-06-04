@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
 import { prisma } from "../db.server";
@@ -83,7 +84,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const pageLogs = hasNextPage ? logs.slice(0, PAGE_SIZE) : logs;
   const nextCursor = hasNextPage ? pageLogs.at(-1)?.id ?? null : null;
 
-  return Response.json({
+  return jsonResponse({
     action,
     startDate,
     endDate,

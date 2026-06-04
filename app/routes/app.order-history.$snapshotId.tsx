@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
@@ -38,7 +39,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const intent = formData.get("intent")?.toString();
 
   if (intent !== "create-manual-adjustment") {
-    return Response.json({ ok: false, message: "Unknown action." }, { status: 400 });
+    return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
   }
 
   const snapshot = await prisma.orderSnapshot.findFirst({
@@ -47,7 +48,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   });
 
   if (!snapshot) {
-    return Response.json({ ok: false, message: "Snapshot not found." }, { status: 404 });
+    return jsonResponse({ ok: false, message: "Snapshot not found." }, { status: 404 });
   }
 
   const parsed = manualAdjustmentSchema.safeParse({
@@ -60,7 +61,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   });
 
   if (!parsed.success) {
-    return Response.json(
+    return jsonResponse(
       { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid manual adjustment." },
       { status: 400 },
     );
@@ -76,7 +77,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   });
 
   if (!snapshotLine) {
-    return Response.json({ ok: false, message: "Snapshot line not found for this order." }, { status: 404 });
+    return jsonResponse({ ok: false, message: "Snapshot line not found for this order." }, { status: 404 });
   }
 
   await createManualAdjustment(
@@ -92,7 +93,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     prisma,
   );
 
-  return Response.json({ ok: true, message: "Manual adjustment created." });
+  return jsonResponse({ ok: true, message: "Manual adjustment created." });
 };
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -128,7 +129,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Not Found", { status: 404 });
   }
 
-  return Response.json({
+  return jsonResponse({
     snapshot: {
       id: snapshot.id,
       orderNumber: snapshot.orderNumber ?? "Unnumbered order",

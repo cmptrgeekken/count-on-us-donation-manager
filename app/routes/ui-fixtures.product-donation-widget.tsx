@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { LoaderFunctionArgs } from "@remix-run/node";
@@ -116,7 +117,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     ],
   };
 
-  return Response.json({
+  return jsonResponse({
     host: url.host,
     css,
     script,

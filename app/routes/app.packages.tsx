@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
@@ -109,7 +110,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   ]);
 
-  return Response.json({
+  return jsonResponse({
     packages: packages.map((pkg) => ({
       id: pkg.id,
       name: pkg.name,
@@ -169,7 +170,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         notes: formData.get("notes")?.toString() ?? "",
       });
       if (!parsed.success) {
-        return Response.json({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid package." }, { status: 400 });
+        return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid package." }, { status: 400 });
       }
 
       const data = {
@@ -194,7 +195,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         });
       }
 
-      return Response.json({ ok: true, message: "Package saved." });
+      return jsonResponse({ ok: true, message: "Package saved." });
     }
 
     if (intent === "add-material-line") {
@@ -206,7 +207,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         prisma.materialLibraryItem.findFirst({ where: { id: materialId, shopId, type: "shipping" }, select: { id: true } }),
       ]);
       if (!pkg || !material) {
-        return Response.json({ ok: false, message: "Package or material not found." }, { status: 404 });
+        return jsonResponse({ ok: false, message: "Package or material not found." }, { status: 404 });
       }
 
       await prisma.shippingPackageMaterialLine.upsert({
@@ -214,13 +215,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         create: { shopId, packageId, materialId, quantity },
         update: { quantity },
       });
-      return Response.json({ ok: true, message: "Package material saved." });
+      return jsonResponse({ ok: true, message: "Package material saved." });
     }
 
     if (intent === "remove-material-line") {
       const lineId = formData.get("lineId")?.toString() ?? "";
       await prisma.shippingPackageMaterialLine.deleteMany({ where: { id: lineId, shopId } });
-      return Response.json({ ok: true, message: "Package material removed." });
+      return jsonResponse({ ok: true, message: "Package material removed." });
     }
 
     if (intent === "resolve-review-item") {
@@ -229,16 +230,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         where: { id, shopId },
         data: { status: "resolved", resolvedAt: new Date() },
       });
-      return Response.json({ ok: true, message: "Review item resolved." });
+      return jsonResponse({ ok: true, message: "Review item resolved." });
     }
   } catch (error) {
     if (error instanceof Response) {
-      return Response.json({ ok: false, message: await error.text() }, { status: error.status });
+      return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
     }
     throw error;
   }
 
-  return Response.json({ ok: false, message: "Unsupported action." }, { status: 400 });
+  return jsonResponse({ ok: false, message: "Unsupported action." }, { status: 400 });
 };
 
 function Field({ label, name, defaultValue = "", type = "text" }: { label: string; name: string; defaultValue?: string; type?: string }) {

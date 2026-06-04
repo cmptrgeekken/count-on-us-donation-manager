@@ -1,3 +1,4 @@
+import { jsonResponse } from "~/utils/json-response.server";
 import type { ActionFunctionArgs } from "@remix-run/node";
 import { Prisma } from "@prisma/client";
 
@@ -23,7 +24,7 @@ function getClientIpAddress(request: Request) {
 }
 
 function errorResponse(status: number, code: string, message: string, headers?: Headers, fieldErrors?: Record<string, string[] | undefined>) {
-  return Response.json(
+  return jsonResponse(
     {
       error: {
         code,
@@ -144,7 +145,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const headers = new Headers(rateLimit.headers);
     headers.set("Cache-Control", "private, no-store");
 
-    return Response.json(
+    return jsonResponse(
       {
         data: {
           id: submission.id,
