@@ -37,6 +37,8 @@ type ShopifyOrderPayload = {
   admin_graphql_api_id?: string;
   name?: string | null;
   order_number?: string | number | null;
+  created_at?: string | null;
+  createdAt?: string | null;
   total_tax?: string | number | null;
   current_total_tax?: string | number | null;
   total_tax_set?: {
@@ -98,6 +100,13 @@ function getOrderSalesTax(order: ShopifyOrderPayload) {
       order.total_tax ??
       order.total_tax_set?.shop_money?.amount,
   );
+}
+
+function getOrderCreatedAt(order: ShopifyOrderPayload) {
+  const value = order.created_at ?? order.createdAt;
+  if (!value) return undefined;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
 function toVariantGid(lineItem: SnapshotLineItemPayload) {
@@ -603,6 +612,7 @@ export async function createSnapshot(
           orderNumber: order.name ?? order.order_number?.toString() ?? null,
           origin,
           salesTaxCollected: getOrderSalesTax(order),
+          createdAt: getOrderCreatedAt(order),
         },
       });
       const packagingLines: Array<{

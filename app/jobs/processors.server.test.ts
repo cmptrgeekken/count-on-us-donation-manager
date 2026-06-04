@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   refreshTaxOffsetCacheForShop: vi.fn(),
   syncShopifyCharges: vi.fn(),
   runAnalyticalRecalculation: vi.fn(),
+  runFinancialBackfill: vi.fn(),
   sendPostPurchaseDonationEmail: vi.fn(),
   createSnapshot: vi.fn(),
   runProviderSync: vi.fn(),
@@ -28,6 +29,10 @@ vi.mock("../services/catalogSync.server", () => ({
 
 vi.mock("../services/chargeSyncService.server", () => ({
   syncShopifyCharges: mocks.syncShopifyCharges,
+}));
+
+vi.mock("../services/financialBackfill.server", () => ({
+  runFinancialBackfill: mocks.runFinancialBackfill,
 }));
 
 vi.mock("../services/adjustmentService.server", () => ({
@@ -211,6 +216,38 @@ describe("registerAllProcessors", () => {
     );
   });
 
+  it("passes historical reconciliation windows through to the reconciliation service", async () => {
+    const boss = createBoss();
+    mocks.adminFactory.mockResolvedValue({ admin: { graphql: vi.fn() } });
+    mocks.runReconciliation.mockResolvedValue({ created: 0, skipped: 0 });
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("reconciliation.shop");
+    expect(worker).toBeTruthy();
+
+    await worker!([
+      {
+        data: {
+          shopId: "shop-1",
+          since: "2026-02-01T00:00:00.000Z",
+          until: "2026-04-01T00:00:00.000Z",
+        },
+      },
+    ]);
+
+    expect(mocks.runReconciliation).toHaveBeenCalledWith(
+      "shop-1",
+      expect.any(Object),
+      mocks.prisma,
+      {
+        since: new Date("2026-02-01T00:00:00.000Z"),
+        until: new Date("2026-04-01T00:00:00.000Z"),
+        searchQuery: undefined,
+      },
+    );
+  });
+
   it("opens reporting periods from payout webhooks", async () => {
     const boss = createBoss();
     const payoutPayload = { id: 123, date: "2026-04-07" };
@@ -332,6 +369,39 @@ describe("registerAllProcessors", () => {
         }),
       }),
     );
+  });
+
+  it("runs financial backfill jobs through the shared service orchestrator", async () => {
+    const boss = createBoss();
+    mocks.adminFactory.mockResolvedValue({ admin: { graphql: vi.fn() } });
+    mocks.runFinancialBackfill.mockResolvedValue({});
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("financial.backfill");
+    expect(worker).toBeTruthy();
+
+    await worker!([
+      {
+        data: {
+          shopId: "shop-1",
+          since: "2026-02-01T00:00:00.000Z",
+          until: "2026-04-01T00:00:00.000Z",
+          closePeriods: true,
+          createMonthlyPeriods: false,
+        },
+      },
+    ]);
+
+    expect(mocks.runFinancialBackfill).toHaveBeenCalledWith({
+      shopId: "shop-1",
+      admin: expect.any(Object),
+      since: "2026-02-01T00:00:00.000Z",
+      until: "2026-04-01T00:00:00.000Z",
+      closePeriods: true,
+      createMonthlyPeriods: false,
+      db: mocks.prisma,
+    });
   });
 
   it("runs analytical recalculation jobs per shop and run id", async () => {

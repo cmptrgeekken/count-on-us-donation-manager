@@ -4,6 +4,7 @@ import { runAnalyticalRecalculation } from "../services/analyticalRecalculation.
 import { syncShopifyCharges } from "../services/chargeSyncService.server";
 import { fullSync, incrementalSync } from "../services/catalogSync.server";
 import { processOrderUpdate, processRefund } from "../services/adjustmentService.server";
+import { runFinancialBackfill } from "../services/financialBackfill.server";
 import { runReconciliation } from "../services/reconciliationService.server";
 import { createReportingPeriodFromPayout } from "../services/reportingPeriodService.server";
 import { refreshTaxOffsetCacheForShop } from "../services/reportingService.server";
@@ -27,6 +28,7 @@ const QUEUES = [
   "reporting.tax-offset.daily",
   "reporting.tax-offset.shop",
   "reporting.recalculate",
+  "financial.backfill",
   "shop.delete",
   "webhook.compliance",
   "catalog.sync",
@@ -147,14 +149,18 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     }
   });
 
-  await boss.work<{ shopId: string }>("reconciliation.shop", async (jobs) => {
+  await boss.work<{ shopId: string; since?: string; until?: string; searchQuery?: string }>("reconciliation.shop", async (jobs) => {
     const job = jobs[0];
     if (!job) return;
 
     const { shopId } = job.data;
     try {
       const { admin } = await unauthenticated.admin(shopId);
-      await runReconciliation(shopId, admin, prisma);
+      await runReconciliation(shopId, admin, prisma, {
+        since: job.data.since ? new Date(job.data.since) : undefined,
+        until: job.data.until ? new Date(job.data.until) : undefined,
+        searchQuery: job.data.searchQuery,
+      });
     } catch (error) {
       await prisma.auditLog.create({
         data: {
@@ -189,16 +195,24 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
     }
   });
 
-  await boss.work<{ shopId: string; payoutId?: string; payoutDate?: string }>(
+  await boss.work<{ shopId: string; payoutId?: string; payoutDate?: string; since?: string; until?: string }>(
     "shopify-charges.shop",
     async (jobs) => {
       const job = jobs[0];
       if (!job) return;
 
-      const { shopId, payoutId, payoutDate } = job.data;
+      const { shopId, payoutId, payoutDate, since, until } = job.data;
       try {
         const { admin } = await unauthenticated.admin(shopId);
-        await syncShopifyCharges({ shopId, admin, payoutId, payoutDate, db: prisma });
+        await syncShopifyCharges({
+          shopId,
+          admin,
+          payoutId,
+          payoutDate,
+          since: since ? new Date(since) : undefined,
+          until: until ? new Date(until) : undefined,
+          db: prisma,
+        });
       } catch (error) {
         await prisma.auditLog.create({
           data: {
@@ -273,6 +287,46 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
 
     const { shopId, runId } = job.data;
     await runAnalyticalRecalculation(shopId, runId, prisma);
+  });
+
+  await boss.work<{
+    shopId: string;
+    since?: string;
+    until?: string;
+    closePeriods?: boolean;
+    createMonthlyPeriods?: boolean;
+  }>("financial.backfill", async (jobs) => {
+    const job = jobs[0];
+    if (!job) return;
+
+    const { shopId, since, until, closePeriods, createMonthlyPeriods } = job.data;
+    try {
+      const { admin } = await unauthenticated.admin(shopId);
+      await runFinancialBackfill({
+        shopId,
+        admin,
+        since,
+        until,
+        closePeriods,
+        createMonthlyPeriods,
+        db: prisma,
+      });
+    } catch (error) {
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "ReportingPeriod",
+          action: "FINANCIAL_BACKFILL_FAILED",
+          actor: "system",
+          payload: {
+            since,
+            until,
+            message: error instanceof Error ? error.message : "Unknown financial backfill failure",
+          },
+        },
+      });
+      throw error;
+    }
   });
 
   await boss.work<{ shopId: string; deletionJobId: string }>(

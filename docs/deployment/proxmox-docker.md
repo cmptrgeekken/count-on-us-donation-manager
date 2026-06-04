@@ -225,6 +225,36 @@ material/equipment assignments, variant cost config basics, and product-Cause
 assignments. Template rows are exported as source-keyed records and recreated
 directly by the importer.
 
+Export app-owned financial ledger data from a dev or production tenant when you
+need to carry over non-snapshot records such as business expenses, Shopify charge
+transactions already synced in another environment, disbursements, artist
+payments, and tax true-ups:
+
+```sh
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  exec app npm run export:financial -- \
+    --shop=source-store.myshopify.com \
+    --since=2026-02-01 \
+    --until=2026-06-05 \
+    --out=/tmp/financial.json
+
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  cp app:/tmp/financial.json seed-imports/financial.json
+```
+
+The financial export intentionally excludes order snapshots, snapshot lines,
+line allocations, and materialized period allocations. Those should be recreated
+by the financial backfill/reporting services against the target shop's current
+Cause, material, and equipment configuration. Receipt file keys are exported as
+references only; this command does not copy backing receipt files from object
+storage.
+
 Before importing into production, take a database backup:
 
 ```sh
@@ -249,6 +279,7 @@ APP_ENV_FILE=.env.production docker compose \
     --shop=target-store.myshopify.com \
     --shop-domain=target-store.myshopify.com \
     --normalize-product-status \
+    --reset-shop \
     --dry-run
 ```
 
@@ -263,8 +294,71 @@ APP_ENV_FILE=.env.production docker compose \
     --file=/tmp/catalog.json \
     --shop=target-store.myshopify.com \
     --shop-domain=target-store.myshopify.com \
-    --normalize-product-status
+    --normalize-product-status \
+    --reset-shop
 ```
+
+Use `--reset-shop` for a one-time bootstrap into a fresh target shop and for
+safe retries after a failed import. Without it, the importer merges Shopify
+products/variants by Shopify ID, but library/configuration rows such as
+materials, equipment, templates, template lines, and Causes are inserted as new
+rows and can duplicate existing imported data.
+
+## Production financial backfill
+
+Use the financial backfill script for historical orders, payout/fee history, and
+reporting period materialization. It queues a `financial.backfill` job for the
+running app worker. The worker calls the same production services used by the
+scheduled jobs: reconciliation creates order snapshots through the normal cost
+engine, Shopify charge sync imports payout/fee transactions, and reporting
+period closure materializes Cause and artist allocations from the target shop's
+current configuration.
+
+Without Shopify's `read_all_orders` scope, Shopify generally limits historical
+order access to the most recent 60 days. Use the explicit date window that
+matches the permissions available to the installed app.
+
+Dry-run the queued payload:
+
+```sh
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  exec app npm run backfill:financial -- \
+    --shop=target-store.myshopify.com \
+    --since=2026-02-01 \
+    --until=2026-06-05 \
+    --dry-run
+```
+
+Queue the production backfill:
+
+```sh
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  exec app npm run backfill:financial -- \
+    --shop=target-store.myshopify.com \
+    --since=2026-02-01 \
+    --until=2026-06-05
+```
+
+The `--until` date is exclusive. Watch the app logs after queueing the job:
+
+```sh
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  logs -f app
+```
+
+Pass `--no-close-periods` to import snapshots and charges without closing any
+reporting periods. Pass `--create-monthly-periods` only when Shopify charge sync
+does not create payout-backed reporting periods and you intentionally want
+synthetic monthly periods for the backfill window.
 
 For a deliberate migration that includes historical order CSVs already exported
 from another environment, stream those CSVs into `/tmp` the same way:
@@ -277,12 +371,12 @@ APP_ENV_FILE=.env.production docker compose \
   exec -T app sh -c 'cat > /tmp/orders.csv' < seed-imports/orders.csv
 ```
 
-Then pass the same importer flags used locally, for example
+Then pass the same catalog importer flags used locally, for example
 `--orders-csv=/tmp/orders.csv` and
-`--order-line-map=/tmp/order-line-map.json`. Keep this separate from normal app
-install behavior: production installs do not automatically import historical
-orders, and the daily reconciliation job remains a short-window missed-webhook
-catcher rather than a bulk migration.
+`--order-line-map=/tmp/order-line-map.json`. Keep this as a fallback migration
+path: the preferred production backfill is the queued `financial.backfill` job
+above because it runs the app's current reconciliation, cost engine, charge sync,
+and reporting-period services.
 
 ## Rollback
 

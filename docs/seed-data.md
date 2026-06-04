@@ -32,11 +32,11 @@ npm run seed:dev -- --shop=your-dev-store.myshopify.com --months=9 --orders-min=
 npm run seed:dev -- --shop=your-dev-store.myshopify.com --preset=demo-store --reset --end-date=2026-04-01
 ```
 
-## Import catalog and live-store financial exports
+## Import catalog exports
 
-For higher-fidelity dev testing, use the dev-only catalog importer. It imports the
-Shopify catalog/cost JSON export plus optional orders, Shopify charges, and payment
-transaction CSV exports.
+For higher-fidelity dev testing, use the catalog importer. It imports the
+Shopify catalog/cost JSON export and can optionally ingest legacy financial CSVs
+for local migration experiments.
 
 You can create a matching catalog/cost JSON export from an existing Count On Us
 tenant with:
@@ -51,6 +51,23 @@ This export includes material and equipment libraries, Causes, synced products
 and variants, cost templates and template lines, direct variant material/equipment
 assignments, variant cost config basics, and product-Cause assignments. Template
 rows are exported as source-keyed records and recreated directly by the importer.
+
+Export app-owned financial ledger records separately:
+
+```bash
+npm run export:financial -- \
+  --shop=source-store.myshopify.com \
+  --since=2026-02-01 \
+  --until=2026-06-05 \
+  --out=seed-imports/financial.json
+```
+
+The financial export includes non-snapshot records such as business expenses,
+synced Shopify charge transactions, disbursements, artist payments, and tax
+true-ups. It intentionally excludes order snapshots, snapshot lines, line
+allocations, and materialized period allocations; production backfills should
+recreate those through `npm run backfill:financial` so reports use the target
+shop's current Cause, material, and equipment configuration.
 
 For production Docker usage, including `docker compose exec` file streaming for
 the read-only app container, see
@@ -104,7 +121,7 @@ npm run seed:import:catalog -- \
 
 - `--shop`: target tenant/shop ID to seed. Pass this explicitly for dev-store imports.
 - `--shop-domain`: Shopify domain to store on the `Shop` row. Defaults to the same value as `--shop`.
-- `--reset-shop`: clears imported catalog, reporting, order snapshot, allocation, charge, business expense, and disclosure cache rows for the shop before importing. It keeps the `Shop` row itself.
+- `--reset-shop`: clears imported catalog, reporting, order snapshot, allocation, charge, business expense, and disclosure cache rows for the shop before importing. It keeps the `Shop` row itself. Use this for one-time bootstrap imports and safe retries after a failed import; without it, library/configuration rows such as materials, equipment, templates, template lines, and Causes can duplicate.
 - `--reset-only`: runs the `--reset-shop` cleanup and exits without importing. Use this to clean up an accidental import under the wrong shop ID.
 - `--normalize-product-status`: maps non-standard product statuses from the export into Prisma-supported values.
 - `--order-line-map`: local JSON file for matching renamed historical order line names to current catalog variants. Defaults to `order-line-map.json` beside `--orders-csv`.
@@ -118,10 +135,14 @@ If `--shop` is omitted, the importer derives the shop ID from the JSON export in
 this order: `meta.shopId`, the first product `shopId`, then the first cause
 `shopId`.
 
-Order CSV rows do not need material or equipment metadata. The importer resolves
-order line names back to the imported variants, then derives material, equipment,
-labor, mistake buffer, and cause allocations from the seeded variant catalog.
-Customer names, emails, addresses, and phone numbers are not persisted.
+Order CSV rows do not need material or equipment metadata. The catalog importer
+resolves order line names back to the imported variants, then derives material,
+equipment, labor, mistake buffer, and cause allocations from the seeded variant
+catalog. Customer names, emails, addresses, and phone numbers are not persisted.
+For production historical order and payout backfills, prefer
+`npm run backfill:financial`, which queues the app's normal reconciliation,
+Shopify charge sync, and reporting period services so reporting is generated
+from the target shop's current Cause, material, and equipment configuration.
 
 When historical order line names no longer exactly match current product names,
 the importer first checks `order-line-map.json`, then attempts a conservative
