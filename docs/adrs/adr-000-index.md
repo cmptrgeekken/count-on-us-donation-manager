@@ -21,6 +21,7 @@ This directory contains Architecture Decision Records (ADRs) for the Shopify Don
 | [ADR-013](adr-013-artist-collaboration-product-attribution-and-payouts.md) | Artist collaboration product attribution and payouts | Proposed | May 2026 |
 | [ADR-014](adr-014-artist-submission-storefront-widget.md) | Artist submission storefront widget | Proposed | May 2026 |
 | [ADR-015](adr-015-dedicated-admin-web-experience.md) | Dedicated admin web experience | Proposed | May 2026 |
+| [ADR-016](adr-016-vps-deployment-and-ci-cd-strategy.md) | Single-server Docker deployment and CI/CD strategy | Proposed | June 2026 |
 
 ## Dependencies
 
@@ -38,6 +39,7 @@ ADR-012 (Public financial disclosure boundaries) - extends ADR-001, ADR-002, ADR
 ADR-013 (Artist collaboration product attribution and payouts) - extends ADR-001, ADR-002, ADR-008, ADR-009, and ADR-012 for artist-routed products and artist payables
 ADR-014 (Artist submission storefront widget) - extends ADR-004, ADR-012, and ADR-013 for storefront artist intake and upload handling
 ADR-015 (Dedicated admin web experience) - extends ADR-001, ADR-003, ADR-004, ADR-010, ADR-012, ADR-013, and ADR-014 for a custom admin shell and shop-scoped capability configuration
+ADR-016 (Single-server Docker deployment and CI/CD strategy) - extends ADR-001, ADR-004, ADR-007, ADR-010, ADR-012, and ADR-015 for low-cost Proxmox/VPS hosting, Docker Compose production deployment, network-isolated containers, object storage, and staged GitHub Actions CI/CD
 ```
 
 ## Conventions
