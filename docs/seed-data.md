@@ -38,6 +38,24 @@ For higher-fidelity dev testing, use the dev-only catalog importer. It imports t
 Shopify catalog/cost JSON export plus optional orders, Shopify charges, and payment
 transaction CSV exports.
 
+You can create a matching catalog/cost JSON export from an existing Count On Us
+tenant with:
+
+```bash
+npm run export:catalog -- \
+  --shop=source-store.myshopify.com \
+  --out=seed-imports/catalog.json
+```
+
+This export includes material and equipment libraries, Causes, synced products
+and variants, cost templates and template lines, direct variant material/equipment
+assignments, variant cost config basics, and product-Cause assignments. Template
+rows are exported as source-keyed records and recreated directly by the importer.
+
+For production Docker usage, including `docker compose exec` and `docker compose
+cp` commands for the read-only app container, see
+[Proxmox Docker deployment](./deployment/proxmox-docker.md#production-catalog-exportimport).
+
 Recommended local file names:
 
 ```text
@@ -120,8 +138,9 @@ The dry run also reports repeated material/equipment patterns as possible
 production and shipping template candidates. Candidate output includes a
 suggested template name, the full material/equipment line details, and example
 products/variants using that pattern. Pass `--template-candidates-report` to
-write the same analysis to JSON for review. This is analysis-only for now; the
-importer does not create or assign cost templates.
+write the same analysis to JSON for review. This candidate report is
+analysis-only; exported `costTemplates` and template line arrays are imported
+directly when they are present in the JSON.
 
 If you accidentally imported under the placeholder shop ID, clean it up with:
 

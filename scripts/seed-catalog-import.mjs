@@ -18,6 +18,9 @@ const DEFAULT_MISTAKE_BUFFER = new Prisma.Decimal("0.1");
 const EXPECTED_COLLECTIONS = [
   "materialLibraryItems",
   "equipmentLibraryItems",
+  "costTemplates",
+  "costTemplateMaterialLines",
+  "costTemplateEquipmentLines",
   "causes",
   "products",
   "variants",
@@ -380,7 +383,11 @@ function loadExport(file) {
   const data = JSON.parse(readFileSync(file, "utf8"));
   for (const collection of EXPECTED_COLLECTIONS) {
     if (!Array.isArray(data[collection])) {
-      throw new Error(`Missing expected array: ${collection}`);
+      if (collection.startsWith("costTemplate")) {
+        data[collection] = [];
+      } else {
+        throw new Error(`Missing expected array: ${collection}`);
+      }
     }
   }
   return data;
@@ -392,6 +399,9 @@ function validateExport(data, targetShopId) {
 
   const materialKeys = uniqueValues(data.materialLibraryItems, "_dedupeKey");
   const equipmentKeys = uniqueValues(data.equipmentLibraryItems, "_dedupeKey");
+  const templateKeys = uniqueValues(data.costTemplates, "_dedupeKey");
+  const templateMaterialLineKeys = uniqueValues(data.costTemplateMaterialLines, "_dedupeKey");
+  const templateEquipmentLineKeys = uniqueValues(data.costTemplateEquipmentLines, "_dedupeKey");
   const causeKeys = uniqueValues(data.causes, "_dedupeKey");
   const productIds = uniqueValues(data.products, "shopifyId");
   const variantIds = uniqueValues(data.variants, "shopifyId");
@@ -399,6 +409,9 @@ function validateExport(data, targetShopId) {
   for (const [collection, key] of [
     ["materialLibraryItems", "_dedupeKey"],
     ["equipmentLibraryItems", "_dedupeKey"],
+    ["costTemplates", "_dedupeKey"],
+    ["costTemplateMaterialLines", "_dedupeKey"],
+    ["costTemplateEquipmentLines", "_dedupeKey"],
     ["causes", "_dedupeKey"],
     ["products", "shopifyId"],
     ["variants", "shopifyId"],
@@ -406,6 +419,30 @@ function validateExport(data, targetShopId) {
     const duplicates = duplicateValues(data[collection], key);
     if (duplicates.length > 0) {
       errors.push(`${collection} has duplicate ${key} values: ${duplicates.slice(0, 5).join(", ")}`);
+    }
+  }
+
+  for (const row of data.costTemplates) {
+    if (row.defaultShippingTemplateDedupeKey && !templateKeys.has(row.defaultShippingTemplateDedupeKey)) {
+      errors.push(`Cost template ${row._dedupeKey} references missing default shipping template ${row.defaultShippingTemplateDedupeKey}`);
+    }
+  }
+
+  for (const row of data.costTemplateMaterialLines) {
+    if (!templateKeys.has(row.templateDedupeKey)) {
+      errors.push(`Template material line ${row._dedupeKey} references missing template ${row.templateDedupeKey}`);
+    }
+    if (!materialKeys.has(row.materialDedupeKey)) {
+      errors.push(`Template material line ${row._dedupeKey} references missing material ${row.materialDedupeKey}`);
+    }
+  }
+
+  for (const row of data.costTemplateEquipmentLines) {
+    if (!templateKeys.has(row.templateDedupeKey)) {
+      errors.push(`Template equipment line ${row._dedupeKey} references missing template ${row.templateDedupeKey}`);
+    }
+    if (!equipmentKeys.has(row.equipmentDedupeKey)) {
+      errors.push(`Template equipment line ${row._dedupeKey} references missing equipment ${row.equipmentDedupeKey}`);
     }
   }
 
@@ -419,8 +456,13 @@ function validateExport(data, targetShopId) {
     if (!variantIds.has(row.variantShopifyId)) {
       errors.push(`Variant cost config references missing variant ${row.variantShopifyId}`);
     }
-    if (row.productionTemplateId || row.shippingTemplateId) {
-      warnings.push(`Variant ${row.variantShopifyId} references a cost template, but this import does not include costTemplates.`);
+    const productionTemplateKey = row.productionTemplateDedupeKey ?? row.productionTemplateId;
+    const shippingTemplateKey = row.shippingTemplateDedupeKey ?? row.shippingTemplateId;
+    if (productionTemplateKey && !templateKeys.has(productionTemplateKey)) {
+      warnings.push(`Variant ${row.variantShopifyId} references missing production template ${productionTemplateKey}; the assignment will be skipped.`);
+    }
+    if (shippingTemplateKey && !templateKeys.has(shippingTemplateKey)) {
+      warnings.push(`Variant ${row.variantShopifyId} references missing shipping template ${shippingTemplateKey}; the assignment will be skipped.`);
     }
   }
 
@@ -431,8 +473,9 @@ function validateExport(data, targetShopId) {
     if (!materialKeys.has(row.materialDedupeKey)) {
       errors.push(`Material line ${row._dedupeKey} references missing material ${row.materialDedupeKey}`);
     }
-    if (row.templateLineId) {
-      warnings.push(`Material line ${row._dedupeKey} has templateLineId, but this import does not include costTemplateMaterialLines.`);
+    const templateLineKey = row.templateLineDedupeKey ?? row.templateLineId;
+    if (templateLineKey && !templateMaterialLineKeys.has(templateLineKey)) {
+      warnings.push(`Material line ${row._dedupeKey} references missing template material line ${templateLineKey}; the override link will be skipped.`);
     }
   }
 
@@ -443,8 +486,9 @@ function validateExport(data, targetShopId) {
     if (!equipmentKeys.has(row.equipmentDedupeKey)) {
       errors.push(`Equipment line ${row._dedupeKey} references missing equipment ${row.equipmentDedupeKey}`);
     }
-    if (row.templateLineId) {
-      warnings.push(`Equipment line ${row._dedupeKey} has templateLineId, but this import does not include costTemplateEquipmentLines.`);
+    const templateLineKey = row.templateLineDedupeKey ?? row.templateLineId;
+    if (templateLineKey && !templateEquipmentLineKeys.has(templateLineKey)) {
+      warnings.push(`Equipment line ${row._dedupeKey} references missing template equipment line ${templateLineKey}; the override link will be skipped.`);
     }
   }
 
@@ -1480,6 +1524,9 @@ async function importCatalog(data, options) {
   const shopDomain = options.shopDomain ?? shopId;
   const materialIds = new Map();
   const equipmentIds = new Map();
+  const templateIds = new Map();
+  const templateMaterialLineIds = new Map();
+  const templateEquipmentLineIds = new Map();
   const causeIds = new Map();
   const productIds = new Map();
   const variantIds = new Map();
@@ -1597,6 +1644,70 @@ async function importCatalog(data, options) {
     equipmentIds.set(row._dedupeKey, equipment.id);
   }
 
+  for (const row of data.costTemplates) {
+    const template = await prisma.costTemplate.create({
+      data: {
+        shopId,
+        name: row.name,
+        type: row.type ?? "production",
+        defaultShippingTemplateId: null,
+        description: row.description,
+        status: row.status ?? "active",
+      },
+    });
+    templateIds.set(row._dedupeKey, template.id);
+  }
+
+  for (const row of data.costTemplates) {
+    const templateId = templateIds.get(row._dedupeKey);
+    const defaultShippingTemplateId = row.defaultShippingTemplateDedupeKey
+      ? templateIds.get(row.defaultShippingTemplateDedupeKey)
+      : null;
+    if (templateId && defaultShippingTemplateId) {
+      await prisma.costTemplate.update({
+        where: { id: templateId },
+        data: { defaultShippingTemplateId },
+      });
+    }
+  }
+
+  for (const row of data.costTemplateMaterialLines) {
+    const templateId = templateIds.get(row.templateDedupeKey);
+    const materialId = materialIds.get(row.materialDedupeKey);
+    if (!templateId || !materialId) {
+      throw new Error(`Cannot import template material line ${row._dedupeKey}: missing template or material mapping.`);
+    }
+
+    const line = await prisma.costTemplateMaterialLine.create({
+      data: {
+        template: { connect: { id: templateId } },
+        material: { connect: { id: materialId } },
+        yield: decimal(row.yield),
+        quantity: decimal(row.quantity) ?? new Prisma.Decimal(1),
+        usesPerVariant: decimal(row.usesPerVariant),
+      },
+    });
+    templateMaterialLineIds.set(row._dedupeKey, line.id);
+  }
+
+  for (const row of data.costTemplateEquipmentLines) {
+    const templateId = templateIds.get(row.templateDedupeKey);
+    const equipmentId = equipmentIds.get(row.equipmentDedupeKey);
+    if (!templateId || !equipmentId) {
+      throw new Error(`Cannot import template equipment line ${row._dedupeKey}: missing template or equipment mapping.`);
+    }
+
+    const line = await prisma.costTemplateEquipmentLine.create({
+      data: {
+        template: { connect: { id: templateId } },
+        equipment: { connect: { id: equipmentId } },
+        minutes: decimal(row.minutes),
+        uses: decimal(row.uses),
+      },
+    });
+    templateEquipmentLineIds.set(row._dedupeKey, line.id);
+  }
+
   for (const row of data.causes) {
     const cause = await prisma.cause.create({
       data: {
@@ -1663,21 +1774,23 @@ async function importCatalog(data, options) {
 
   for (const row of data.variantCostConfigs) {
     const variantId = variantIds.get(row.variantShopifyId);
+    const productionTemplateId = templateIds.get(row.productionTemplateDedupeKey ?? row.productionTemplateId) ?? null;
+    const shippingTemplateId = templateIds.get(row.shippingTemplateDedupeKey ?? row.shippingTemplateId) ?? null;
     const config = await prisma.variantCostConfig.upsert({
       where: { variantId },
       create: {
         shopId,
         variantId,
-        productionTemplateId: null,
-        shippingTemplateId: null,
+        productionTemplateId,
+        shippingTemplateId,
         laborMinutes: decimal(row.laborMinutes),
         laborRate: null,
         mistakeBuffer: null,
         lineItemCount: row.lineItemCount ?? 0,
       },
       update: {
-        productionTemplateId: null,
-        shippingTemplateId: null,
+        productionTemplateId,
+        shippingTemplateId,
         laborMinutes: decimal(row.laborMinutes),
         laborRate: null,
         mistakeBuffer: null,
@@ -1690,6 +1803,7 @@ async function importCatalog(data, options) {
   for (const row of data.variantMaterialLines) {
     const configId = configIds.get(row.variantShopifyId);
     const materialId = materialIds.get(row.materialDedupeKey);
+    const templateLineId = templateMaterialLineIds.get(row.templateLineDedupeKey ?? row.templateLineId) ?? null;
     if (!configId || !materialId) {
       throw new Error(`Cannot import material line ${row._dedupeKey ?? row.variantShopifyId}: missing config or material mapping.`);
     }
@@ -1699,6 +1813,7 @@ async function importCatalog(data, options) {
         shopId,
         config: { connect: { id: configId } },
         material: { connect: { id: materialId } },
+        templateLineId,
         yield: decimal(row.yield),
         quantity: decimal(row.quantity) ?? new Prisma.Decimal(1),
         usesPerVariant: decimal(row.usesPerVariant),
@@ -1709,6 +1824,7 @@ async function importCatalog(data, options) {
   for (const row of data.variantEquipmentLines) {
     const configId = configIds.get(row.variantShopifyId);
     const equipmentId = equipmentIds.get(row.equipmentDedupeKey);
+    const templateLineId = templateEquipmentLineIds.get(row.templateLineDedupeKey ?? row.templateLineId) ?? null;
     if (!configId || !equipmentId) {
       throw new Error(`Cannot import equipment line ${row._dedupeKey ?? row.variantShopifyId}: missing config or equipment mapping.`);
     }
@@ -1718,6 +1834,7 @@ async function importCatalog(data, options) {
         shopId,
         config: { connect: { id: configId } },
         equipment: { connect: { id: equipmentId } },
+        templateLineId,
         minutes: decimal(row.minutes),
         uses: decimal(row.uses),
       },
