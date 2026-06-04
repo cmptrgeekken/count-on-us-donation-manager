@@ -151,6 +151,24 @@ rclone sync backups/postgres b2:your-count-on-us-backups/postgres
 
 Do not rely on local VM disk as the only copy. Also test restore before treating the deployment as production-ready.
 
+Restore from a verified backup with:
+
+```sh
+bash scripts/restore-postgres.sh backups/postgres/countonus-YYYYMMDDTHHMMSSZ.sql.gz
+```
+
+The restore script stops the app, takes a pre-restore safety backup under `backups/postgres/pre-restore`, pipes the selected dump into `psql`, restarts the app, and prints service status. It prompts for confirmation by default. For non-interactive use, pass `--yes`:
+
+```sh
+bash scripts/restore-postgres.sh backups/postgres/countonus-YYYYMMDDTHHMMSSZ.sql.gz --yes
+```
+
+Only skip the pre-restore backup when you have a known-good off-host copy:
+
+```sh
+SKIP_PRE_RESTORE_BACKUP=true bash scripts/restore-postgres.sh backups/postgres/countonus-YYYYMMDDTHHMMSSZ.sql.gz
+```
+
 ## Rollback
 
 Rollback is code-first, database-careful:
