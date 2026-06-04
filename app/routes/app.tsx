@@ -1,6 +1,6 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import type { HeadersFunction, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, Outlet, useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, Outlet, useLoaderData, useLocation, useRouteError } from "@remix-run/react";
 import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 
@@ -36,27 +36,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
 export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
+  const { search } = useLocation();
+  const appHref = (path: string) => `${path}${search}`;
 
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
       {/* Navigation renders in the Shopify admin sidebar */}
       <ui-nav-menu>
-        <Link to="/app/dashboard" rel="home">Dashboard</Link>
-        <Link to="/app/settings">Settings</Link>
-        <Link to="/app/materials">Materials</Link>
-        <Link to="/app/packages">Shipping Packages</Link>
-        <Link to="/app/equipment">Equipment</Link>
-        <Link to="/app/templates">Cost Templates</Link>
-        <Link to="/app/variants">Variants</Link>
-        <Link to="/app/causes">Causes</Link>
-        <Link to="/app/artists">Artists</Link>
-        <Link to="/app/artist-submissions">Artist Submissions</Link>
-        <Link to="/app/products">Products</Link>
-        <Link to="/app/reporting">Reporting</Link>
-        <Link to="/app/expenses">Expenses</Link>
-        <Link to="/app/audit-log">Audit Log</Link>
-        <Link to="/app/provider-connections">Provider Connections</Link>
-        <Link to="/app/order-history">Order History</Link>
+        <Link to={appHref("/app/dashboard")} rel="home">Dashboard</Link>
+        <Link to={appHref("/app/settings")}>Settings</Link>
+        <Link to={appHref("/app/materials")}>Materials</Link>
+        <Link to={appHref("/app/packages")}>Shipping Packages</Link>
+        <Link to={appHref("/app/equipment")}>Equipment</Link>
+        <Link to={appHref("/app/templates")}>Cost Templates</Link>
+        <Link to={appHref("/app/variants")}>Variants</Link>
+        <Link to={appHref("/app/causes")}>Causes</Link>
+        <Link to={appHref("/app/artists")}>Artists</Link>
+        <Link to={appHref("/app/artist-submissions")}>Artist Submissions</Link>
+        <Link to={appHref("/app/products")}>Products</Link>
+        <Link to={appHref("/app/reporting")}>Reporting</Link>
+        <Link to={appHref("/app/expenses")}>Expenses</Link>
+        <Link to={appHref("/app/audit-log")}>Audit Log</Link>
+        <Link to={appHref("/app/provider-connections")}>Provider Connections</Link>
+        <Link to={appHref("/app/order-history")}>Order History</Link>
       </ui-nav-menu>
       <Outlet />
     </AppProvider>

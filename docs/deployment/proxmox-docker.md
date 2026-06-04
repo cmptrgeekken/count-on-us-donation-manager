@@ -175,6 +175,101 @@ Prefer backups created by `scripts/backup-postgres.sh`, because it runs `pg_dump
 FILTER_UNSUPPORTED_PG_SETTINGS=false bash scripts/restore-postgres.sh backups/postgres/countonus-YYYYMMDDTHHMMSSZ.sql.gz
 ```
 
+## Production catalog export/import
+
+The production app image includes the catalog export and import scripts. Run them
+through the `app` service so they use the same Node, Prisma client, and
+`DATABASE_URL` as the deployed application.
+
+The production app container is read-only except for `/tmp`, so write temporary
+files inside `/tmp` and use `docker compose cp` to move files between the host
+and container.
+
+Use the same Compose arguments as the deploy script:
+
+```sh
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  ps
+```
+
+Export catalog/configuration data from a production tenant:
+
+```sh
+mkdir -p seed-imports
+
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  exec app npm run export:catalog -- \
+    --shop=source-store.myshopify.com \
+    --out=/tmp/catalog.json
+
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  cp app:/tmp/catalog.json seed-imports/catalog.json
+```
+
+This export includes material and equipment libraries, Causes, synced products
+and variants, cost templates and template lines, direct variant
+material/equipment assignments, variant cost config basics, and product-Cause
+assignments. Template rows are exported as source-keyed records and recreated
+directly by the importer.
+
+Before importing into production, take a database backup:
+
+```sh
+bash scripts/backup-postgres.sh
+```
+
+Dry-run the import inside the production app container:
+
+```sh
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  cp seed-imports/catalog.json app:/tmp/catalog.json
+
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  exec app npm run seed:import:catalog -- \
+    --file=/tmp/catalog.json \
+    --shop=target-store.myshopify.com \
+    --shop-domain=target-store.myshopify.com \
+    --normalize-product-status \
+    --dry-run
+```
+
+Run the import after the dry run looks correct:
+
+```sh
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  exec app npm run seed:import:catalog -- \
+    --file=/tmp/catalog.json \
+    --shop=target-store.myshopify.com \
+    --shop-domain=target-store.myshopify.com \
+    --normalize-product-status
+```
+
+For a deliberate migration that includes historical order CSVs already exported
+from another environment, copy those CSVs into `/tmp` and pass the same importer
+flags used locally, for example `--orders-csv=/tmp/orders.csv` and
+`--order-line-map=/tmp/order-line-map.json`. Keep this separate from normal app
+install behavior: production installs do not automatically import historical
+orders, and the daily reconciliation job remains a short-window missed-webhook
+catcher rather than a bulk migration.
+
 ## Rollback
 
 Rollback is code-first, database-careful:
