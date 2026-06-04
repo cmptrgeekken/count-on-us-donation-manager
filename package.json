@@ -20,6 +20,7 @@
     "setup:deploy": "prisma migrate deploy",
     "deploy:production": "bash scripts/deploy-production.sh",
     "backup:production": "bash scripts/backup-postgres.sh",
+    "restore:production": "bash scripts/restore-postgres.sh",
     "prisma:generate:best-effort": "node ./scripts/prisma-generate-best-effort.mjs",
     "seed:dev": "node ./scripts/seed-dev.mjs",
     "seed:demo": "node ./scripts/seed-dev.mjs --preset=demo-store",
