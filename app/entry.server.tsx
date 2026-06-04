@@ -1,3 +1,4 @@
+import "./utils/response-json.server";
 import { PassThrough } from "stream";
 import { renderToPipeableStream } from "react-dom/server";
 import { RemixServer } from "@remix-run/react";
