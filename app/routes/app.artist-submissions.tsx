@@ -224,7 +224,7 @@ export default function ArtistSubmissionsPage() {
           ) : (
             <div style={{ display: "grid", gap: "1rem" }}>
               {submissions.map((submission) => (
-                <details key={submission.id} open={submission.status === "new"}>
+                <details key={submission.id}>
                   <summary>
                     <strong>{submission.artistName || submission.submitterName}</strong> · {submission.status} · {formatDate(submission.createdAt)}
                   </summary>
