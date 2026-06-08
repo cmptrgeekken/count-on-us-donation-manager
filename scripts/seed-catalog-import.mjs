@@ -31,6 +31,14 @@ const EXPECTED_COLLECTIONS = [
 ];
 const VALID_PRODUCT_STATUSES = new Set(["active", "archived", "draft"]);
 
+function hasFinancialCsv(options) {
+  return Boolean(options.ordersCsv || options.chargesCsv || options.paymentTransactionsCsv);
+}
+
+function emptyCatalogExport() {
+  return Object.fromEntries(EXPECTED_COLLECTIONS.map((collection) => [collection, []]));
+}
+
 function parseArgs() {
   const result = {
     file: null,
@@ -94,8 +102,16 @@ function parseArgs() {
     result.replaceFinancials = true;
   }
 
-  if (!result.file) {
-    throw new Error("Pass --file=/path/to/shopify-prisma-staging-export_v2.json");
+  if (!result.file && result.ordersCsv) {
+    throw new Error("--orders-csv requires --file because historical order snapshots need catalog data for variant matching and cost derivation.");
+  }
+
+  if (!result.file && !hasFinancialCsv(result) && !result.resetOnly) {
+    throw new Error("Pass --file=/path/to/catalog.json, or pass --charges-csv/--payment-transactions-csv for a financial-only import.");
+  }
+
+  if (!result.file && !result.shopId) {
+    throw new Error("--shop is required when importing financial CSVs without --file.");
   }
 
   if (!result.orderLineMap && result.ordersCsv) {
@@ -1151,14 +1167,17 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
   const transactions = parseCsvFile(options.paymentTransactionsCsv);
   if (orderRows.length === 0 && charges.length === 0 && transactions.length === 0) return;
 
-  const indexes = buildCatalogIndexes(data);
-  const orderLineMap = loadOrderLineMap(options.orderLineMap);
-  const orderLineResolver = createOrderLineResolver({
-    indexes,
-    orderLineMap,
-    fuzzyEnabled: options.fuzzyOrderLineMatching,
-    interactive: options.interactiveOrderLineMap,
-  });
+  const hasOrderRows = orderRows.length > 0;
+  const indexes = hasOrderRows ? buildCatalogIndexes(data) : null;
+  const orderLineMap = hasOrderRows ? loadOrderLineMap(options.orderLineMap) : null;
+  const orderLineResolver = hasOrderRows
+    ? createOrderLineResolver({
+        indexes,
+        orderLineMap,
+        fuzzyEnabled: options.fuzzyOrderLineMatching,
+        interactive: options.interactiveOrderLineMap,
+      })
+    : null;
   const periodsByMonth = new Map();
   const allocationsByPeriodCause = new Map();
   const transactionsByOrder = new Map();
@@ -1458,7 +1477,9 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
     importedOrderCount += 1;
   }
 
-  await orderLineResolver.close();
+  if (orderLineResolver) {
+    await orderLineResolver.close();
+  }
 
   const touchedPeriodIds = new Set(Array.from(periodsByMonth.values()).map((period) => period.id));
   for (const existingAllocation of await prisma.causeAllocation.findMany({
@@ -1505,14 +1526,16 @@ async function importCsvFinancials(data, shopId, options, idMaps, defaultMistake
   console.log(
     `Tax offset cache: deduction pool ${taxOffsetSummary.deductionPool.toFixed(2)}, cumulative net contribution ${taxOffsetSummary.cumulativeNetContrib.toFixed(2)}, taxable exposure ${taxOffsetSummary.taxableExposure.toFixed(2)}, widget tax reserve ${taxOffsetSummary.widgetTaxSuppressed ? "suppressed" : "enabled"}.`,
   );
-  console.log("\nOrder line catalog matching:");
-  for (const line of summarizeOrderLineMatching(orderLineResolver.stats)) {
-    console.log(line);
-  }
-  if (orderLineResolver.pendingMappings.size > 0) {
-    const nextOrderLineMap = mergePendingOrderLineMappings(orderLineMap, orderLineResolver.pendingMappings);
-    saveOrderLineMap(options.orderLineMap, nextOrderLineMap);
-    console.log(`Saved ${orderLineResolver.pendingMappings.size} order line mapping(s) to ${options.orderLineMap}.`);
+  if (orderLineResolver) {
+    console.log("\nOrder line catalog matching:");
+    for (const line of summarizeOrderLineMatching(orderLineResolver.stats)) {
+      console.log(line);
+    }
+    if (orderLineResolver.pendingMappings.size > 0) {
+      const nextOrderLineMap = mergePendingOrderLineMappings(orderLineMap, orderLineResolver.pendingMappings);
+      saveOrderLineMap(options.orderLineMap, nextOrderLineMap);
+      console.log(`Saved ${orderLineResolver.pendingMappings.size} order line mapping(s) to ${options.orderLineMap}.`);
+    }
   }
 }
 
@@ -1951,8 +1974,67 @@ function printAnalysis(data, shopId, validation, templateTrends, csvAnalysis, op
   }
 }
 
+async function importStandaloneFinancialCsv(options) {
+  const shopId = options.shopId;
+  const shopDomain = options.shopDomain ?? shopId;
+  const csvAnalysis = financialAnalysis(options);
+
+  console.log(`Financial CSV import analysis for ${shopId}`);
+  console.log(`- charges CSV: ${csvAnalysis.chargeCount} rows`);
+  console.log(`- payment transactions CSV: ${csvAnalysis.transactionCount} rows`);
+  console.log("- Historical order CSV import is skipped in file-less mode; pass --file with --orders-csv to import snapshots.");
+
+  if (csvAnalysis.chargeCount === 0 && csvAnalysis.transactionCount === 0) {
+    console.log("- no financial rows found");
+    return;
+  }
+
+  if (options.dryRun) {
+    return;
+  }
+
+  await prisma.shop.upsert({
+    where: { shopId },
+    update: {
+      shopifyDomain: shopDomain,
+      currency: "USD",
+    },
+    create: {
+      shopId,
+      shopifyDomain: shopDomain,
+      currency: "USD",
+      mistakeBuffer: DEFAULT_MISTAKE_BUFFER,
+      defaultLaborRate: DEFAULT_LABOR_RATE,
+    },
+  });
+
+  if (options.replaceFinancials) {
+    await replaceFinancials(shopId);
+  }
+
+  await importCsvFinancials(
+    emptyCatalogExport(),
+    shopId,
+    options,
+    {
+      causeIds: new Map(),
+      materialIds: new Map(),
+      equipmentIds: new Map(),
+    },
+    DEFAULT_MISTAKE_BUFFER,
+    DEFAULT_LABOR_RATE,
+  );
+
+  printShopDataCounts(shopId, await shopDataCounts(shopId));
+}
+
 async function main() {
   const options = parseArgs();
+  if (!options.file) {
+    await importStandaloneFinancialCsv(options);
+    return;
+  }
+
   const data = loadExport(options.file);
   await importCatalog(data, options);
 }

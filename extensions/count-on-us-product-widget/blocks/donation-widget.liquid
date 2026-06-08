@@ -1,9 +1,16 @@
+{% assign count_on_us_product = product %}
+{% assign count_on_us_variant = count_on_us_product.selected_or_first_available_variant %}
+
 <div
   class="count-on-us-widget"
   data-count-on-us-widget
   data-count-on-us-design-mode="{{ request.design_mode | json }}"
-  data-product-id="gid://shopify/Product/{{ product.id }}"
-  data-selected-variant-id="gid://shopify/ProductVariant/{{ product.selected_or_first_available_variant.id }}"
+  {% if count_on_us_product %}
+    data-product-id="gid://shopify/Product/{{ count_on_us_product.id }}"
+  {% endif %}
+  {% if count_on_us_variant %}
+    data-selected-variant-id="gid://shopify/ProductVariant/{{ count_on_us_variant.id }}"
+  {% endif %}
   data-selected-quantity="1"
   data-show-line-item-details="{{ block.settings.show_line_item_details | json }}"
   data-proxy-base="/apps/count-on-us"

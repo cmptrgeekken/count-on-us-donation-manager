@@ -3,6 +3,7 @@ import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
+import { z } from "zod";
 
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
@@ -49,6 +50,10 @@ const TAX_RATE_PRESETS = [
   },
 ] as const;
 
+const optionalEmailSchema = z
+  .union([z.literal(""), z.email({ message: "Notification email must be a valid email address." })])
+  .transform((value) => value.toLowerCase() || null);
+
 function formatDateInput(value: Date | null | undefined) {
   return value ? value.toISOString().slice(0, 10) : "";
 }
@@ -90,7 +95,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       defaultLaborRate: true,
       effectiveTaxRate: true,
       taxDeductionMode: true,
-      postPurchaseEmailEnabled: true,
+      postPurchaseEmailEnabled: false,
+      artistSubmissionNotificationEmail: true,
     },
   });
 
@@ -104,6 +110,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     effectiveTaxRate: shop?.effectiveTaxRate ? (Number(shop.effectiveTaxRate) * 100).toFixed(2) : "",
     taxDeductionMode: shop?.taxDeductionMode ?? "dont_deduct",
     postPurchaseEmailEnabled: shop?.postPurchaseEmailEnabled ?? true,
+    artistSubmissionNotificationEmail: shop?.artistSubmissionNotificationEmail ?? "",
   });
 };
 
@@ -316,11 +323,25 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "update-email-settings") {
     const postPurchaseEmailEnabled = formData.get("postPurchaseEmailEnabled") === "on";
+    const parsedNotificationEmail = optionalEmailSchema.safeParse(
+      formData.get("artistSubmissionNotificationEmail")?.toString().trim() ?? "",
+    );
+
+    if (!parsedNotificationEmail.success) {
+      return jsonResponse(
+        {
+          ok: false,
+          message: parsedNotificationEmail.error.issues[0]?.message ?? "Notification email is invalid.",
+        },
+        { status: 400 },
+      );
+    }
 
     await prisma.shop.update({
       where: { shopId },
       data: {
         postPurchaseEmailEnabled,
+        artistSubmissionNotificationEmail: parsedNotificationEmail.data,
       },
     });
 
@@ -332,6 +353,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         actor: "merchant",
         payload: {
           postPurchaseEmailEnabled,
+          artistSubmissionNotificationEmail: parsedNotificationEmail.data,
         },
       },
     });
@@ -393,6 +415,7 @@ export default function Settings() {
     effectiveTaxRate,
     taxDeductionMode,
     postPurchaseEmailEnabled,
+    artistSubmissionNotificationEmail,
   } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
   const { currency, locale, formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
@@ -405,6 +428,9 @@ export default function Settings() {
   const [effectiveTaxRateInput, setEffectiveTaxRateInput] = useState(effectiveTaxRate ?? "");
   const [taxDeductionModeInput, setTaxDeductionModeInput] = useState(taxDeductionMode ?? "dont_deduct");
   const [postPurchaseEmailEnabledInput, setPostPurchaseEmailEnabledInput] = useState(postPurchaseEmailEnabled ?? true);
+  const [artistSubmissionNotificationEmailInput, setArtistSubmissionNotificationEmailInput] = useState(
+    artistSubmissionNotificationEmail ?? "",
+  );
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
@@ -699,6 +725,18 @@ export default function Settings() {
               <s-text>
                 The email uses the order&apos;s `contact_email` field, includes per-cause amounts and donation links, and points
                 customers to the public donation receipts page.
+              </s-text>
+              <s-text-field
+                label="Artist submission notification email"
+                name="artistSubmissionNotificationEmail"
+                value={artistSubmissionNotificationEmailInput}
+                onChange={(event) =>
+                  setArtistSubmissionNotificationEmailInput((event.currentTarget as HTMLInputElement).value)
+                }
+                type="email"
+              />
+              <s-text>
+                Enter an address to receive an email whenever someone submits the Artist Submission form. Leave blank to disable these notifications.
               </s-text>
               <div>
                 <s-button type="submit" disabled={isSubmitting}>Save email settings</s-button>

@@ -378,6 +378,13 @@
       window.clearInterval(syncTimer);
       syncTimer = null;
     };
+    if (!container.dataset.productId && container.dataset.countOnUsDesignMode === "true") {
+      setContainerVisibility(container, true);
+      setStatus("Select a product template preview to load a live donation estimate.", "info");
+      container.dataset.widgetBound = "true";
+      container.dataset.widgetInteractive = "true";
+      return;
+    }
     try {
       const metadata = await loadMetadata(container);
       if (!metadata.visible) {

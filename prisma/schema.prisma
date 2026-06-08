@@ -47,6 +47,7 @@ model Shop {
   effectiveTaxRate Decimal? @db.Decimal(5, 4)
   taxDeductionMode String   @default("dont_deduct")
   postPurchaseEmailEnabled Boolean @default(true)
+  artistSubmissionNotificationEmail String?
   wizardStep       Int      @default(0)
   catalogSynced    Boolean  @default(false)
   createdAt        DateTime @default(now())

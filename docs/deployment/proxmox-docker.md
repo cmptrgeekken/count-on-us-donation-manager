@@ -378,6 +378,24 @@ path: the preferred production backfill is the queued `financial.backfill` job
 above because it runs the app's current reconciliation, cost engine, charge sync,
 and reporting-period services.
 
+For a charges/payment-transactions-only CSV import, `--file` is optional:
+
+```sh
+APP_ENV_FILE=.env.production docker compose \
+  --project-name count-on-us \
+  --env-file .env.production \
+  -f compose.production.yml \
+  exec app npm run seed:import:catalog -- \
+    --shop=target-store.myshopify.com \
+    --shop-domain=target-store.myshopify.com \
+    --charges-csv=/tmp/charges_export.csv \
+    --payment-transactions-csv=/tmp/payment_transactions_export_1.csv \
+    --dry-run
+```
+
+Historical order CSVs still require `--file`, because snapshot rows need catalog
+data for variant matching and cost derivation.
+
 ## Rollback
 
 Rollback is code-first, database-careful:

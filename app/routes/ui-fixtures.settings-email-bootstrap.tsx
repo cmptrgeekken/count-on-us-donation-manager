@@ -14,6 +14,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       shopifyDomain: shopId,
       currency: "USD",
       postPurchaseEmailEnabled: false,
+      artistSubmissionNotificationEmail: "",
       managedMarketsEnableDate: null,
     },
     create: {
@@ -21,6 +22,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       shopifyDomain: shopId,
       currency: "USD",
       postPurchaseEmailEnabled: false,
+      artistSubmissionNotificationEmail: "",
       managedMarketsEnableDate: null,
     },
   });
