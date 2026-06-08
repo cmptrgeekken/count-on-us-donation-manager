@@ -109,7 +109,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     defaultLaborRate: shop?.defaultLaborRate ? Number(shop.defaultLaborRate).toFixed(2) : "",
     effectiveTaxRate: shop?.effectiveTaxRate ? (Number(shop.effectiveTaxRate) * 100).toFixed(2) : "",
     taxDeductionMode: shop?.taxDeductionMode ?? "dont_deduct",
-    postPurchaseEmailEnabled: shop?.postPurchaseEmailEnabled ?? true,
+    postPurchaseEmailEnabled: shop?.postPurchaseEmailEnabled ?? false,
     artistSubmissionNotificationEmail: shop?.artistSubmissionNotificationEmail ?? "",
   });
 };
@@ -427,7 +427,7 @@ export default function Settings() {
   const [laborRateInput, setLaborRateInput] = useState(defaultLaborRate ?? "");
   const [effectiveTaxRateInput, setEffectiveTaxRateInput] = useState(effectiveTaxRate ?? "");
   const [taxDeductionModeInput, setTaxDeductionModeInput] = useState(taxDeductionMode ?? "dont_deduct");
-  const [postPurchaseEmailEnabledInput, setPostPurchaseEmailEnabledInput] = useState(postPurchaseEmailEnabled ?? true);
+  const [postPurchaseEmailEnabledInput, setPostPurchaseEmailEnabledInput] = useState(postPurchaseEmailEnabled ?? false);
   const [artistSubmissionNotificationEmailInput, setArtistSubmissionNotificationEmailInput] = useState(
     artistSubmissionNotificationEmail ?? "",
   );
