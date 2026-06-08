@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   syncShopifyCharges: vi.fn(),
   runAnalyticalRecalculation: vi.fn(),
   runFinancialBackfill: vi.fn(),
+  sendArtistSubmissionNotificationEmail: vi.fn(),
   sendPostPurchaseDonationEmail: vi.fn(),
   createSnapshot: vi.fn(),
   runProviderSync: vi.fn(),
@@ -58,6 +59,10 @@ vi.mock("../services/analyticalRecalculation.server", () => ({
 
 vi.mock("../services/postPurchaseEmail.server", () => ({
   sendPostPurchaseDonationEmail: mocks.sendPostPurchaseDonationEmail,
+}));
+
+vi.mock("../services/artistSubmissionNotification.server", () => ({
+  sendArtistSubmissionNotificationEmail: mocks.sendArtistSubmissionNotificationEmail,
 }));
 
 vi.mock("../services/snapshotService.server", () => ({
@@ -189,6 +194,63 @@ describe("registerAllProcessors", () => {
           shopId: "shop-1",
           entityId: "snapshot-1",
           action: "POST_PURCHASE_EMAIL_FAILED",
+        }),
+      }),
+    );
+  });
+
+  it("sends artist submission notification jobs", async () => {
+    const boss = createBoss();
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("artist-submission.notification");
+    expect(worker).toBeTruthy();
+
+    await worker!([
+      {
+        data: {
+          shopId: "shop-1",
+          submissionId: "submission-1",
+        },
+      },
+    ]);
+
+    expect(mocks.sendArtistSubmissionNotificationEmail).toHaveBeenCalledWith(
+      {
+        shopId: "shop-1",
+        submissionId: "submission-1",
+      },
+      mocks.prisma,
+    );
+  });
+
+  it("logs and rethrows artist submission notification failures", async () => {
+    const boss = createBoss();
+    mocks.sendArtistSubmissionNotificationEmail.mockRejectedValue(new Error("provider down"));
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("artist-submission.notification");
+    expect(worker).toBeTruthy();
+
+    await expect(
+      worker!([
+        {
+          data: {
+            shopId: "shop-1",
+            submissionId: "submission-1",
+          },
+        },
+      ]),
+    ).rejects.toThrow("provider down");
+
+    expect(mocks.prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          shopId: "shop-1",
+          entityId: "submission-1",
+          action: "ARTIST_SUBMISSION_NOTIFICATION_FAILED",
         }),
       }),
     );

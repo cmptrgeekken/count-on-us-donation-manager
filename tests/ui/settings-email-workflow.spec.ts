@@ -10,11 +10,14 @@ test("settings page exposes the post-purchase donation email toggle", async ({ p
 
   await expect(page.getByRole("heading", { name: "Donation Email" })).toBeVisible();
   await expect(page.getByLabel("Send post-purchase donation summary emails")).not.toBeChecked();
+  await expect(page.getByLabel("Artist submission notification email")).toBeVisible();
 
   await page.getByLabel("Send post-purchase donation summary emails").check();
+  await page.getByLabel("Artist submission notification email").fill("artist-intake@example.com");
   await page.getByRole("button", { name: "Save email settings" }).click();
 
   await expect(page.getByText("Post-purchase donation email enabled.")).toBeVisible();
+  await expect(page.getByLabel("Artist submission notification email")).toHaveValue("artist-intake@example.com");
 });
 
 test("settings page saves the Managed Markets enable date", async ({ page, request }) => {

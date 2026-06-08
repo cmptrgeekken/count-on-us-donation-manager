@@ -8,6 +8,7 @@ import { runFinancialBackfill } from "../services/financialBackfill.server";
 import { runReconciliation } from "../services/reconciliationService.server";
 import { createReportingPeriodFromPayout } from "../services/reportingPeriodService.server";
 import { refreshTaxOffsetCacheForShop } from "../services/reportingService.server";
+import { sendArtistSubmissionNotificationEmail } from "../services/artistSubmissionNotification.server";
 import { sendPostPurchaseDonationEmail } from "../services/postPurchaseEmail.server";
 import { runProviderSync } from "../services/providerSync.server";
 import { createSnapshot } from "../services/snapshotService.server";
@@ -18,6 +19,7 @@ const QUEUES = [
   "plan.detect",
   "orders.snapshot",
   "orders.post-purchase-email",
+  "artist-submission.notification",
   "orders.updated",
   "orders.refund",
   "reconciliation.daily",
@@ -103,6 +105,39 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
             actor: "system",
             payload: {
               message: error instanceof Error ? error.message : "Unknown post-purchase email failure",
+            },
+          },
+        });
+        throw error;
+      }
+    },
+  );
+
+  await boss.work<{ shopId: string; submissionId: string }>(
+    "artist-submission.notification",
+    async (jobs) => {
+      const job = jobs[0];
+      if (!job) return;
+
+      const { shopId, submissionId } = job.data;
+      try {
+        await sendArtistSubmissionNotificationEmail(
+          {
+            shopId,
+            submissionId,
+          },
+          prisma,
+        );
+      } catch (error) {
+        await prisma.auditLog.create({
+          data: {
+            shopId,
+            entity: "ArtistSubmission",
+            entityId: submissionId,
+            action: "ARTIST_SUBMISSION_NOTIFICATION_FAILED",
+            actor: "system",
+            payload: {
+              message: error instanceof Error ? error.message : "Unknown artist submission notification failure",
             },
           },
         });

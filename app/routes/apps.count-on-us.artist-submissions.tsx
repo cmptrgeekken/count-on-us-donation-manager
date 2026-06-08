@@ -11,6 +11,7 @@ import {
   type ArtistSubmissionUpload,
 } from "../services/artistSubmission.server";
 import { prisma } from "../db.server";
+import { DEFAULT_JOB_OPTIONS, jobQueue } from "../jobs/queue.server";
 import { authenticatePublicAppProxyRequest } from "../utils/public-auth.server";
 import { checkRateLimit } from "../utils/rate-limit.server";
 
@@ -141,6 +142,30 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       userAgent: request.headers.get("user-agent"),
     });
     await attachArtistSubmissionFiles(shop.shopId, submission.id, uploads);
+    try {
+      await jobQueue.send(
+        "artist-submission.notification",
+        {
+          shopId: shop.shopId,
+          submissionId: submission.id,
+        },
+        DEFAULT_JOB_OPTIONS,
+      );
+    } catch (error) {
+      console.error("[artist-submission.notification] Failed to enqueue:", error);
+      await prisma.auditLog.create({
+        data: {
+          shopId: shop.shopId,
+          entity: "ArtistSubmission",
+          entityId: submission.id,
+          action: "ARTIST_SUBMISSION_NOTIFICATION_ENQUEUE_FAILED",
+          actor: "system",
+          payload: {
+            message: error instanceof Error ? error.message : "Unknown artist submission notification enqueue failure",
+          },
+        },
+      });
+    }
 
     const headers = new Headers(rateLimit.headers);
     headers.set("Cache-Control", "private, no-store");
