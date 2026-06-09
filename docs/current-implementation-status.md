@@ -7,7 +7,7 @@ This file is intentionally lightweight and operational. It should summarize real
 **Project:** Count On Us  
 **Date:** June 8, 2026
 
-**Summary:** Phase 1, Phase 2, Phase 3, and the core Phase 4 reporting/accounting model are implemented. Phase 5 is no longer just a foundation: the repo contains product/cart storefront blocks, a transparency-page block and app-proxy backing route, public receipts, post-purchase donation email/service/worker support, Thank You / Order Status extension code, setup wizard flows, and artist collaboration/submission surfaces. The current state is best described as submission-hardening and scope-alignment, not greenfield implementation. The biggest remaining risks are App Store compliance readiness (`#87`, `#101`), unexecuted full PRD QA (`#60`), demo-store/manual review completion (`#61`, `#63`), storefront production hardening (`#88`, `#90`, `#92`, `#93`), and still-open provider/POD scope decisions (`#85`, `#98`). The recent June changes also make post-purchase donation summary emails opt-in for new shops by default.
+**Summary:** Phase 1, Phase 2, Phase 3, and the core Phase 4 reporting/accounting model are implemented. Phase 5 is no longer just a foundation: the repo contains product/cart storefront blocks, a transparency-page block and app-proxy backing route, public receipts, post-purchase donation email/service/worker support, Thank You / Order Status extension code, setup wizard flows, and artist collaboration/submission surfaces. The current state is best described as submission-hardening and scope-alignment, not greenfield implementation. The biggest remaining risks are App Store compliance readiness (`#87`, `#101`), unexecuted full PRD QA (`#60`), demo-store/manual review completion (`#61`, `#63`), storefront production hardening (`#88`, `#90`, `#92`, `#93`), and still-open provider/POD scope decisions (`#98`, `#132`). The recent June changes also make post-purchase donation summary emails opt-in for new shops by default.
 
 ---
 
@@ -23,12 +23,95 @@ This file is intentionally lightweight and operational. It should summarize real
 Reviewed open GitHub issues on June 8, 2026. Important open tracks:
 
 - **Submission blockers and readiness:** `#87` App Review blockers, `#101` compliance webhook/customer-data minimization, `#60` full PRD QA, `#61` demo store, `#63` final pre-submission review.
-- **Provider/POD scope:** `#85` Printify completion remains open even though validation, sync/cache, mapping, and cost-resolution foundations exist; `#98` tracks Printful parity and whether it remains v1 scope.
+- **Provider/POD scope:** `#85` is closed for the original Printify baseline; `#132` tracks remaining Printify hardening around duplicate/missing SKUs, shipping-cost treatment, and live validation; `#98` tracks Printful parity and whether it remains v1 scope.
 - **Storefront/public hardening:** `#88` proxy/rate-limit/theme boundaries, `#90` accessibility and comprehension, `#92` theme-extension asset-size warnings, `#93` cart annotations and drawer support, `#99` public transparency page/disclosure controls.
 - **PRD scope gaps:** `#94` packing-slip donation summaries, `#95` Shopify Admin product/variant surfaces, `#96` cause-assignment override hierarchy, `#97` spreadsheet-style bulk editor.
 - **Marketing/acquisition transparency research:** `#102` settings, `#103` display-safe contracts, `#104` late Shop Campaigns attribution tags, `#105` product-description fallback, `#106` billing data research.
 - **Reporting and operations polish:** `#86` action-oriented reporting, `#107` edit logged disbursements, `#108` standardized disbursement payment methods, `#114` Reporting Charges Summary pagination, `#115` fulfillment-aware package grouping.
 - **Older deferred improvements still open:** `#5`, `#6`, `#17`, `#19`, `#22`, `#34`, `#43`, `#45`, `#73`, `#89`.
+
+## Prioritized Remaining Work
+
+This ordering is a working priority stack for the next pass through the open issues. GitHub Issues remain the source of truth for scope and acceptance criteria.
+
+### P0 - App Store Submission Blockers
+
+Finish these before treating the app as submission-ready:
+
+- `#101` Compliance webhook handling and customer-data minimization
+- `#87` Shopify App Review blockers from the technical audit
+- `#60` Full PRD QA checklist execution
+- `#61` Demo store preparation and review evidence
+- `#62` App Store listing assets, owner-controlled URLs, and copy
+- `#63` Final pre-submission review
+
+Recommended sequence: complete `#101` and the repo-backed parts of `#87` first, then run `#60` and `#61` in parallel, then finish `#62`, then use `#63` as the final gate.
+
+### P1 - Submission Hardening And Trust
+
+These are not all formal blockers, but they reduce review risk and customer-trust risk:
+
+- `#89` Align docs and setup guidance with actual product state
+- `#131` Production Docker Compose and CI deployment hardening
+- `#88` Storefront proxy, rate limiting, and theme-support boundaries
+- `#90` Storefront donation widget accessibility and customer comprehension
+- `#92` Theme app extension asset-size warnings
+- `#99` Public transparency disclosure controls and merchant policy boundaries
+- `#129` Artist submission upload, retention, and privacy controls
+- `#73` In-app receipt redaction before publishing receipts
+
+Work on these as soon as they block QA evidence, demo-store confidence, or review-facing claims.
+
+### P2 - Financial And Operational Reliability
+
+These improve the merchant's ability to trust reporting and reconcile money:
+
+- `#45` Complete remaining Shopify Payments charge-sync hardening
+- `#84` Charge sync status and troubleshooting UX
+- `#114` Reporting Charges Summary pagination or rollup
+- `#86` More action-oriented reporting
+- `#107` Edit logged cause disbursements with auditability
+- `#108` Standardize disbursement payment method values
+- `#82` Exclude labor from sole proprietor deduction calculations
+- `#115` Fulfillment-aware package grouping for packaging reconciliation
+- `#41` Shopify package source-of-truth for shipping material costs
+
+Prefer the charge/reporting items before deeper packaging reconciliation unless packaging truth becomes a review-store demo requirement.
+
+### P3 - Scope Alignment And V1 Product Shape
+
+These decide what the first public product honestly includes:
+
+- `#98` Printful parity and v1 provider scope decision
+- `#132` Printify provider sync edge cases and shipping-cost treatment
+- `#94` Donation summaries on packing slips
+- `#95` Shopify Admin product and variant extension surfaces
+- `#96` Cause assignment override hierarchy beyond product defaults
+- `#97` Spreadsheet-style bulk editor for variant cost adjustments
+- `#83` Storefront donation-enabled product badges
+- `#93` Cart donation annotations and cart drawer support
+- `#100` Managed Markets detection research for wizard automation
+
+Use this tier to keep docs, listing copy, and demo-store expectations honest even when implementation is deferred.
+
+### P4 - Later Roadmap And Strategic Architecture
+
+These are useful, but should not displace submission readiness:
+
+- `#102` Marketing/acquisition cost configuration
+- `#103` Marketing reserve in display-safe transparency contracts
+- `#104` Shop Campaigns post-order attribution tags
+- `#105` Product-description donation breakdowns for Shop app visibility
+- `#106` Shop Campaigns billing data research
+- `#75` Country-aware tax estimation guidance
+- `#19` Optional Shopify variant cost sync
+- `#6` Full application localization planning
+- `#5` Draft configuration workflow design
+- `#17` Create-from-search empty states for template pickers
+- `#22` Web Components filtering UX pattern
+- `#34` ESLint severity hardening
+- `#43` Settings staged Save / Discard workflow
+- `#130` Capability-aware admin shell and route inventory
 
 ---
 
@@ -172,10 +255,10 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 ### Phase 5 Current Gaps
 
 - [~] POD/provider completion
-  Provider Connections is no longer a placeholder page. Printify credentials validate before save, sync runs record real mapping/cache counts, cached base POD fulfillment costs now flow into preview-mode cost resolution, snapshot creation now attempts a live Printify refresh before cache fallback, token-added / estimated-expiry metadata is visible in the admin, unresolved variants can now be manually mapped against cached provider catalog variants, and product/variant admin pages now show POD mapping status plus cached provider cost lines on variant detail. Remaining work is concentrated around live validation, duplicate/missing-SKU workflows, provider shipping-cost treatment, and future provider expansion. Current rollout direction is Printify-first, with Printful planned next rather than implied as already supported.
+  Provider Connections is no longer a placeholder page. Printify credentials validate before save, sync runs record real mapping/cache counts, cached base POD fulfillment costs now flow into preview-mode cost resolution, snapshot creation now attempts a live Printify refresh before cache fallback, token-added / estimated-expiry metadata is visible in the admin, unresolved variants can now be manually mapped against cached provider catalog variants, and product/variant admin pages now show POD mapping status plus cached provider cost lines on variant detail. The original Printify baseline issue `#85` is closed; remaining work is concentrated in `#132` around live validation, duplicate/missing-SKU workflows, provider shipping-cost treatment, and future provider expansion. Current rollout direction is Printify-first, with Printful planned next rather than implied as already supported.
   Current Printify setup expectation: merchants need a personal access token with at least `shops.read` and `products.read`.
   Additional tracked follow-ups:
-  packing slips `#94`, Shopify Admin native product/variant surfaces `#95`, cause assignment override hierarchy `#96`, full spreadsheet-style bulk editor `#97`, and Printful parity / scope decision `#98`.
+  packing slips `#94`, Shopify Admin native product/variant surfaces `#95`, cause assignment override hierarchy `#96`, full spreadsheet-style bulk editor `#97`, Printful parity / scope decision `#98`, Printify hardening `#132`, artist submission upload/privacy hardening `#129`, capability-aware admin shell planning `#130`, and production deployment hardening `#131`.
 - [~] Storefront hardening
   Product/cart/transparency/artist-submission surfaces are live, but production-safe shared rate limiting, app-proxy boundary cleanup, theme compatibility, asset-size cleanup, cart drawer support, accessibility, and customer-comprehension cleanup remain open follow-on work.
 
@@ -200,6 +283,6 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 
 - This file is a practical implementation snapshot, not the source of product requirements.
 - The PRD, build plan, ADRs, standards, and GitHub Issues remain authoritative for scope, architecture, and open work.
-- For immediate next work, use GitHub Issues. The likely priority order is `#101`/`#87` compliance and App Review blockers, `#60` QA workbook execution, `#61` demo-store completion, `#63` final review, then storefront/provider/product-scope hardening issues.
+- For immediate next work, use GitHub Issues and the priority stack above. The likely first sequence is `#101`, repo-backed `#87`, `#60`/`#61`, `#62`, then `#63`.
 - Update this file when a phase meaningfully changes state, not for every small commit.
 - Local Shopify CLI development currently uses [shopify.app.toml](../shopify.app.toml) as a safe default. The full Phase 3 webhook subscription set is tracked in [shopify.app.phase3.toml](../shopify.app.phase3.toml) until the local CLI issue around order/refund topics is resolved.
