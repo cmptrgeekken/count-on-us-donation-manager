@@ -14,7 +14,7 @@ POD provider connections remain deferred (Phase 2.9). The snapshot system is des
 
 ## Pre-Phase 3 amendments (complete before starting Phase 3 steps)
 
-The following items from `docs/implementation-backlog.md` must be completed first. They affect the cost model that SnapshotService will consume:
+The following items from `docs/archive/backlog/implementation-backlog.md` had to be completed first. They affect the cost model that SnapshotService consumes:
 
 - **PU-1** — Uses-based costing for shipping materials  
 - **PU-2** — Searchable pickers + editable lines in template editor  

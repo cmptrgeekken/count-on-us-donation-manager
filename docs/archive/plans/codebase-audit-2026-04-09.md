@@ -1,5 +1,7 @@
 # Codebase Audit - April 9, 2026
 
+Archived June 2026. GitHub Issues are now authoritative for open work and unresolved questions. This audit is retained for historical context.
+
 This audit is a practical implementation review of the current repo state.
 It focuses on missing logic, placeholder behavior, and places where the UI or docs still overstate what the app actually does.
 
@@ -90,7 +92,7 @@ It focuses on missing logic, placeholder behavior, and places where the UI or do
 **Status:** Partial implementation
 
 **Evidence**
-- [pending-questions.md](/d:/projects/count-on-us-donation-manager/docs/plans/pending-questions.md)
+- [pending-questions.md](./pending-questions.md)
 - current Settings flow stores the date, but downstream fee logic is still incomplete
 
 **Current behavior**
