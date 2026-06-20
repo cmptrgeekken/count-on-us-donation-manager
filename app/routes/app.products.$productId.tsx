@@ -5,6 +5,11 @@ import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react
 import { z } from "zod";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
+import {
+  auditProductShopifySyncFailure,
+  saveProductArtistAssignmentsLocally,
+  syncProductArtistAssignmentsToShopify,
+} from "../services/productArtistAssignmentService.server";
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 
@@ -52,27 +57,6 @@ const fieldStyle = {
   color: "var(--p-color-text, #303030)",
   font: "inherit",
 };
-
-async function auditProductShopifySyncFailure(
-  shopId: string,
-  productId: string,
-  productGid: string,
-  error: unknown,
-) {
-  await prisma.auditLog.create({
-    data: {
-      shopId,
-      entity: "Product",
-      entityId: productId,
-      action: "PRODUCT_CAUSE_ASSIGNMENTS_SHOPIFY_SYNC_FAILED",
-      actor: "merchant",
-      payload: {
-        shopifyProductId: productGid,
-        message: error instanceof Error ? error.message : "Unknown Shopify sync failure",
-      },
-    },
-  });
-}
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -276,128 +260,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       return jsonResponse({ ok: false, message: "Artist payout overrides must be between 0 and 100%." }, { status: 400 });
     }
 
-    const artists = artistIds.length
-      ? await prisma.artist.findMany({
-          where: { id: { in: artistIds }, shopId, status: "active" },
-          include: {
-            causeAssignments: {
-              include: {
-                cause: {
-                  select: { id: true, shopifyMetaobjectId: true },
-                },
-              },
-            },
-          },
-        })
-      : [];
-
-    if (artists.length !== artistIds.length) {
-      return jsonResponse({ ok: false, message: "One or more selected Artists are unavailable." }, { status: 404 });
-    }
-
-    for (const artist of artists) {
-      const causeTotal = artist.causeAssignments.reduce((sum, assignment) => sum + Number(assignment.percentage), 0);
-      if (causeTotal !== 100) {
-        return jsonResponse({ ok: false, message: `${artist.displayName} must have Cause percentages totaling 100%.` }, { status: 400 });
-      }
-    }
-
-    const artistMap = new Map(artists.map((artist) => [artist.id, artist]));
-    const derivedCauseMap = new Map<string, { causeId: string; metaobjectId: string | null; percentage: number }>();
-
-    for (const assignment of artistAssignments) {
-      const artist = artistMap.get(assignment.artistId);
-      if (!artist) continue;
-      const collaborationShare = Number(assignment.collaborationShare);
-      for (const causeAssignment of artist.causeAssignments) {
-        const existing = derivedCauseMap.get(causeAssignment.causeId) ?? {
-          causeId: causeAssignment.causeId,
-          metaobjectId: causeAssignment.cause.shopifyMetaobjectId ?? null,
-          percentage: 0,
-        };
-        existing.percentage += collaborationShare * Number(causeAssignment.percentage) / 100;
-        derivedCauseMap.set(causeAssignment.causeId, existing);
-      }
-    }
-
-    const derivedAssignments = Array.from(derivedCauseMap.values());
-
     try {
-      await prisma.$transaction(async (tx) => {
-        await tx.productArtistAssignment.deleteMany({
-          where: { shopId, productId: product.id },
-        });
-        await tx.productCauseAssignment.deleteMany({
-          where: {
-            shopId,
-            OR: [
-              { productId: product.id },
-              { shopifyProductId: product.shopifyId },
-            ],
-          },
-        });
-
-        if (artistAssignments.length > 0) {
-          await tx.productArtistAssignment.createMany({
-            data: artistAssignments.map((assignment, index) => ({
-              shopId,
-              productId: product.id,
-              shopifyProductId: product.shopifyId,
-              artistId: assignment.artistId,
-              attributionOrder: index,
-              creditOverride: assignment.creditOverride?.trim() || null,
-              collaborationShare: Number(assignment.collaborationShare),
-              payoutEnabledOverride:
-                assignment.payoutEnabledOverride === "inherit"
-                  ? null
-                  : assignment.payoutEnabledOverride === "true",
-              payoutRateOverride: assignment.payoutRateOverride?.trim()
-                ? Number(assignment.payoutRateOverride)
-                : null,
-              status: "active",
-            })),
-          });
-        }
-
-        if (derivedAssignments.length > 0) {
-          await tx.productCauseAssignment.createMany({
-            data: derivedAssignments.map((assignment) => ({
-              shopId,
-              shopifyProductId: product.shopifyId,
-              productId: product.id,
-              causeId: assignment.causeId,
-              percentage: assignment.percentage,
-            })),
-          });
-        }
-
-        await tx.auditLog.create({
-          data: {
-            shopId,
-            entity: "Product",
-            entityId: product.id,
-            action: "PRODUCT_ARTIST_ASSIGNMENTS_SAVED",
-            actor: "merchant",
-            payload: {
-              shopifyProductId: product.shopifyId,
-              artistAssignments,
-              derivedCauseAssignments: derivedAssignments,
-            },
-          },
+      const derivedAssignments = await prisma.$transaction(async (tx) => {
+        return saveProductArtistAssignmentsLocally({
+          db: tx,
+          shopId,
+          product,
+          artistAssignments,
+          auditSource: "product_detail",
         });
       });
 
       if (admin) {
         try {
-          await syncProductCauseAssignmentsMetafield(
+          await syncProductArtistAssignmentsToShopify({
             admin,
-            product.shopifyId,
-            derivedAssignments.map((assignment) => ({
-              causeId: assignment.causeId,
-              metaobjectId: assignment.metaobjectId,
-              percentage: assignment.percentage.toFixed(2),
-            })),
-          );
+            product,
+            derivedAssignments,
+          });
         } catch (error) {
           console.error("[ProductDonations] Shopify sync failed after saving artist assignments:", error);
           await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);
