@@ -7,6 +7,7 @@ import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import {
   auditProductShopifySyncFailure,
+  canSyncProductToShopify,
   saveProductArtistAssignmentsLocally,
   syncProductArtistAssignmentsToShopify,
 } from "../services/productArtistAssignmentService.server";
@@ -271,7 +272,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         });
       });
 
-      if (admin) {
+      if (admin && canSyncProductToShopify(product.shopifyId)) {
         try {
           await syncProductArtistAssignmentsToShopify({
             admin,
@@ -288,7 +289,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         }
       }
 
-      return jsonResponse({ ok: true, message: "Product Artist assignments saved." });
+      return jsonResponse({
+        ok: true,
+        message: canSyncProductToShopify(product.shopifyId)
+          ? "Product Artist assignments saved."
+          : "Product Artist assignments saved locally. Shopify storefront sync skipped for this local-only product.",
+      });
     } catch (error) {
       console.error("[ProductDonations] Failed to save artist assignments:", error);
       return jsonResponse(
@@ -397,7 +403,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     });
 
     try {
-      if (admin) {
+      if (admin && canSyncProductToShopify(product.shopifyId)) {
         await syncProductCauseAssignmentsMetafield(
           admin,
           product.shopifyId,
@@ -422,7 +428,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         });
       }
 
-      return jsonResponse({ ok: true, message: "Product Cause assignments saved." });
+      return jsonResponse({
+        ok: true,
+        message: canSyncProductToShopify(product.shopifyId)
+          ? "Product Cause assignments saved."
+          : "Product Cause assignments saved locally. Shopify storefront sync skipped for this local-only product.",
+      });
     } catch (error) {
       console.error("[ProductDonations] Shopify sync failed after saving cause assignments:", error);
       await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);

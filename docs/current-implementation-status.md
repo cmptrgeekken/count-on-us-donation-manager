@@ -285,4 +285,4 @@ These are useful next items, but they are no longer blockers for closing Phase 3
 - The PRD, build plan, ADRs, standards, and GitHub Issues remain authoritative for scope, architecture, and open work.
 - For immediate next work, use GitHub Issues and the priority stack above. The likely first sequence is `#101`, repo-backed `#87`, `#60`/`#61`, `#62`, then `#63`.
 - Update this file when a phase meaningfully changes state, not for every small commit.
-- Local Shopify CLI development currently uses [shopify.app.toml](../shopify.app.toml) as a safe default. The full Phase 3 webhook subscription set is tracked in [shopify.app.phase3.toml](../shopify.app.phase3.toml) until the local CLI issue around order/refund topics is resolved.
+- Local Shopify CLI development uses [shopify.app.dev.toml](../shopify.app.dev.toml), while production deployment uses [shopify.app.toml](../shopify.app.toml).

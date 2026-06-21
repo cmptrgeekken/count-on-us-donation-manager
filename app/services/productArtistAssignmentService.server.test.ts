@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { saveProductArtistAssignmentsLocally } from "./productArtistAssignmentService.server";
+import { canSyncProductToShopify, saveProductArtistAssignmentsLocally } from "./productArtistAssignmentService.server";
 
 const db = {
   artist: {
@@ -140,5 +140,13 @@ describe("saveProductArtistAssignmentsLocally", () => {
     ).rejects.toThrow("Artist collaboration shares must total 100%.");
 
     expect(db.productArtistAssignment.deleteMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("canSyncProductToShopify", () => {
+  it("only treats numeric Shopify product GIDs as storefront-syncable", () => {
+    expect(canSyncProductToShopify("gid://shopify/Product/1234567890")).toBe(true);
+    expect(canSyncProductToShopify("gid://shopify/Product/sparkly-rocketship-product-1")).toBe(false);
+    expect(canSyncProductToShopify("gid://shopify/ProductVariant/1234567890")).toBe(false);
   });
 });

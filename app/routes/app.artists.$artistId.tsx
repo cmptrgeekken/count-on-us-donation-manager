@@ -7,6 +7,7 @@ import { ArtistProfileForm } from "../components/ArtistProfileForm";
 import { prisma } from "../db.server";
 import {
   auditProductShopifySyncFailure,
+  canSyncProductToShopify,
   saveProductArtistAssignmentsLocally,
   syncProductArtistAssignmentsToShopify,
   type ProductArtistAssignmentInput,
@@ -316,6 +317,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const mappingByProductId = new Map(parsed.data.mappings.map((mapping) => [mapping.productId, mapping]));
   const syncFailures: string[] = [];
+  const syncSkipped: string[] = [];
 
   try {
     for (const product of products) {
@@ -357,21 +359,41 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       });
 
       if (admin) {
+        if (!canSyncProductToShopify(product.shopifyId)) {
+          syncSkipped.push(product.title);
+          continue;
+        }
+
         try {
           await syncProductArtistAssignmentsToShopify({ admin, product, derivedAssignments });
         } catch (error) {
-          console.error("[ArtistDetails] Shopify sync failed after saving product mappings:", error);
+          console.error("[ArtistDetails] Shopify sync failed after saving product mappings:", {
+            productId: product.id,
+            productTitle: product.title,
+            shopifyProductId: product.shopifyId,
+            error,
+          });
           await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);
           syncFailures.push(product.title);
         }
       }
     }
 
+    const messageParts = [`Product mappings saved for ${artist.displayName}.`];
+    if (syncSkipped.length > 0) {
+      messageParts.push(
+        `Skipped Shopify storefront sync for ${syncSkipped.length} local-only product${syncSkipped.length === 1 ? "" : "s"}.`,
+      );
+    }
+    if (syncFailures.length > 0) {
+      messageParts.push(
+        `Shopify storefront sync failed for ${syncFailures.length} product${syncFailures.length === 1 ? "" : "s"}; run a dev catalog sync and save again to retry.`,
+      );
+    }
+
     return jsonResponse({
       ok: true,
-      message: syncFailures.length > 0
-        ? `Product mappings saved for ${artist.displayName}. Shopify storefront sync failed for ${syncFailures.length} product${syncFailures.length === 1 ? "" : "s"}; save again later to retry.`
-        : `Product mappings saved for ${artist.displayName}.`,
+      message: messageParts.join(" "),
     });
   } catch (error) {
     console.error("[ArtistDetails] Failed to save product mappings:", error);
@@ -469,7 +491,7 @@ function ProductMappingsEditor({
         </s-banner>
       ) : null}
 
-      <div style={{ display: "grid", gap: "0.45rem", position: "relative" }}>
+      <div style={{ display: "grid", gap: "0.45rem" }}>
         <label htmlFor={`product-search-${artist.id}`}>Add product</label>
         <input
           id={`product-search-${artist.id}`}
@@ -488,16 +510,13 @@ function ProductMappingsEditor({
         {resultsOpen && query.trim() ? (
           <div
             style={{
-              position: "absolute",
-              top: "calc(100% + 0.25rem)",
-              left: 0,
-              right: 0,
-              zIndex: 3,
+              width: "100%",
+              maxHeight: "16rem",
               border: "1px solid var(--p-color-border, #d2d5d8)",
               borderRadius: "0.5rem",
               background: "var(--p-color-bg-surface, #fff)",
               boxShadow: "0 12px 24px rgba(0, 0, 0, 0.12)",
-              overflow: "hidden",
+              overflowY: "auto",
             }}
           >
             {filteredProducts.length === 0 ? (
@@ -512,8 +531,10 @@ function ProductMappingsEditor({
                     type="button"
                     onClick={() => addProduct(product)}
                     style={{
+                      display: "block",
                       width: "100%",
                       border: 0,
+                      borderBottom: "1px solid var(--p-color-border-subdued, #ebebeb)",
                       background: "var(--p-color-bg-surface, #fff)",
                       padding: "0.75rem 1rem",
                       textAlign: "left",

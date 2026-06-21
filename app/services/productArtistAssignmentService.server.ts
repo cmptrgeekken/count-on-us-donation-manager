@@ -19,6 +19,12 @@ type DerivedCauseAssignment = {
   percentage: number;
 };
 
+const SHOPIFY_PRODUCT_GID_PATTERN = /^gid:\/\/shopify\/Product\/\d+$/;
+
+export function canSyncProductToShopify(productGid: string): boolean {
+  return SHOPIFY_PRODUCT_GID_PATTERN.test(productGid);
+}
+
 export async function auditProductShopifySyncFailure(
   shopId: string,
   productId: string,

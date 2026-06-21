@@ -32,6 +32,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         _count: {
           select: { causeAssignments: true, variants: true },
         },
+        artistAssignments: {
+          where: { shopId, status: "active" },
+          select: { id: true },
+        },
         variants: {
           select: {
             id: true,
@@ -60,6 +64,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       status: product.status,
       variantCount: product._count.variants,
       causeAssignmentCount: product._count.causeAssignments,
+      artistAssignmentCount: product.artistAssignments.length,
       mappedVariantCount: product.variants.filter((variant) => variant.providerMappings.length > 0).length,
       mappedProviderCount: new Set(
         product.variants.flatMap((variant) => variant.providerMappings.map((mapping) => mapping.provider)),
@@ -115,6 +120,7 @@ type ProductRow = {
   status: string;
   variantCount: number;
   causeAssignmentCount: number;
+  artistAssignmentCount: number;
   mappedVariantCount: number;
   mappedProviderCount: number;
 };
@@ -199,6 +205,7 @@ export default function ProductsPage() {
               <s-table-header-row>
                 <s-table-header listSlot="primary">Product</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Variants</s-table-header>
+                <s-table-header listSlot="secondary" format="numeric">Artists</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Cause assignments</s-table-header>
                 <s-table-header listSlot="secondary">POD coverage</s-table-header>
                 <s-table-header listSlot="inline">Status</s-table-header>
@@ -215,6 +222,7 @@ export default function ProductsPage() {
                       </div>
                     </s-table-cell>
                     <s-table-cell>{product.variantCount}</s-table-cell>
+                    <s-table-cell>{product.artistAssignmentCount}</s-table-cell>
                     <s-table-cell>{product.causeAssignmentCount}</s-table-cell>
                     <s-table-cell>
                       {product.mappedVariantCount > 0 ? (
