@@ -458,7 +458,7 @@ export default function Settings() {
         aria-atomic="true"
         style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
       >
-        {statusMessage}
+        {statusMessage ? "Settings status updated." : ""}
       </div>
 
       <s-page>

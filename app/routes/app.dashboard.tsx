@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, Form, useLoaderData, useRouteError } from "@remix-run/react";
 
+import { MetricCard, MetricGrid, PageHeader, SectionHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import {
@@ -83,6 +84,7 @@ export default function Dashboard() {
   const prevSyncedRef = useRef(catalogSynced);
   const liveRef = useRef<HTMLDivElement>(null);
   const isInternalAppHref = (href: string) => href.startsWith("/app/");
+  const unconfiguredVariantCount = Math.max(variantCount - configuredCount, 0);
 
   useEffect(() => {
     if (!prevSyncedRef.current && catalogSynced && liveRef.current) {
@@ -103,6 +105,13 @@ export default function Dashboard() {
       />
 
       <s-page>
+        <s-section>
+          <PageHeader
+            title="Home"
+            description="Start with the setup item or operational gap most likely to affect storefront donation accuracy."
+          />
+        </s-section>
+
         {!catalogSynced && (
           <s-banner tone="info" heading="Catalog sync in progress">
             <s-text>
@@ -180,6 +189,66 @@ export default function Dashboard() {
             </div>
           </s-section>
         ) : null}
+
+        <s-section heading="What needs attention">
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <SectionHeader
+              title="Next actions"
+              description="Use these shortcuts to keep catalog setup, donation routing, and reporting moving."
+            />
+            <MetricGrid>
+              <MetricCard
+                label="Setup"
+                value={`${setupWizard.completedCount}/${setupWizard.totalCount}`}
+                tone={setupWizard.completedCount === setupWizard.totalCount ? "success" : "warning"}
+                detail={
+                  setupWizard.checklistVisible
+                    ? `${setupWizard.totalCount - setupWizard.completedCount} setup step${setupWizard.totalCount - setupWizard.completedCount === 1 ? "" : "s"} left`
+                    : "Setup checklist complete"
+                }
+              />
+              <MetricCard
+                label="Catalog"
+                value={catalogSynced ? `${productCount}` : "Sync needed"}
+                tone={catalogSynced ? "success" : "warning"}
+                detail={catalogSynced ? `${variantCount} variant${variantCount === 1 ? "" : "s"} synced` : "Import products before assignment work"}
+              />
+              <MetricCard
+                label="Variant configuration"
+                value={`${configuredCount}/${variantCount}`}
+                tone={unconfiguredVariantCount === 0 ? "success" : "warning"}
+                detail={
+                  unconfiguredVariantCount === 0
+                    ? "All synced variants have cost configuration"
+                    : `${unconfiguredVariantCount} variant${unconfiguredVariantCount === 1 ? "" : "s"} need configuration`
+                }
+              />
+            </MetricGrid>
+            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+              {setupWizard.currentStepView ? (
+                setupWizard.currentStepView.external || !isInternalAppHref(setupWizard.currentStepView.href) ? (
+                  <a
+                    href={setupWizard.currentStepView.href}
+                    target={setupWizard.currentStepView.external ? "_blank" : undefined}
+                    rel={setupWizard.currentStepView.external ? "noreferrer" : undefined}
+                  >
+                    <s-button variant="primary">{setupWizard.currentStepView.actionLabel}</s-button>
+                  </a>
+                ) : (
+                  <Link to={setupWizard.currentStepView.href}>
+                    <s-button variant="primary">{setupWizard.currentStepView.actionLabel}</s-button>
+                  </Link>
+                )
+              ) : null}
+              <Link to="/app/products">
+                <s-button variant="secondary">Review product routing</s-button>
+              </Link>
+              <Link to="/app/reporting">
+                <s-button variant="secondary">Open reporting</s-button>
+              </Link>
+            </div>
+          </div>
+        </s-section>
 
         {catalogSynced && (
           <s-section heading="Catalog">
