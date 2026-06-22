@@ -65,3 +65,19 @@ test("unused templates can be deleted and assigned templates hide the delete act
   await expect(usedRow.getByRole("button", { name: "Delete" })).toHaveCount(0);
   await expect(usedRow.getByText("Delete unavailable while assigned")).toBeVisible();
 });
+
+test("cost templates are sorted by name", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.templatesUrl);
+
+  const rowText = await page.locator("s-table-row").allTextContents();
+  const alphaIndex = rowText.findIndex((text) => text.includes("Playwright Template UI Alpha"));
+  const zetaIndex = rowText.findIndex((text) => text.includes("Playwright Template UI Zeta"));
+
+  expect(alphaIndex).toBeGreaterThanOrEqual(0);
+  expect(zetaIndex).toBeGreaterThanOrEqual(0);
+  expect(alphaIndex).toBeLessThan(zetaIndex);
+});

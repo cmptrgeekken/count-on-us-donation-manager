@@ -117,6 +117,7 @@ export async function getProviderConnectionsPageData(
     }),
     db.variant.findMany({
       where: { shopId },
+      orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       select: {
         id: true,
         title: true,

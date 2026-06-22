@@ -22,7 +22,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const templates = await prisma.costTemplate.findMany({
     where: { shopId },
-    orderBy: { createdAt: "asc" },
+    orderBy: { name: "asc" },
     include: {
       _count: {
         select: {

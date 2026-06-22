@@ -31,7 +31,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const materials = await prisma.materialLibraryItem.findMany({
     where: { shopId },
-    orderBy: { createdAt: "asc" },
+    orderBy: { name: "asc" },
     include: {
       _count: { select: { templateLines: true, variantLines: true } },
     },

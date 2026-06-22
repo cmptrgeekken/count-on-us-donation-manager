@@ -93,3 +93,19 @@ test("equipment can save purchase link and equipment cost metadata", async ({ pa
   await expect(editDialog.getByLabel("Equipment purchase link")).toHaveValue("https://example.com/equipment");
   await expect(editDialog.getByLabel(/Equipment cost/)).toHaveValue("1200.00");
 });
+
+test("equipment is sorted by name", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.equipmentUrl);
+
+  const rowText = await page.locator("s-table-row").allTextContents();
+  const alphaIndex = rowText.findIndex((text) => text.includes("Playwright Equipment UI Alpha"));
+  const zetaIndex = rowText.findIndex((text) => text.includes("Playwright Equipment UI Zeta"));
+
+  expect(alphaIndex).toBeGreaterThanOrEqual(0);
+  expect(zetaIndex).toBeGreaterThanOrEqual(0);
+  expect(alphaIndex).toBeLessThan(zetaIndex);
+});

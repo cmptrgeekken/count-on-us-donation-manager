@@ -182,10 +182,64 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.materialLibraryItem.create({
+    data: {
+      shopId,
+      name: "Playwright Material UI Zeta",
+      type: "production",
+      costingModel: "yield",
+      purchasePrice: "10.00",
+      purchaseQty: "1.00",
+      perUnitCost: "10.000000",
+      totalUsesPerUnit: null,
+      purchaseLink: null,
+      weightGrams: null,
+      status: "active",
+      notes: null,
+    },
+  });
+
+  await prisma.materialLibraryItem.create({
+    data: {
+      shopId,
+      name: "Playwright Material UI Alpha",
+      type: "production",
+      costingModel: "yield",
+      purchasePrice: "10.00",
+      purchaseQty: "1.00",
+      perUnitCost: "10.000000",
+      totalUsesPerUnit: null,
+      purchaseLink: null,
+      weightGrams: null,
+      status: "active",
+      notes: null,
+    },
+  });
+
   const usedEquipment = await prisma.equipmentLibraryItem.create({
     data: {
       shopId,
       name: "Playwright Equipment UI Used",
+      hourlyRate: "30.00",
+      perUseCost: null,
+      status: "active",
+    },
+  });
+
+  await prisma.equipmentLibraryItem.create({
+    data: {
+      shopId,
+      name: "Playwright Equipment UI Zeta",
+      hourlyRate: "30.00",
+      perUseCost: null,
+      status: "active",
+    },
+  });
+
+  await prisma.equipmentLibraryItem.create({
+    data: {
+      shopId,
+      name: "Playwright Equipment UI Alpha",
       hourlyRate: "30.00",
       perUseCost: null,
       status: "active",
@@ -218,6 +272,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           minutes: "5.00",
         },
       },
+    },
+  });
+
+  await prisma.costTemplate.create({
+    data: {
+      shopId,
+      name: "Playwright Template UI Zeta",
+      description: "Sort fixture created before alpha.",
+      status: "active",
+    },
+  });
+
+  await prisma.costTemplate.create({
+    data: {
+      shopId,
+      name: "Playwright Template UI Alpha",
+      description: "Sort fixture created after zeta.",
+      status: "active",
     },
   });
 
