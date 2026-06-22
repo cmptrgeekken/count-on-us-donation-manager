@@ -556,7 +556,7 @@ export default function ProductDetailPage() {
             whiteSpace: "nowrap",
           }}
         >
-          {fetcher.data?.message ?? ""}
+          {fetcher.data?.message ? "Status updated." : ""}
         </div>
 
         {fetcher.data && !fetcher.data.ok && (

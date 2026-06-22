@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { z } from "zod";
+import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
 import {
@@ -601,30 +602,20 @@ export default function ProductsPage() {
 
             <s-section padding="none">
               <s-table>
-              <div
-                slot="filters"
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: "1rem",
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                  padding: "1rem",
-                }}
-              >
-                <div style={{ display: "grid", gap: "0.2rem" }}>
-                  <strong>Product Donations</strong>
-                  <s-text color="subdued">Assign Causes and Artists at the product level.</s-text>
-                </div>
-                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={(event) => toggleSelectAll(event.currentTarget.checked)}
-                  />
-                  <span>Select all visible</span>
-                </label>
-              </div>
+              <ResourceTableHeader
+                title="Product Donations"
+                description="Assign Causes and Artists at the product level."
+                action={
+                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={(event) => toggleSelectAll(event.currentTarget.checked)}
+                    />
+                    <span>Select all visible</span>
+                  </label>
+                }
+              />
 
               <s-table-header-row>
                 <s-table-header>Select</s-table-header>

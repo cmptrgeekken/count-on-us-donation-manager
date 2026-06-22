@@ -111,7 +111,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await prisma.productCauseAssignment.deleteMany({
     where: {
       shopId,
-      productId: product.id,
+      OR: [{ productId: product.id }, { shopifyProductId: product.shopifyId }],
     },
   });
 

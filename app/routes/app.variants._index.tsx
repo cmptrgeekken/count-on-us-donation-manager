@@ -2,6 +2,7 @@ import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
+import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
@@ -545,22 +546,11 @@ export default function VariantsPage() {
 
             <s-section padding="none">
               <s-table>
-                <div
-                  slot="filters"
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                    padding: "1rem",
-                  }}
-                >
-                  <div style={{ display: "grid", gap: "0.2rem" }}>
-                    <strong>Variants</strong>
-                    <s-text color="subdued">Filter, select, assign templates, and export detailed estimates.</s-text>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                <ResourceTableHeader
+                  title="Variants"
+                  description="Filter, select, assign templates, and export detailed estimates."
+                  action={
+                    <>
                     <s-button variant="secondary" onClick={() => void exportEstimates()} disabled={exportingEstimates}>
                       {exportingEstimates ? "Exporting..." : "Export estimates CSV"}
                     </s-button>
@@ -572,8 +562,9 @@ export default function VariantsPage() {
                       />
                       <span>Select all visible</span>
                     </label>
-                  </div>
-                </div>
+                    </>
+                  }
+                />
 
                 <s-table-header-row>
                   <s-table-header>Select</s-table-header>
