@@ -7,6 +7,7 @@ import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
+import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -16,18 +17,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterProductId = url.searchParams.get("product") ?? "";
   const filterConfigured = url.searchParams.get("configured") ?? "";
 
-  const [variants, products, templates, shop, taxOffsetCache] = await Promise.all([
+  const [allVariants, products, templates, shop, taxOffsetCache] = await Promise.all([
     prisma.variant.findMany({
       where: {
         shopId,
         ...(filterProductId ? { productId: filterProductId } : {}),
-        ...(filterConfigured === "yes" ? { costConfig: { isNot: null } } : {}),
-        ...(filterConfigured === "no" ? { costConfig: { is: null } } : {}),
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {
         product: { select: { id: true, title: true } },
-        costConfig: { select: { id: true, productionTemplateId: true, productionTemplate: { select: { name: true } } } },
+        costConfig: {
+          select: {
+            productionTemplateId: true,
+            shippingTemplateId: true,
+            productionTemplate: { select: { name: true } },
+            _count: {
+              select: {
+                materialLines: true,
+                equipmentLines: true,
+              },
+            },
+          },
+        },
         providerMappings: {
           where: { status: "mapped" },
           orderBy: [{ lastCostSyncedAt: "desc" }, { updatedAt: "desc" }],
@@ -64,6 +75,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     }),
   ]);
+
+  const variants = allVariants.filter((variant) => {
+    if (filterConfigured === "yes") return isVariantCostConfigured(variant.costConfig);
+    if (filterConfigured === "no") return !isVariantCostConfigured(variant.costConfig);
+    return true;
+  });
 
   const productIds = [...new Set(variants.map((variant) => variant.productId))];
   const causeAssignments = await prisma.productCauseAssignment.findMany({
@@ -122,7 +139,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       title: v.title,
       sku: v.sku ?? "",
       price: v.price.toString(),
-      hasConfig: v.costConfig !== null,
+      hasConfig: isVariantCostConfigured(v.costConfig),
       templateName: v.costConfig?.productionTemplate?.name ?? null,
       mappedProviders: Array.from(new Set(v.providerMappings.map((mapping) => mapping.provider))),
       latestProviderSyncAt: v.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? null,

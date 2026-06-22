@@ -15,6 +15,7 @@ import {
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
+import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
 const assignmentsSchema = z.object({
   assignments: z.array(
@@ -162,9 +163,16 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           price: true,
           costConfig: {
             select: {
-              id: true,
+              productionTemplateId: true,
+              shippingTemplateId: true,
               productionTemplate: {
                 select: { name: true },
+              },
+              _count: {
+                select: {
+                  materialLines: true,
+                  equipmentLines: true,
+                },
               },
             },
           },
@@ -260,7 +268,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       title: variant.title,
       sku: variant.sku ?? "",
       price: variant.price.toString(),
-      hasConfig: variant.costConfig !== null,
+      hasConfig: isVariantCostConfigured(variant.costConfig),
       templateName: variant.costConfig?.productionTemplate?.name ?? null,
       mappedProviders: Array.from(new Set(variant.providerMappings.map((mapping) => mapping.provider))),
       latestProviderSyncAt: variant.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? null,

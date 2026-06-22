@@ -82,7 +82,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   ]);
 
-  const [configuredVariant, partialConfiguredVariant] = await Promise.all([
+  const [configuredVariant, partialConfiguredVariant, partialBlankVariant] = await Promise.all([
     prisma.variant.create({
       data: {
         shopId,
@@ -129,6 +129,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         shopId,
         variantId: partialConfiguredVariant.id,
         productionTemplateId: template.id,
+      },
+      {
+        shopId,
+        variantId: partialBlankVariant.id,
       },
     ],
   });

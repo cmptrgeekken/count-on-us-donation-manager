@@ -220,6 +220,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       variantId: unconfiguredVariant.id,
     },
   });
+  await prisma.variantCostConfig.create({
+    data: {
+      shopId,
+      variantId: unconfiguredVariant.id,
+    },
+  });
 
   return jsonResponse({
     shopId,

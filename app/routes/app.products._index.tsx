@@ -14,6 +14,7 @@ import {
 } from "../services/productArtistAssignmentService.server";
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
+import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
 const bulkAssignmentSchema = z.object({
   productIds: z.array(z.string().min(1)).min(1, "Select at least one product."),
@@ -67,7 +68,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           select: {
             id: true,
             costConfig: {
-              select: { id: true },
+              select: {
+                productionTemplateId: true,
+                shippingTemplateId: true,
+                _count: {
+                  select: {
+                    materialLines: true,
+                    equipmentLines: true,
+                  },
+                },
+              },
             },
             providerMappings: {
               where: { status: "mapped" },
@@ -103,7 +113,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       handle: product.handle,
       status: product.status,
       variantCount: product._count.variants,
-      configuredVariantCount: product.variants.filter((variant) => variant.costConfig !== null).length,
+      configuredVariantCount: product.variants.filter((variant) => isVariantCostConfigured(variant.costConfig)).length,
       causeAssignmentCount: product._count.causeAssignments,
       artistAssignmentCount: product.artistAssignments.length,
       mappedVariantCount: product.variants.filter((variant) => variant.providerMappings.length > 0).length,
