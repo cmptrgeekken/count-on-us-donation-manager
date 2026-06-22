@@ -4,6 +4,7 @@ import { Link, useLocation } from "@remix-run/react";
 type AdminNavItem = {
   label: string;
   path: string;
+  query?: Record<string, string>;
 };
 
 type AdminNavGroup = AdminNavItem & {
@@ -81,7 +82,14 @@ const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
     label: "Settings",
     path: "/app/settings",
     matches: ["/app/settings"],
-    items: [{ label: "Settings", path: "/app/settings" }],
+    items: [
+      { label: "Financial", path: "/app/settings", query: { section: "financial" } },
+      { label: "Cost Defaults", path: "/app/settings", query: { section: "costs" } },
+      { label: "Tax", path: "/app/settings", query: { section: "tax" } },
+      { label: "Notifications", path: "/app/settings", query: { section: "notifications" } },
+      { label: "Localization", path: "/app/settings", query: { section: "localization" } },
+      { label: "Advanced", path: "/app/settings", query: { section: "advanced" } },
+    ],
   },
 ];
 
@@ -99,8 +107,14 @@ function getActiveGroup(pathname: string) {
   );
 }
 
-function getActiveItem(items: AdminNavItem[], pathname: string) {
-  return items.find((item) => pathMatches(pathname, item.path));
+function itemQueryMatches(item: AdminNavItem, searchParams: URLSearchParams) {
+  if (!item.query) return true;
+  return Object.entries(item.query).every(([key, value]) => searchParams.get(key) === value);
+}
+
+function getActiveItem(items: AdminNavItem[], pathname: string, searchParams: URLSearchParams) {
+  const pathMatchesOnly = items.filter((item) => pathMatches(pathname, item.path));
+  return pathMatchesOnly.find((item) => itemQueryMatches(item, searchParams)) ?? pathMatchesOnly[0];
 }
 
 export function getAdminCompatibilityNavItems() {
@@ -109,9 +123,18 @@ export function getAdminCompatibilityNavItems() {
 
 export function AdminShell({ children }: { children: ReactNode }) {
   const { pathname, search } = useLocation();
+  const searchParams = new URLSearchParams(search);
   const activeGroup = getActiveGroup(pathname);
-  const activeItem = getActiveItem(activeGroup.items, pathname);
-  const href = (path: string) => `${path}${search}`;
+  const activeItem = getActiveItem(activeGroup.items, pathname, searchParams);
+  const href = (item: AdminNavItem) => {
+    const nextParams = new URLSearchParams(searchParams);
+    if (item.path !== "/app/settings") {
+      nextParams.delete("section");
+    }
+    Object.entries(item.query ?? {}).forEach(([key, value]) => nextParams.set(key, value));
+    const nextSearch = nextParams.toString();
+    return `${item.path}${nextSearch ? `?${nextSearch}` : ""}`;
+  };
 
   return (
     <div className="count-on-us-admin-shell">
@@ -185,7 +208,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
           {ADMIN_NAV_GROUPS.map((group) => (
             <Link
               key={group.id}
-              to={href(group.path)}
+              to={href(group)}
               className="count-on-us-admin-shell__group-link"
               aria-current={group.id === activeGroup.id ? "page" : undefined}
             >
@@ -193,18 +216,20 @@ export function AdminShell({ children }: { children: ReactNode }) {
             </Link>
           ))}
         </div>
-        <div className="count-on-us-admin-shell__subnav" aria-label={`${activeGroup.label} pages`}>
-          {activeGroup.items.map((item) => (
-            <Link
-              key={`${activeGroup.id}-${item.label}-${item.path}`}
-              to={href(item.path)}
-              className="count-on-us-admin-shell__subnav-link"
-              aria-current={activeItem?.path === item.path ? "page" : undefined}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </div>
+        {activeGroup.items.length > 1 ? (
+          <div className="count-on-us-admin-shell__subnav" aria-label={`${activeGroup.label} pages`}>
+            {activeGroup.items.map((item) => (
+              <Link
+                key={`${activeGroup.id}-${item.label}-${item.path}-${JSON.stringify(item.query ?? {})}`}
+                to={href(item)}
+                className="count-on-us-admin-shell__subnav-link"
+                aria-current={activeItem === item ? "page" : undefined}
+              >
+                {item.label}
+              </Link>
+            ))}
+          </div>
+        ) : null}
       </nav>
       {children}
     </div>

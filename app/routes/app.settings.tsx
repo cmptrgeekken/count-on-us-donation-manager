@@ -1,11 +1,11 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
-import { adminFieldStyle, FetcherBanners, SectionHeader, WorkflowTabs } from "../components/admin-ui";
+import { adminFieldStyle, FetcherBanners, SectionHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
@@ -125,6 +125,10 @@ const SETTINGS_TABS: Array<{ value: SettingsTab; label: string }> = [
   { value: "localization", label: "Localization" },
   { value: "advanced", label: "Advanced" },
 ];
+
+function parseSettingsTab(value: string | null): SettingsTab {
+  return SETTINGS_TABS.some((tab) => tab.value === value) ? (value as SettingsTab) : "financial";
+}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticateAdminRequest(request);
@@ -430,6 +434,7 @@ export default function Settings() {
     artistSubmissionNotificationEmail,
   } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const [searchParams] = useSearchParams();
   const { currency, locale, formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
   const statusRef = useRef<HTMLDivElement>(null);
@@ -443,7 +448,7 @@ export default function Settings() {
   const [artistSubmissionNotificationEmailInput, setArtistSubmissionNotificationEmailInput] = useState(
     artistSubmissionNotificationEmail ?? "",
   );
-  const [activeTab, setActiveTab] = useState<SettingsTab>("financial");
+  const activeTab = parseSettingsTab(searchParams.get("section"));
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
@@ -463,21 +468,6 @@ export default function Settings() {
 
       <s-page>
         <FetcherBanners data={fetcher.data} />
-
-        <s-section>
-          <div style={{ display: "grid", gap: "1rem" }}>
-            <SectionHeader
-              title="Settings"
-              description="Configure the financial assumptions, defaults, notifications, and operational preferences that shape Count On Us."
-            />
-            <WorkflowTabs
-              label="Settings sections"
-              tabs={SETTINGS_TABS}
-              value={activeTab}
-              onChange={setActiveTab}
-            />
-          </div>
-        </s-section>
 
         {activeTab === "financial" ? (
         <s-section heading="Shopify Payments">

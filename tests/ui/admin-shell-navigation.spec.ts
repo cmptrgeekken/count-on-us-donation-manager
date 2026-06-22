@@ -6,7 +6,7 @@ test("admin shell exposes grouped navigation and preserves embedded query params
   expect(bootstrapResponse.ok()).toBeTruthy();
 
   const bootstrap = await bootstrapResponse.json();
-  await page.goto(bootstrap.closedReportingUrl);
+  await page.goto(bootstrap.closedReportingUrl, { waitUntil: "domcontentloaded" });
 
   const shellNav = page.getByRole("navigation", { name: "Count On Us admin" });
   await expect(shellNav).toBeVisible();
@@ -29,7 +29,7 @@ test("admin shell switches to Giving subnav while cross-linking cause assignment
   expect(bootstrapResponse.ok()).toBeTruthy();
 
   const bootstrap = await bootstrapResponse.json();
-  await page.goto(`/app/causes?__playwrightShop=${encodeURIComponent(bootstrap.shopId)}`);
+  await page.goto(`/app/causes?__playwrightShop=${encodeURIComponent(bootstrap.shopId)}`, { waitUntil: "domcontentloaded" });
 
   const shellNav = page.getByRole("navigation", { name: "Count On Us admin" });
   const givingGroup = shellNav.locator(".count-on-us-admin-shell__group-link", { hasText: "Giving" });
@@ -41,3 +41,39 @@ test("admin shell switches to Giving subnav while cross-linking cause assignment
   await expect(assignmentLink).toHaveAttribute("href", /\/app\/products\?__playwrightShop=/);
 });
 
+test("admin shell hides one-item subnavs on Home", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/settings-email-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.settingsUrl.replace("/app/settings", "/app/dashboard"), { waitUntil: "domcontentloaded" });
+
+  const shellNav = page.getByRole("navigation", { name: "Count On Us admin" });
+  const homeGroup = shellNav.locator(".count-on-us-admin-shell__group-link", { hasText: "Home" });
+  await expect(homeGroup).toHaveAttribute("aria-current", "page");
+  await expect(shellNav.locator(".count-on-us-admin-shell__subnav")).toHaveCount(0);
+});
+
+test("admin shell exposes Settings sections as sub-navigation", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/settings-email-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.settingsUrl);
+
+  const shellNav = page.getByRole("navigation", { name: "Count On Us admin" });
+  const settingsGroup = shellNav.locator(".count-on-us-admin-shell__group-link", { hasText: "Settings" });
+  await expect(settingsGroup).toHaveAttribute("aria-current", "page");
+
+  const taxLink = shellNav.getByRole("link", { name: "Tax" });
+  await expect(taxLink).toBeVisible();
+  await expect(taxLink).toHaveAttribute("href", /\/app\/settings\?__playwrightShop=.*&section=tax/);
+
+  await taxLink.click();
+  await expect(page).toHaveURL(/section=tax/);
+  await expect(page.getByRole("heading", { name: "Tax Estimation" })).toBeVisible();
+
+  const productsLink = shellNav.locator(".count-on-us-admin-shell__group-link", { hasText: "Products" });
+  await expect(productsLink).toHaveAttribute("href", /\/app\/products\?__playwrightShop=/);
+  await expect(productsLink).not.toHaveAttribute("href", /section=tax/);
+});
