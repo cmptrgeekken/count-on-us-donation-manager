@@ -66,6 +66,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         variants: {
           select: {
             id: true,
+            costConfig: {
+              select: { id: true },
+            },
             providerMappings: {
               where: { status: "mapped" },
               select: { provider: true },
@@ -100,6 +103,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       handle: product.handle,
       status: product.status,
       variantCount: product._count.variants,
+      configuredVariantCount: product.variants.filter((variant) => variant.costConfig !== null).length,
       causeAssignmentCount: product._count.causeAssignments,
       artistAssignmentCount: product.artistAssignments.length,
       mappedVariantCount: product.variants.filter((variant) => variant.providerMappings.length > 0).length,
@@ -368,6 +372,7 @@ type ProductRow = {
   handle: string;
   status: string;
   variantCount: number;
+  configuredVariantCount: number;
   causeAssignmentCount: number;
   artistAssignmentCount: number;
   mappedVariantCount: number;
@@ -399,6 +404,17 @@ type ArtistOption = {
 function formatSyncDate(value: string | null) {
   if (!value) return "Not yet completed";
   return new Date(value).toLocaleString();
+}
+
+function variantCostReadinessTitle(product: ProductRow) {
+  if (product.variantCount === 0) {
+    return "No variants are synced for this product yet.";
+  }
+  if (product.configuredVariantCount === product.variantCount) {
+    return `All ${product.variantCount} variants have cost information configured.`;
+  }
+  const remaining = product.variantCount - product.configuredVariantCount;
+  return `${product.configuredVariantCount} of ${product.variantCount} variants have cost information configured. Configure ${remaining} remaining variant${remaining === 1 ? "" : "s"} before relying on estimates.`;
 }
 
 export default function ProductsPage() {
@@ -620,7 +636,7 @@ export default function ProductsPage() {
               <s-table-header-row>
                 <s-table-header>Select</s-table-header>
                 <s-table-header listSlot="primary">Product</s-table-header>
-                <s-table-header listSlot="secondary" format="numeric">Variants</s-table-header>
+                <s-table-header listSlot="secondary" format="numeric">Variant costs</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Artists</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Cause assignments</s-table-header>
                 <s-table-header listSlot="secondary">POD coverage</s-table-header>
@@ -645,7 +661,19 @@ export default function ProductsPage() {
                         <s-text color="subdued">/{product.handle}</s-text>
                       </div>
                     </s-table-cell>
-                    <s-table-cell>{product.variantCount}</s-table-cell>
+                    <s-table-cell>
+                      <span title={variantCostReadinessTitle(product)}>
+                        <s-badge
+                          tone={
+                            product.variantCount > 0 && product.configuredVariantCount === product.variantCount
+                              ? "success"
+                              : "critical"
+                          }
+                        >
+                          {product.configuredVariantCount}/{product.variantCount}
+                        </s-badge>
+                      </span>
+                    </s-table-cell>
                     <s-table-cell>{product.artistAssignmentCount}</s-table-cell>
                     <s-table-cell>{product.causeAssignmentCount}</s-table-cell>
                     <s-table-cell>
@@ -671,18 +699,12 @@ export default function ProductsPage() {
                       <Link
                         to={`/app/products/${product.id}`}
                         style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          padding: "0.55rem 0.9rem",
-                          borderRadius: "999px",
-                          border: "1px solid var(--p-color-border, #d2d5d8)",
-                          color: "inherit",
+                          display: "inline-block",
                           textDecoration: "none",
-                          fontWeight: 600,
+                          whiteSpace: "nowrap",
                         }}
                       >
-                        Manage donations
+                        <s-button variant="secondary">Manage donations</s-button>
                       </Link>
                     </s-table-cell>
                   </s-table-row>

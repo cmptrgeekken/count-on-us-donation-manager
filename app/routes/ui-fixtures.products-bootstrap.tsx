@@ -50,6 +50,89 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  const syncedAt = new Date("2026-04-09T12:00:00Z");
+  const [configuredProduct, partialProduct, template] = await Promise.all([
+    prisma.product.create({
+      data: {
+        shopId,
+        shopifyId: "gid://shopify/Product/910000000001",
+        title: "Configured Product",
+        handle: "configured-product",
+        status: "active",
+        syncedAt,
+      },
+    }),
+    prisma.product.create({
+      data: {
+        shopId,
+        shopifyId: "gid://shopify/Product/910000000002",
+        title: "Partial Product",
+        handle: "partial-product",
+        status: "active",
+        syncedAt,
+      },
+    }),
+    prisma.costTemplate.create({
+      data: {
+        shopId,
+        name: "Products Fixture Template",
+        type: "production",
+        status: "active",
+      },
+    }),
+  ]);
+
+  const [configuredVariant, partialConfiguredVariant] = await Promise.all([
+    prisma.variant.create({
+      data: {
+        shopId,
+        shopifyId: "gid://shopify/ProductVariant/910000000101",
+        productId: configuredProduct.id,
+        title: "Default",
+        sku: "CONFIGURED-DEFAULT",
+        price: 25,
+        syncedAt,
+      },
+    }),
+    prisma.variant.create({
+      data: {
+        shopId,
+        shopifyId: "gid://shopify/ProductVariant/910000000201",
+        productId: partialProduct.id,
+        title: "Small",
+        sku: "PARTIAL-SMALL",
+        price: 20,
+        syncedAt,
+      },
+    }),
+    prisma.variant.create({
+      data: {
+        shopId,
+        shopifyId: "gid://shopify/ProductVariant/910000000202",
+        productId: partialProduct.id,
+        title: "Large",
+        sku: "PARTIAL-LARGE",
+        price: 30,
+        syncedAt,
+      },
+    }),
+  ]);
+
+  await prisma.variantCostConfig.createMany({
+    data: [
+      {
+        shopId,
+        variantId: configuredVariant.id,
+        productionTemplateId: template.id,
+      },
+      {
+        shopId,
+        variantId: partialConfiguredVariant.id,
+        productionTemplateId: template.id,
+      },
+    ],
+  });
+
   return jsonResponse({
     productsUrl: `${baseUrl}/app/products?__playwrightShop=${encodeURIComponent(shopId)}`,
   });
