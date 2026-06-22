@@ -139,6 +139,53 @@ export function PageHeader({
   );
 }
 
+export function ResourceTableHeader({
+  title,
+  description,
+  action,
+}: {
+  title: string;
+  description?: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <div
+      slot="filters"
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: "1rem",
+        alignItems: "center",
+        flexWrap: "wrap",
+        padding: "1rem",
+      }}
+    >
+      <div style={{ display: "grid", gap: "0.2rem", minWidth: "min(100%, 16rem)" }}>
+        <strong>{title}</strong>
+        {description ? <s-text color="subdued">{description}</s-text> : null}
+      </div>
+      {action ? <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>{action}</div> : null}
+    </div>
+  );
+}
+
+export function EmptyTableRow({
+  colSpan,
+  children,
+}: {
+  colSpan: number;
+  children: ReactNode;
+}) {
+  return (
+    <s-table-row>
+      <s-table-cell>{children}</s-table-cell>
+      {Array.from({ length: Math.max(colSpan - 1, 0) }).map((_, index) => (
+        <s-table-cell key={index}></s-table-cell>
+      ))}
+    </s-table-row>
+  );
+}
+
 export function SegmentedTabs<TValue extends string>({
   label,
   tabs,

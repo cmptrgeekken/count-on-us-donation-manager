@@ -4,6 +4,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { EmptyTableRow, ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
@@ -451,15 +452,11 @@ export default function MaterialsPage() {
     return (
       <s-section padding="none">
         <s-table>
-          <div slot="filters" style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap", padding: "1rem" }}>
-            <div style={{ display: "grid", gap: "0.2rem" }}>
-              <strong>{heading}</strong>
-              <s-text color="subdued">{description}</s-text>
-            </div>
-            <s-button variant="primary" onClick={openCreate}>
-              New material
-            </s-button>
-          </div>
+          <ResourceTableHeader
+            title={heading}
+            description={description}
+            action={<s-button variant="primary" onClick={openCreate}>New material</s-button>}
+          />
 
           <s-table-header-row>
             <s-table-header listSlot="primary">Name</s-table-header>
@@ -477,17 +474,7 @@ export default function MaterialsPage() {
             {rows.length > 0 ? (
               renderMaterialRows(rows)
             ) : (
-              <s-table-row>
-                <s-table-cell>{emptyText}</s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-              </s-table-row>
+              <EmptyTableRow colSpan={9}>{emptyText}</EmptyTableRow>
             )}
           </s-table-body>
         </s-table>

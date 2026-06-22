@@ -1,6 +1,7 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useLoaderData, useRouteError } from "@remix-run/react";
+import { EmptyTableRow, ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 
@@ -69,21 +70,10 @@ export default function ArtistsPage() {
       <s-page>
         <s-section padding="none">
           <s-table>
-            <div
-              slot="filters"
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                gap: "1rem",
-                alignItems: "center",
-                padding: "1rem",
-                flexWrap: "wrap",
-              }}
-            >
-              <div style={{ display: "grid", gap: "0.2rem" }}>
-                <strong>Artist Library</strong>
-                <s-text color="subdued">Manage artist profiles, Cause routing, payout defaults, and product mappings.</s-text>
-              </div>
+            <ResourceTableHeader
+              title="Artist Library"
+              description="Manage artist profiles, Cause routing, payout defaults, and product mappings."
+              action={
               <Link
                 to="/app/artists/new"
                 style={{
@@ -100,7 +90,8 @@ export default function ArtistsPage() {
               >
                 New artist
               </Link>
-            </div>
+              }
+            />
 
             <s-table-header-row>
               <s-table-header listSlot="primary">Artist</s-table-header>
@@ -113,16 +104,12 @@ export default function ArtistsPage() {
 
             <s-table-body>
               {artists.length === 0 ? (
-                <s-table-row>
-                  <s-table-cell>No Artists have been added yet.</s-table-cell>
-                  <s-table-cell />
-                  <s-table-cell />
-                  <s-table-cell />
-                  <s-table-cell />
-                  <s-table-cell>
+                <EmptyTableRow colSpan={6}>
+                  <div style={{ display: "grid", gap: "0.5rem" }}>
+                    <span>No artists have been added yet.</span>
                     <Link to="/app/artists/new">Create artist</Link>
-                  </s-table-cell>
-                </s-table-row>
+                  </div>
+                </EmptyTableRow>
               ) : (
                 artists.map((artist) => (
                   <s-table-row key={artist.id}>

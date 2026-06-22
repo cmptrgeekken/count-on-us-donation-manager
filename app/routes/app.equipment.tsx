@@ -4,6 +4,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
@@ -368,23 +369,11 @@ export default function EquipmentPage() {
         ) : (
           <s-section padding="none">
             <s-table>
-              <div
-                slot="filters"
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: "1rem",
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                  padding: "1rem",
-                }}
-              >
-                <div style={{ display: "grid", gap: "0.2rem" }}>
-                  <strong>Equipment Library</strong>
-                  <s-text color="subdued">Reusable equipment costs for templates and variant configurations.</s-text>
-                </div>
-                <s-button variant="primary" onClick={openCreate}>New equipment</s-button>
-              </div>
+              <ResourceTableHeader
+                title="Equipment Library"
+                description="Reusable equipment costs for templates and variant configurations."
+                action={<s-button variant="primary" onClick={openCreate}>New equipment</s-button>}
+              />
 
               <s-table-header-row>
                 <s-table-header listSlot="primary">Name</s-table-header>
