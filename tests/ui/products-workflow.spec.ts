@@ -15,10 +15,18 @@ test("products page can queue a catalog sync without clearing seed data", async 
   await expect(page.getByText("Partial Product")).toBeVisible();
   await expect(page.getByText("1/1")).toBeVisible();
   await expect(page.getByText("1/2")).toBeVisible();
-  await expect(page.locator("span[title='All 1 variants have cost information configured.']")).toBeVisible();
+  await expect(page.getByRole("link", { name: "1/1" })).toHaveAttribute(
+    "href",
+    /\/app\/variants\?__playwrightShop=.*&product=/,
+  );
+  await expect(page.getByRole("link", { name: "1/2" })).toHaveAttribute(
+    "href",
+    /\/app\/variants\?__playwrightShop=.*&product=/,
+  );
+  await expect(page.locator("a[title='All 1 variants have cost information configured.']")).toBeVisible();
   await expect(
     page.locator(
-      "span[title='1 of 2 variants have cost information configured. Configure 1 remaining variant before relying on estimates.']",
+      "a[title='1 of 2 variants have cost information configured. Configure 1 remaining variant before relying on estimates.']",
     ),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Manage" })).toHaveCount(2);

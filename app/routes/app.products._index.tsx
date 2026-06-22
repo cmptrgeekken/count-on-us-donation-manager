@@ -1,7 +1,7 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useLocation, useRouteError } from "@remix-run/react";
 import { z } from "zod";
 import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
@@ -431,6 +431,7 @@ export default function ProductsPage() {
   const { catalogSynced, latestCatalogSync, products, causes, artists } = useLoaderData<typeof loader>();
   const syncFetcher = useFetcher<SyncActionData>();
   const bulkFetcher = useFetcher<BulkActionData>();
+  const { search } = useLocation();
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [bulkMode, setBulkMode] = useState<BulkMode>("artist");
   const [selectedCauseId, setSelectedCauseId] = useState(causes[0]?.id ?? "");
@@ -483,6 +484,13 @@ export default function ProductsPage() {
 
     bulkFetcher.submit(formData, { method: "post" });
     clearSelection();
+  }
+
+  function variantsUrl(productId: string) {
+    const params = new URLSearchParams(search);
+    params.set("product", productId);
+    const query = params.toString();
+    return `/app/variants${query ? `?${query}` : ""}`;
   }
 
   return (
@@ -672,17 +680,23 @@ export default function ProductsPage() {
                       </div>
                     </s-table-cell>
                     <s-table-cell>
-                      <span title={variantCostReadinessTitle(product)}>
-                        <s-badge
-                          tone={
-                            product.variantCount > 0 && product.configuredVariantCount === product.variantCount
-                              ? "success"
-                              : "critical"
-                          }
-                        >
-                          {product.configuredVariantCount}/{product.variantCount}
-                        </s-badge>
-                      </span>
+                      <Link
+                        to={variantsUrl(product.id)}
+                        title={variantCostReadinessTitle(product)}
+                        style={{ display: "inline-flex", textDecoration: "none" }}
+                      >
+                        <span>
+                          <s-badge
+                            tone={
+                              product.variantCount > 0 && product.configuredVariantCount === product.variantCount
+                                ? "success"
+                                : "critical"
+                            }
+                          >
+                            {product.configuredVariantCount}/{product.variantCount}
+                          </s-badge>
+                        </span>
+                      </Link>
                     </s-table-cell>
                     <s-table-cell>{product.artistAssignmentCount}</s-table-cell>
                     <s-table-cell>{product.causeAssignmentCount}</s-table-cell>
