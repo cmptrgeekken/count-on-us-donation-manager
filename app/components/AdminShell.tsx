@@ -143,6 +143,9 @@ export function AdminShell({ children }: { children: ReactNode }) {
           .count-on-us-admin-shell {
             min-height: 100%;
             background: var(--p-color-bg, #f6f6f7);
+            font-family: var(--p-font-family-sans, Inter, -apple-system, BlinkMacSystemFont, "San Francisco", "Segoe UI", sans-serif);
+            font-size: var(--p-font-size-325, 0.875rem);
+            line-height: var(--p-font-line-height-500, 1.25rem);
           }
 
           .count-on-us-admin-shell__nav {
@@ -171,6 +174,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             border: 1px solid transparent;
             border-radius: 0.5rem;
             color: var(--p-color-text, #303030);
+            font: inherit;
             text-decoration: none;
           }
 
