@@ -21,7 +21,7 @@ test("products page can queue a catalog sync without clearing seed data", async 
       "span[title='1 of 2 variants have cost information configured. Configure 1 remaining variant before relying on estimates.']",
     ),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Manage donations" })).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Manage" })).toHaveCount(2);
 
   await page.getByRole("button", { name: "Sync catalog now" }).click();
 

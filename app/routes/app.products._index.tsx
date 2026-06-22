@@ -704,7 +704,7 @@ export default function ProductsPage() {
                           whiteSpace: "nowrap",
                         }}
                       >
-                        <s-button variant="secondary">Manage donations</s-button>
+                        <s-button variant="secondary">Manage</s-button>
                       </Link>
                     </s-table-cell>
                   </s-table-row>
