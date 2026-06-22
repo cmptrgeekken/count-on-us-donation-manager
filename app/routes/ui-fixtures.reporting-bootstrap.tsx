@@ -39,12 +39,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await prisma.orderSnapshotLine.deleteMany({ where: { shopId } });
   await prisma.orderSnapshot.deleteMany({ where: { shopId } });
   await prisma.causeAllocation.deleteMany({ where: { shopId } });
+  await prisma.artistPaymentApplication.deleteMany({ where: { shopId } });
+  await prisma.artistPayment.deleteMany({ where: { shopId } });
+  await prisma.artistAllocation.deleteMany({ where: { shopId } });
   await prisma.shopifyChargeTransaction.deleteMany({ where: { shopId } });
   await prisma.disbursement.deleteMany({ where: { shopId } });
   await prisma.analyticalRecalculationRun.deleteMany({ where: { shopId } });
   await prisma.taxTrueUp.deleteMany({ where: { shopId } });
   await prisma.reportingPeriod.deleteMany({ where: { shopId } });
   await prisma.businessExpense.deleteMany({ where: { shopId } });
+  await prisma.artist.deleteMany({ where: { shopId } });
   await prisma.cause.deleteMany({ where: { shopId } });
 
   const cause = await prisma.cause.create({
@@ -172,6 +176,29 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       is501c3: true,
       allocated: new Prisma.Decimal("40.00"),
       disbursed: new Prisma.Decimal("0.00"),
+    },
+  });
+
+  const artist = await prisma.artist.create({
+    data: {
+      shopId,
+      displayName: "Playwright Artist",
+      creditName: "Playwright Artist",
+      status: "active",
+      paymentEnabled: true,
+      defaultPayoutRate: new Prisma.Decimal("10.00"),
+    },
+  });
+
+  await prisma.artistAllocation.create({
+    data: {
+      shopId,
+      periodId: closedPeriod.id,
+      artistId: artist.id,
+      artistName: artist.displayName,
+      creditName: artist.creditName,
+      allocated: new Prisma.Decimal("30.00"),
+      paid: new Prisma.Decimal("0.00"),
     },
   });
 
