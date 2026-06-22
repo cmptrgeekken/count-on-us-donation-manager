@@ -175,6 +175,14 @@ function serializeVariantEquipmentLine(
   };
 }
 
+function sortSerializedMaterialLines(lines: SerializedMaterialLine[]) {
+  return [...lines].sort((a, b) => a.materialName.localeCompare(b.materialName));
+}
+
+function sortSerializedEquipmentLines(lines: SerializedEquipmentLine[]) {
+  return [...lines].sort((a, b) => a.equipmentName.localeCompare(b.equipmentName));
+}
+
 function formatProviderName(provider: string) {
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
@@ -250,12 +258,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         include: {
           productionTemplate: {
             include: {
-              materialLines: { include: { material: true } },
-              equipmentLines: { include: { equipment: true } },
+              materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+              equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
             },
           },
-          materialLines: { include: { material: true, templateLine: true } },
-          equipmentLines: { include: { equipment: true, templateLine: true } },
+          materialLines: { include: { material: true, templateLine: true }, orderBy: { material: { name: "asc" } } },
+          equipmentLines: { include: { equipment: true, templateLine: true }, orderBy: { equipment: { name: "asc" } } },
         },
       },
     },
@@ -270,8 +278,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
       include: {
-        materialLines: { include: { material: true }, orderBy: { id: "asc" } },
-        equipmentLines: { include: { equipment: true }, orderBy: { id: "asc" } },
+        materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+        equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
       },
     }),
     prisma.materialLibraryItem.findMany({
@@ -347,6 +355,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     additionalMaterialLines = config.materialLines
       .filter((line) => !line.templateLineId && !consumedMaterialLineIds.has(line.id))
       .map(serializeVariantMaterialLine);
+    additionalMaterialLines = sortSerializedMaterialLines(additionalMaterialLines);
 
     const templateEquipmentSource = config.productionTemplate?.equipmentLines ?? [];
     const explicitEquipmentOverrides = new Map(
@@ -392,6 +401,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     additionalEquipmentLines = config.equipmentLines
       .filter((line) => !line.templateLineId && !consumedEquipmentLineIds.has(line.id))
       .map(serializeVariantEquipmentLine);
+    additionalEquipmentLines = sortSerializedEquipmentLines(additionalEquipmentLines);
   }
 
   const serializedProviderMappings: SerializedProviderMapping[] = variant.providerMappings.map((mapping) => {
@@ -1644,7 +1654,10 @@ export default function VariantDetailPage() {
       usesPerVariant: selectedMaterial.costingModel === "uses" ? (matUses || null) : null,
     };
 
-    setDraft((current) => ({ ...current, materialLines: [...current.materialLines, nextLine] }));
+    setDraft((current) => ({
+      ...current,
+      materialLines: sortSerializedMaterialLines([...current.materialLines, nextLine]),
+    }));
     setAddMaterialOpen(false);
     resetAdditionalMaterialModal();
   }
@@ -1669,7 +1682,10 @@ export default function VariantDetailPage() {
       uses: eqUses || null,
     };
 
-    setDraft((current) => ({ ...current, equipmentLines: [...current.equipmentLines, nextLine] }));
+    setDraft((current) => ({
+      ...current,
+      equipmentLines: sortSerializedEquipmentLines([...current.equipmentLines, nextLine]),
+    }));
     setAddEquipmentOpen(false);
     resetAdditionalEquipmentModal();
   }

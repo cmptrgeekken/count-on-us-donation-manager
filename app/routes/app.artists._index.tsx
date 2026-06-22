@@ -11,7 +11,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const artists = await prisma.artist.findMany({
     where: { shopId },
-    orderBy: [{ status: "asc" }, { displayName: "asc" }],
+    orderBy: { displayName: "asc" },
     include: {
       _count: {
         select: { productAssignments: true, lineAllocations: true },

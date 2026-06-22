@@ -121,6 +121,14 @@ function buildTemplateDraft(template: ReturnType<typeof serializeTemplate>): Tem
   };
 }
 
+function sortTemplateMaterialLines(lines: TemplateDraftMaterialLine[]) {
+  return [...lines].sort((a, b) => a.materialName.localeCompare(b.materialName));
+}
+
+function sortTemplateEquipmentLines(lines: TemplateDraftEquipmentLine[]) {
+  return [...lines].sort((a, b) => a.equipmentName.localeCompare(b.equipmentName));
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -129,8 +137,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const template = await prisma.costTemplate.findFirst({
     where: { id: templateId, shopId },
     include: {
-      materialLines: { include: { material: true }, orderBy: { id: "asc" } },
-      equipmentLines: { include: { equipment: true }, orderBy: { id: "asc" } },
+      materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+      equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
     },
   });
 
@@ -532,8 +540,8 @@ export default function TemplateDetailPage() {
     setDraft((current) => ({
       ...current,
       materialLines: editingMaterialLineId
-        ? current.materialLines.map((line) => (line.id === editingMaterialLineId ? nextLine : line))
-        : [...current.materialLines, nextLine],
+        ? sortTemplateMaterialLines(current.materialLines.map((line) => (line.id === editingMaterialLineId ? nextLine : line)))
+        : sortTemplateMaterialLines([...current.materialLines, nextLine]),
     }));
     closeMaterialModal();
   }
@@ -576,8 +584,8 @@ export default function TemplateDetailPage() {
     setDraft((current) => ({
       ...current,
       equipmentLines: editingEquipmentLineId
-        ? current.equipmentLines.map((line) => (line.id === editingEquipmentLineId ? nextLine : line))
-        : [...current.equipmentLines, nextLine],
+        ? sortTemplateEquipmentLines(current.equipmentLines.map((line) => (line.id === editingEquipmentLineId ? nextLine : line)))
+        : sortTemplateEquipmentLines([...current.equipmentLines, nextLine]),
     }));
     closeEquipmentModal();
   }
