@@ -125,6 +125,102 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  const [configuredVariant, unconfiguredVariant, existingTemplate] = await Promise.all([
+    prisma.variant.upsert({
+      where: {
+        shopId_shopifyId: {
+          shopId,
+          shopifyId: "gid://shopify/ProductVariant/900000000201",
+        },
+      },
+      update: {
+        productId: product.id,
+        title: "Small",
+        sku: "PW-DONATION-S",
+        price: 24,
+        syncedAt,
+      },
+      create: {
+        shopId,
+        shopifyId: "gid://shopify/ProductVariant/900000000201",
+        productId: product.id,
+        title: "Small",
+        sku: "PW-DONATION-S",
+        price: 24,
+        syncedAt,
+      },
+    }),
+    prisma.variant.upsert({
+      where: {
+        shopId_shopifyId: {
+          shopId,
+          shopifyId: "gid://shopify/ProductVariant/900000000202",
+        },
+      },
+      update: {
+        productId: product.id,
+        title: "Large",
+        sku: "PW-DONATION-L",
+        price: 32,
+        syncedAt,
+      },
+      create: {
+        shopId,
+        shopifyId: "gid://shopify/ProductVariant/900000000202",
+        productId: product.id,
+        title: "Large",
+        sku: "PW-DONATION-L",
+        price: 32,
+        syncedAt,
+      },
+    }),
+    prisma.costTemplate.findFirst({
+      where: { shopId, name: "Playwright Product Detail Template", type: "production" },
+      select: { id: true },
+    }),
+  ]);
+
+  const template = existingTemplate
+    ? await prisma.costTemplate
+        .updateMany({
+          where: { id: existingTemplate.id, shopId },
+          data: { status: "active" },
+        })
+        .then(() => prisma.costTemplate.findFirstOrThrow({ where: { id: existingTemplate.id, shopId } }))
+    : await prisma.costTemplate.create({
+        data: {
+          shopId,
+          name: "Playwright Product Detail Template",
+          type: "production",
+          status: "active",
+        },
+      });
+
+  const configuredVariantCostConfig = await prisma.variantCostConfig.findFirst({
+    where: { shopId, variantId: configuredVariant.id },
+    select: { id: true },
+  });
+  if (configuredVariantCostConfig) {
+    await prisma.variantCostConfig.updateMany({
+      where: { id: configuredVariantCostConfig.id, shopId },
+      data: { productionTemplateId: template.id },
+    });
+  } else {
+    await prisma.variantCostConfig.create({
+      data: {
+        shopId,
+        variantId: configuredVariant.id,
+        productionTemplateId: template.id,
+      },
+    });
+  }
+  await prisma.variantCostConfig.deleteMany({
+    where: {
+      shopId,
+      variantId: unconfiguredVariant.id,
+    },
+  });
+
   return jsonResponse({
     shopId,
     productId: product.id,

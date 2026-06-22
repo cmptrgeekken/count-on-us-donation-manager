@@ -1,10 +1,11 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useLocation, useRouteError } from "@remix-run/react";
 import { z } from "zod";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
+import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import {
   auditProductShopifySyncFailure,
   canSyncProductToShopify,
@@ -13,6 +14,7 @@ import {
 } from "../services/productArtistAssignmentService.server";
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
+import { useAppLocalization } from "../utils/use-app-localization";
 
 const assignmentsSchema = z.object({
   assignments: z.array(
@@ -59,6 +61,37 @@ const fieldStyle = {
   font: "inherit",
 };
 
+type ProductVariantRow = {
+  id: string;
+  title: string;
+  sku: string;
+  price: string;
+  hasConfig: boolean;
+  templateName: string | null;
+  mappedProviders: string[];
+  latestProviderSyncAt: string | null;
+  estimate: VariantEstimatePayload | null;
+};
+
+function formatProviderLabel(provider: string) {
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
+function estimateTotalCost(estimate: VariantEstimatePayload) {
+  return [
+    estimate.reconciliation.labor,
+    estimate.reconciliation.materials,
+    estimate.reconciliation.packaging,
+    estimate.reconciliation.equipment,
+    estimate.reconciliation.pod,
+    estimate.reconciliation.mistakeBuffer,
+    estimate.reconciliation.shopifyFees,
+    estimate.reconciliation.taxReserve,
+  ]
+    .reduce((sum, amount) => sum + Number(amount), 0)
+    .toFixed(2);
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -83,6 +116,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
               id: true,
               name: true,
               shopifyMetaobjectId: true,
+              is501c3: true,
+              iconUrl: true,
+              donationLink: true,
             },
           },
         },
@@ -116,6 +152,32 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           },
         },
       },
+      variants: {
+        orderBy: { title: "asc" },
+        select: {
+          id: true,
+          shopifyId: true,
+          title: true,
+          sku: true,
+          price: true,
+          costConfig: {
+            select: {
+              id: true,
+              productionTemplate: {
+                select: { name: true },
+              },
+            },
+          },
+          providerMappings: {
+            where: { status: "mapped" },
+            orderBy: [{ lastCostSyncedAt: "desc" }, { updatedAt: "desc" }],
+            select: {
+              provider: true,
+              lastCostSyncedAt: true,
+            },
+          },
+        },
+      },
     },
   });
 
@@ -123,37 +185,67 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const causes = await prisma.cause.findMany({
-    where: { shopId, status: "active" },
-    orderBy: { name: "asc" },
-    select: {
-      id: true,
-      name: true,
-      shopifyMetaobjectId: true,
-      is501c3: true,
-    },
-  });
-
-  const artists = await prisma.artist.findMany({
-    where: { shopId, status: "active" },
-    orderBy: { displayName: "asc" },
-    select: {
-      id: true,
-      displayName: true,
-      creditName: true,
-      paymentEnabled: true,
-      defaultPayoutRate: true,
-      causeAssignments: {
-        select: {
-          causeId: true,
-          percentage: true,
-          cause: {
-            select: { name: true },
+  const [causes, artists, shop, taxOffsetCache] = await Promise.all([
+    prisma.cause.findMany({
+      where: { shopId, status: "active" },
+      orderBy: { name: "asc" },
+      select: {
+        id: true,
+        name: true,
+        shopifyMetaobjectId: true,
+        is501c3: true,
+      },
+    }),
+    prisma.artist.findMany({
+      where: { shopId, status: "active" },
+      orderBy: { displayName: "asc" },
+      select: {
+        id: true,
+        displayName: true,
+        creditName: true,
+        paymentEnabled: true,
+        defaultPayoutRate: true,
+        causeAssignments: {
+          select: {
+            causeId: true,
+            percentage: true,
+            cause: {
+              select: { name: true },
+            },
           },
         },
       },
-    },
-  });
+    }),
+    prisma.shop.findUnique({
+      where: { shopId },
+      select: {
+        currency: true,
+        paymentRate: true,
+        effectiveTaxRate: true,
+        taxDeductionMode: true,
+      },
+    }),
+    prisma.taxOffsetCache.findUnique({
+      where: { shopId },
+      select: { widgetTaxSuppressed: true },
+    }),
+  ]);
+
+  const widgetTaxSuppressed = taxOffsetCache?.widgetTaxSuppressed ?? true;
+  const variantEstimates = shop
+    ? await Promise.all(
+        product.variants.map((variant) =>
+          buildVariantEstimatePayload({
+            shopId,
+            variant,
+            causeAssignments: product.causeAssignments,
+            shop,
+            widgetTaxSuppressed,
+            db: prisma,
+          }),
+        ),
+      )
+    : product.variants.map(() => null);
 
   return jsonResponse({
     product: {
@@ -163,6 +255,17 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       handle: product.handle,
       status: product.status,
     },
+    variants: product.variants.map((variant, index) => ({
+      id: variant.id,
+      title: variant.title,
+      sku: variant.sku ?? "",
+      price: variant.price.toString(),
+      hasConfig: variant.costConfig !== null,
+      templateName: variant.costConfig?.productionTemplate?.name ?? null,
+      mappedProviders: Array.from(new Set(variant.providerMappings.map((mapping) => mapping.provider))),
+      latestProviderSyncAt: variant.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? null,
+      estimate: variantEstimates[index],
+    })),
     causes,
     assignments: product.causeAssignments.map((assignment) => ({
       causeId: assignment.causeId,
@@ -452,8 +555,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 };
 
 export default function ProductDetailPage() {
-  const { product, causes, assignments, artists, artistAssignments } = useLoaderData<typeof loader>();
+  const { product, variants, causes, assignments, artists, artistAssignments } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const { search } = useLocation();
+  const { formatMoney } = useAppLocalization();
   const [rows, setRows] = useState<AssignmentRow[]>(() =>
     assignments.map((assignment: (typeof assignments)[number]) => ({
       causeId: assignment.causeId,
@@ -478,6 +583,19 @@ export default function ProductDetailPage() {
   const total = rows.reduce((sum, row) => sum + (Number(row.percentage) || 0), 0);
   const artistTotal = artistRows.reduce((sum, row) => sum + (Number(row.collaborationShare) || 0), 0);
   const isSubmitting = fetcher.state !== "idle";
+  const configuredVariantCount = variants.filter((variant: ProductVariantRow) => variant.hasConfig).length;
+  const mappedVariantCount = variants.filter((variant: ProductVariantRow) => variant.mappedProviders.length > 0).length;
+  const needsSetupCount = variants.length - configuredVariantCount;
+  const variantsUrl = useMemo(() => {
+    const params = new URLSearchParams(search);
+    params.set("product", product.id);
+    const query = params.toString();
+    return `/app/variants${query ? `?${query}` : ""}`;
+  }, [product.id, search]);
+  const variantDetailUrl = (variantId: string) => {
+    const query = new URLSearchParams(search).toString();
+    return `/app/variants/${variantId}${query ? `?${query}` : ""}`;
+  };
 
   useEffect(() => {
     if (!fetcher.data?.ok) return;
@@ -574,6 +692,116 @@ export default function ProductDetailPage() {
           <div style={{ display: "grid", gap: "0.35rem" }}>
             <s-text color="subdued">/{product.handle}</s-text>
             <s-text color="subdued">Status: {product.status}</s-text>
+          </div>
+        </s-section>
+
+        <s-section heading="Variants">
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start", flexWrap: "wrap" }}>
+              <div style={{ display: "grid", gap: "0.35rem", maxWidth: "48rem" }}>
+                <s-text>
+                  Review whether each variant is ready for donation estimates. Product-level Cause and Artist routing applies across these variants.
+                </s-text>
+                <HelpText>Use the Variants workflow for templates, POD mappings, labor, material, packaging, and cost overrides.</HelpText>
+              </div>
+              <Link to={variantsUrl}>View all variants for this product</Link>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(9rem, 1fr))",
+                gap: "0.75rem",
+              }}
+            >
+              <div style={{ padding: "0.85rem", border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "0.5rem", background: "var(--p-color-bg-surface, #fff)" }}>
+                <s-text color="subdued">Variants</s-text>
+                <div style={{ fontSize: "1.35rem", fontWeight: 650 }}>{variants.length}</div>
+              </div>
+              <div style={{ padding: "0.85rem", border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "0.5rem", background: "var(--p-color-bg-surface, #fff)" }}>
+                <s-text color="subdued">Configured</s-text>
+                <div style={{ fontSize: "1.35rem", fontWeight: 650 }}>{configuredVariantCount}</div>
+              </div>
+              <div style={{ padding: "0.85rem", border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "0.5rem", background: "var(--p-color-bg-surface, #fff)" }}>
+                <s-text color="subdued">Needs setup</s-text>
+                <div style={{ fontSize: "1.35rem", fontWeight: 650, color: needsSetupCount > 0 ? "var(--p-color-text-warning, #5f370e)" : "inherit" }}>{needsSetupCount}</div>
+              </div>
+              <div style={{ padding: "0.85rem", border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "0.5rem", background: "var(--p-color-bg-surface, #fff)" }}>
+                <s-text color="subdued">POD mapped</s-text>
+                <div style={{ fontSize: "1.35rem", fontWeight: 650 }}>{mappedVariantCount}</div>
+              </div>
+            </div>
+
+            {variants.length === 0 ? (
+              <s-banner tone="warning">
+                <s-text>No variants are synced for this product yet. Run catalog sync from the Products page.</s-text>
+              </s-banner>
+            ) : (
+              <s-table>
+                <s-table-header-row>
+                  <s-table-header listSlot="primary">Variant</s-table-header>
+                  <s-table-header listSlot="secondary">SKU</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Price</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Est. costs</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Est. donation</s-table-header>
+                  <s-table-header listSlot="secondary">Template</s-table-header>
+                  <s-table-header listSlot="secondary">POD</s-table-header>
+                  <s-table-header listSlot="inline">Status</s-table-header>
+                  <s-table-header>Actions</s-table-header>
+                </s-table-header-row>
+                <s-table-body>
+                  {variants.map((variant: ProductVariantRow) => (
+                    <s-table-row key={variant.id}>
+                      <s-table-cell>{variant.title}</s-table-cell>
+                      <s-table-cell>{variant.sku || "-"}</s-table-cell>
+                      <s-table-cell>{formatMoney(variant.price)}</s-table-cell>
+                      <s-table-cell>
+                        {variant.estimate ? (
+                          <strong>{formatMoney(estimateTotalCost(variant.estimate))}</strong>
+                        ) : (
+                          <s-text color="subdued">Unavailable</s-text>
+                        )}
+                      </s-table-cell>
+                      <s-table-cell>
+                        {variant.estimate ? (
+                          <strong>{formatMoney(variant.estimate.reconciliation.allocatedDonations)}</strong>
+                        ) : (
+                          <s-text color="subdued">Unavailable</s-text>
+                        )}
+                      </s-table-cell>
+                      <s-table-cell>{variant.templateName ?? "-"}</s-table-cell>
+                      <s-table-cell>
+                        {variant.mappedProviders.length > 0 ? (
+                          <div style={{ display: "grid", gap: "0.2rem" }}>
+                            <strong>{variant.mappedProviders.map(formatProviderLabel).join(", ")}</strong>
+                            <s-text color="subdued">
+                              {variant.latestProviderSyncAt
+                                ? `Last synced ${new Date(variant.latestProviderSyncAt).toLocaleString()}`
+                                : "Mapped"}
+                            </s-text>
+                          </div>
+                        ) : (
+                          <s-text color="subdued">Manual / none</s-text>
+                        )}
+                      </s-table-cell>
+                      <s-table-cell>
+                        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+                          <s-badge tone={variant.hasConfig ? "success" : "warning"}>
+                            {variant.hasConfig ? "Configured" : "Needs setup"}
+                          </s-badge>
+                          {variant.mappedProviders.length > 0 ? <s-badge tone="info">POD mapped</s-badge> : null}
+                        </div>
+                      </s-table-cell>
+                      <s-table-cell>
+                        <Link to={variantDetailUrl(variant.id)}>
+                          <s-button variant="secondary">Configure</s-button>
+                        </Link>
+                      </s-table-cell>
+                    </s-table-row>
+                  ))}
+                </s-table-body>
+              </s-table>
+            )}
           </div>
         </s-section>
 
