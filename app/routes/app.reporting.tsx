@@ -623,10 +623,14 @@ export default function ReportingPage() {
   const revalidator = useRevalidator();
   const { formatMoney, formatPct, locale } = useAppLocalization();
   const closeDialogRef = useRef<HTMLDialogElement>(null);
+  const artistPaymentDialogRef = useRef<HTMLDialogElement>(null);
+  const taxTrueUpDialogRef = useRef<HTMLDialogElement>(null);
   const disbursementFormRef = useRef<HTMLFormElement>(null);
   const artistPaymentFormRef = useRef<HTMLFormElement>(null);
   const trueUpFormRef = useRef<HTMLFormElement>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [artistPaymentDialogOpen, setArtistPaymentDialogOpen] = useState(false);
+  const [taxTrueUpDialogOpen, setTaxTrueUpDialogOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<"csv" | "pdf" | null>(null);
   const [exportError, setExportError] = useState("");
 
@@ -641,6 +645,26 @@ export default function ReportingPage() {
   }, [closeDialogOpen]);
 
   useEffect(() => {
+    const dialog = artistPaymentDialogRef.current;
+    if (!dialog) return;
+    if (artistPaymentDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!artistPaymentDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [artistPaymentDialogOpen]);
+
+  useEffect(() => {
+    const dialog = taxTrueUpDialogRef.current;
+    if (!dialog) return;
+    if (taxTrueUpDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!taxTrueUpDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [taxTrueUpDialogOpen]);
+
+  useEffect(() => {
     if (disbursementFetcher.data?.ok) {
       disbursementFormRef.current?.reset();
     }
@@ -649,12 +673,16 @@ export default function ReportingPage() {
   useEffect(() => {
     if (artistPaymentFetcher.data?.ok) {
       artistPaymentFormRef.current?.reset();
+      setArtistPaymentDialogOpen(false);
+      setActiveReportingTab("artist-payments");
     }
   }, [artistPaymentFetcher.data]);
 
   useEffect(() => {
     if (trueUpFetcher.data?.ok) {
       trueUpFormRef.current?.reset();
+      setTaxTrueUpDialogOpen(false);
+      setActiveReportingTab("tax");
     }
   }, [trueUpFetcher.data]);
 
@@ -855,7 +883,7 @@ export default function ReportingPage() {
   };
   const selectArtistForPayment = (artistId: string) => {
     setSelectedArtistPaymentArtistId(artistId);
-    setActiveReportingTab("artist-payments");
+    setArtistPaymentDialogOpen(true);
   };
   const dashboardActionStyle = (primary: boolean, disabled: boolean): CSSProperties => ({
     borderRadius: "0.5rem",
@@ -1431,7 +1459,7 @@ export default function ReportingPage() {
                 type="button"
                 style={dashboardActionStyle(false, selectedPeriod?.status !== "CLOSED")}
                 disabled={selectedPeriod?.status !== "CLOSED"}
-                onClick={() => setActiveReportingTab("tax")}
+                onClick={() => setTaxTrueUpDialogOpen(true)}
               >
                 Record tax true-up
               </button>
@@ -2706,6 +2734,364 @@ export default function ReportingPage() {
           </div>
         </div>
       </dialog>
+
+      {artistPaymentDialogOpen ? (
+        <dialog
+          ref={artistPaymentDialogRef}
+          onClose={() => setArtistPaymentDialogOpen(false)}
+          style={{
+            border: "none",
+            borderRadius: "1rem",
+            padding: 0,
+            maxWidth: "44rem",
+            width: "calc(100% - 2rem)",
+          }}
+        >
+          <div id="log-artist-payment" style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+              <div style={{ display: "grid", gap: "0.25rem" }}>
+                <h2 style={{ margin: 0, fontSize: "1rem" }}>Log artist payment</h2>
+                <s-text color="subdued">
+                  Record artist payouts from the selected payable without leaving the payables dashboard.
+                </s-text>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  aria-label="Close artist payment dialog"
+                  onClick={() => setArtistPaymentDialogOpen(false)}
+                  style={{ border: "none", background: "transparent", fontSize: "1.5rem", lineHeight: 1, cursor: "pointer" }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            {artistPaymentArtistOptions.length === 0 ? (
+              <s-banner tone="info">
+                <s-text>All closed-period artist payables through this reporting period have already been fully paid.</s-text>
+              </s-banner>
+            ) : (
+              <artistPaymentFetcher.Form
+                ref={artistPaymentFormRef}
+                method="post"
+                style={{ display: "grid", gap: "0.9rem" }}
+              >
+                <input type="hidden" name="intent" value="log-artist-payment" />
+                <input type="hidden" name="periodId" value={selectedPeriod.id} />
+                <div
+                  aria-live="polite"
+                  aria-atomic="true"
+                  style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
+                >
+                  {artistPaymentStatusMessage}
+                </div>
+
+                {artistPaymentFetcher.data && !artistPaymentFetcher.data.ok ? (
+                  <s-banner tone="critical">
+                    <s-text>{artistPaymentFetcher.data.message}</s-text>
+                  </s-banner>
+                ) : null}
+
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="artist-payment-artist">Artist</label>
+                  <select
+                    id="artist-payment-artist"
+                    name="artistId"
+                    value={selectedArtistPaymentArtistId}
+                    onChange={(event) => setSelectedArtistPaymentArtistId(event.currentTarget.value)}
+                    style={disbursementFieldStyle}
+                  >
+                    {artistPaymentOptions.map((option) => (
+                      <option key={option.artistId} value={option.artistId}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedArtistPaymentOption ? (
+                    <div style={{ display: "grid", gap: "0.2rem" }}>
+                      <s-text color="subdued">
+                        Current period outstanding: {formatMoney(selectedArtistPaymentOption.currentOutstanding)}
+                      </s-text>
+                      <s-text color="subdued">
+                        Prior-period outstanding: {formatMoney(selectedArtistPaymentOption.priorOutstanding)}
+                      </s-text>
+                      <s-text color="subdued">
+                        Total outstanding eligible for auto-application: {formatMoney(selectedArtistPaymentOption.totalOutstanding)}
+                      </s-text>
+                    </div>
+                  ) : null}
+                  {artistPaymentFetcher.data?.fieldErrors?.artistId?.map((message) => (
+                    <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                  ))}
+                </div>
+
+                <div style={disbursementTwoColumnGridStyle}>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="artist-payment-amount">Amount</label>
+                    <input
+                      id="artist-payment-amount"
+                      name="amount"
+                      type="number"
+                      min="0"
+                      max={selectedArtistPaymentTotalOutstandingAmount}
+                      step="0.01"
+                      style={disbursementFieldStyle}
+                    />
+                    <s-text color="subdued" style={disbursementHelpTextStyle}>
+                      Max {formatMoney(selectedArtistPaymentTotalOutstandingAmount)}.
+                    </s-text>
+                    {artistPaymentFetcher.data?.fieldErrors?.amount?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="artist-payment-paid-at">Paid date</label>
+                    <input
+                      id="artist-payment-paid-at"
+                      name="paidAt"
+                      type="date"
+                      defaultValue={new Date().toISOString().slice(0, 10)}
+                      style={disbursementFieldStyle}
+                    />
+                    {artistPaymentFetcher.data?.fieldErrors?.paidAt?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={disbursementTwoColumnGridStyle}>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="artist-payment-method">Payment method</label>
+                    <input
+                      id="artist-payment-method"
+                      name="paymentMethod"
+                      type="text"
+                      placeholder="ACH, check, PayPal..."
+                      style={disbursementFieldStyle}
+                    />
+                    {artistPaymentFetcher.data?.fieldErrors?.paymentMethod?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="artist-payment-reference">Reference id</label>
+                    <input
+                      id="artist-payment-reference"
+                      name="referenceId"
+                      type="text"
+                      placeholder="Optional payout or check id"
+                      style={disbursementFieldStyle}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="artist-payment-notes">Notes</label>
+                  <textarea
+                    id="artist-payment-notes"
+                    name="notes"
+                    rows={2}
+                    style={{ ...disbursementFieldStyle, minHeight: "5rem", resize: "vertical" }}
+                  />
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    style={dashboardActionStyle(false, false)}
+                    onClick={() => setArtistPaymentDialogOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={artistPaymentFetcher.state !== "idle"}
+                    style={{
+                      ...disbursementSubmitStyle,
+                      cursor: artistPaymentFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                      opacity: artistPaymentFetcher.state !== "idle" ? 0.6 : 1,
+                    }}
+                  >
+                    Log artist payment
+                  </button>
+                </div>
+              </artistPaymentFetcher.Form>
+            )}
+          </div>
+        </dialog>
+      ) : null}
+
+      {taxTrueUpDialogOpen ? (
+        <dialog
+          ref={taxTrueUpDialogRef}
+          onClose={() => setTaxTrueUpDialogOpen(false)}
+          style={{
+            border: "none",
+            borderRadius: "1rem",
+            padding: 0,
+            maxWidth: "44rem",
+            width: "calc(100% - 2rem)",
+          }}
+        >
+          <div id="tax-true-up" style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+              <div style={{ display: "grid", gap: "0.25rem" }}>
+                <h2 style={{ margin: 0, fontSize: "1rem" }}>Tax true-up</h2>
+                <s-text color="subdued">
+                  Record actual tax paid from the payables dashboard without leaving the current worklist.
+                </s-text>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  aria-label="Close tax true-up dialog"
+                  onClick={() => setTaxTrueUpDialogOpen(false)}
+                  style={{ border: "none", background: "transparent", fontSize: "1.5rem", lineHeight: 1, cursor: "pointer" }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {taxTrueUps.length === 0 ? (
+              <trueUpFetcher.Form
+                ref={trueUpFormRef}
+                method="post"
+                style={{ display: "grid", gap: "0.9rem" }}
+              >
+                <input type="hidden" name="intent" value="record-tax-true-up" />
+                <input type="hidden" name="periodId" value={selectedPeriod.id} />
+                <div
+                  aria-live="polite"
+                  aria-atomic="true"
+                  style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
+                >
+                  {trueUpStatusMessage}
+                </div>
+
+                {trueUpFetcher.data && !trueUpFetcher.data.ok ? (
+                  <s-banner tone="critical">
+                    <s-text>{trueUpFetcher.data.message}</s-text>
+                  </s-banner>
+                ) : null}
+
+                <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+                  <div>
+                    <strong>Estimated reserve</strong>
+                    <s-text color="subdued">{formatMoney(summary.track2.estimatedTaxReserve)}</s-text>
+                  </div>
+                  <div>
+                    <strong>Applied to active period</strong>
+                    <s-text color="subdued">
+                      {periods.some((period: PeriodRow) => period.status === "OPEN" && period.id !== selectedPeriod.id) ? "Yes" : "Only if exact match"}
+                    </s-text>
+                  </div>
+                </div>
+
+                <div style={disbursementTwoColumnGridStyle}>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="true-up-actual-tax">Actual tax paid</label>
+                    <input
+                      id="true-up-actual-tax"
+                      name="actualTax"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      style={disbursementFieldStyle}
+                    />
+                    {trueUpFetcher.data?.fieldErrors?.actualTax?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="true-up-filed-at">Filed date</label>
+                    <input
+                      id="true-up-filed-at"
+                      name="filedAt"
+                      type="date"
+                      defaultValue={new Date().toISOString().slice(0, 10)}
+                      style={disbursementFieldStyle}
+                    />
+                    {trueUpFetcher.data?.fieldErrors?.filedAt?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="true-up-notes">Redistribution notes</label>
+                  <textarea
+                    id="true-up-notes"
+                    name="redistributionNotes"
+                    rows={3}
+                    placeholder="Optional notes for how any surplus should be handled."
+                    style={{ ...disbursementFieldStyle, minHeight: "7rem", resize: "vertical" }}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gap: "0.5rem" }}>
+                  <strong>Surplus redistribution</strong>
+                  <s-text color="subdued">
+                    If actual tax is lower than the estimate, enter how the surplus should be redistributed across causes. Leave blank otherwise.
+                  </s-text>
+                  {trueUpCauseOptions.map((cause: { causeId: string; causeName: string }) => (
+                    <div key={cause.causeId} style={disbursementTwoColumnGridStyle}>
+                      <div style={{ display: "grid", gap: "0.25rem" }}>
+                        <span>{cause.causeName}</span>
+                      </div>
+                      <div style={{ display: "grid", gap: "0.25rem" }}>
+                        <input
+                          name={`redistribution:${cause.causeId}`}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          style={disbursementFieldStyle}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  {trueUpFetcher.data?.fieldErrors?.redistributions?.map((message) => (
+                    <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                  ))}
+                </div>
+
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "start" }}>
+                  <input type="checkbox" name="confirmShortfall" />
+                  <span>Confirm any shortfall should be deducted from the current open period&apos;s donation pool.</span>
+                </label>
+                {trueUpFetcher.data?.fieldErrors?.confirmShortfall?.map((message) => (
+                  <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                ))}
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    style={dashboardActionStyle(false, false)}
+                    onClick={() => setTaxTrueUpDialogOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={trueUpFetcher.state !== "idle"}
+                    style={{
+                      ...disbursementSubmitStyle,
+                      cursor: trueUpFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                      opacity: trueUpFetcher.state !== "idle" ? 0.6 : 1,
+                    }}
+                  >
+                    Record tax true-up
+                  </button>
+                </div>
+              </trueUpFetcher.Form>
+            ) : (
+              <s-banner tone="success">
+                <s-text>A tax true-up has already been recorded for this reporting period.</s-text>
+              </s-banner>
+            )}
+          </div>
+        </dialog>
+      ) : null}
     </>
   );
 }

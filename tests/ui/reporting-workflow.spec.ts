@@ -119,6 +119,20 @@ test("reporting dashboard can record a surplus tax true-up", async ({ page, requ
   await expect(trueUpRow).toContainText("$2.00");
 });
 
+test("reporting dashboard opens tax true-up from the payables action area", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/reporting-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.closedReportingUrl);
+
+  await page.getByRole("button", { name: "Record tax true-up" }).click();
+  const trueUpDialog = page.locator("dialog").filter({ hasText: "Tax true-up" });
+  await expect(trueUpDialog).toBeVisible();
+  await expect(trueUpDialog.getByLabel("Actual tax paid")).toBeVisible();
+  await expect(trueUpDialog.getByRole("button", { name: "Record tax true-up" })).toBeVisible();
+});
+
 test("reporting dashboard can log an artist payment", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/reporting-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
