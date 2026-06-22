@@ -5,7 +5,7 @@ import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
-import { adminFieldStyle, FetcherBanners, SegmentedTabs, SectionHeader } from "../components/admin-ui";
+import { adminFieldStyle, FetcherBanners, SectionHeader, WorkflowTabs } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
@@ -470,7 +470,7 @@ export default function Settings() {
               title="Settings"
               description="Configure the financial assumptions, defaults, notifications, and operational preferences that shape Count On Us."
             />
-            <SegmentedTabs
+            <WorkflowTabs
               label="Settings sections"
               tabs={SETTINGS_TABS}
               value={activeTab}

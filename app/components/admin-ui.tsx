@@ -111,6 +111,34 @@ export function SectionHeader({
   );
 }
 
+export function PageHeader({
+  title,
+  description,
+  actions,
+}: {
+  title: string;
+  description?: ReactNode;
+  actions?: ReactNode;
+}) {
+  return (
+    <div
+      style={{
+        display: "flex",
+        justifyContent: "space-between",
+        gap: "1rem",
+        alignItems: "start",
+        flexWrap: "wrap",
+      }}
+    >
+      <div style={{ display: "grid", gap: "0.3rem", maxWidth: "48rem" }}>
+        <h1 style={{ margin: 0, fontSize: "1.35rem", lineHeight: 1.25 }}>{title}</h1>
+        {description ? <s-text color="subdued">{description}</s-text> : null}
+      </div>
+      {actions ? <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>{actions}</div> : null}
+    </div>
+  );
+}
+
 export function SegmentedTabs<TValue extends string>({
   label,
   tabs,
@@ -152,3 +180,100 @@ export function SegmentedTabs<TValue extends string>({
   );
 }
 
+export function WorkflowTabs<TValue extends string>({
+  label,
+  tabs,
+  value,
+  onChange,
+}: {
+  label: string;
+  tabs: Array<{ value: TValue; label: string }>;
+  value: TValue;
+  onChange: (value: TValue) => void;
+}) {
+  return (
+    <div className="admin-workflow-tabs">
+      <style>
+        {`
+          .admin-workflow-tabs__select {
+            display: none;
+          }
+
+          .admin-workflow-tabs__tablist {
+            display: flex;
+            gap: 0.35rem;
+            overflow-x: auto;
+            scrollbar-width: thin;
+            white-space: nowrap;
+          }
+
+          .admin-workflow-tabs__tab {
+            flex: 0 0 auto;
+            border: 1px solid var(--p-color-border, #d2d5d8);
+            border-radius: 0.5rem;
+            padding: 0.55rem 0.8rem;
+            background: var(--p-color-bg-surface, #fff);
+            color: var(--p-color-text, #303030);
+            font: inherit;
+            font-weight: 500;
+            cursor: pointer;
+          }
+
+          .admin-workflow-tabs__tab[aria-selected="true"] {
+            border-color: #111;
+            background: #111;
+            color: #fff;
+            font-weight: 650;
+          }
+
+          @media (max-width: 640px) {
+            .admin-workflow-tabs__select {
+              display: block;
+              width: 100%;
+              box-sizing: border-box;
+              padding: 0.75rem;
+              border-radius: 0.5rem;
+              border: 1px solid var(--p-color-border, #d2d5d8);
+              background: var(--p-color-bg-surface, #fff);
+              color: var(--p-color-text, #303030);
+              font: inherit;
+            }
+
+            .admin-workflow-tabs__tablist {
+              display: none;
+            }
+          }
+        `}
+      </style>
+      <select
+        className="admin-workflow-tabs__select"
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value as TValue)}
+      >
+        {tabs.map((tab) => (
+          <option key={tab.value} value={tab.value}>
+            {tab.label}
+          </option>
+        ))}
+      </select>
+      <div role="tablist" aria-label={label} className="admin-workflow-tabs__tablist">
+        {tabs.map((tab) => {
+          const selected = tab.value === value;
+          return (
+            <button
+              key={tab.value}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              className="admin-workflow-tabs__tab"
+              onClick={() => onChange(tab.value)}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}

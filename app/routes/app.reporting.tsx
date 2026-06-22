@@ -4,7 +4,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
-import { MetricCard, SectionHeader, SegmentedTabs, StatusBanners } from "../components/admin-ui";
+import { MetricCard, SectionHeader, StatusBanners, WorkflowTabs } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import {
   ArtistPaymentError,
@@ -1447,7 +1447,7 @@ export default function ReportingPage() {
               title="Reporting workspace"
               description="Switch between payment workflows and supporting reporting details without relying on page jumps."
             />
-            <SegmentedTabs
+            <WorkflowTabs
               label="Reporting workspace"
               tabs={REPORTING_TABS}
               value={activeReportingTab}
