@@ -11,7 +11,7 @@ function createMaterial(params: {
   id: string;
   name?: string;
   type?: "production" | "shipping";
-  costingModel?: "yield" | "uses" | null;
+  costingModel?: "counted" | "yield" | "uses" | null;
   purchasePrice?: string;
   purchaseQty?: string;
   totalUsesPerUnit?: string | null;
@@ -250,8 +250,47 @@ describe("resolveCosts", () => {
   });
 });
 
-describe("resolveCosts shipping material uses costing", () => {
-  it("calculates packaging cost from a uses-based shipping line", async () => {
+describe("resolveCosts material cost methods", () => {
+  it("calculates production cost from counted parts", async () => {
+    const countedMaterial = createMaterial({
+      id: "jump-rings",
+      costingModel: "counted",
+      purchasePrice: "20",
+      purchaseQty: "1000",
+    });
+
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: null,
+      shippingTemplate: null,
+      materialLines: [
+        {
+          id: "jump-ring-line",
+          materialId: "jump-rings",
+          material: countedMaterial,
+          quantity: decimal("2"),
+          yield: null,
+          usesPerVariant: null,
+        },
+      ],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config),
+    );
+
+    expect(result.materialCost.toString()).toBe("0.04");
+    expect(result.totalCost.toString()).toBe("0.04");
+  });
+
+  it("calculates packaging cost from a portioned-use shipping line", async () => {
     const shippingMaterial = createMaterial({
       id: "tape",
       type: "shipping",

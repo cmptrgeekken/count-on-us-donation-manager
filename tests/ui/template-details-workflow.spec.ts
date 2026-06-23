@@ -30,7 +30,7 @@ test("template details save and discard work on the real route", async ({ page, 
   await expect(nameField).toHaveValue("Updated Playwright Template");
 });
 
-test("template details default new yield-based material lines to 1", async ({ page, request }) => {
+test("template details default new variable-yield material lines to 1", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/template-details-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
 
@@ -43,7 +43,7 @@ test("template details default new yield-based material lines to 1", async ({ pa
   await searchInput.click();
   await page.getByRole("button", { name: "Fixture Backer" }).click();
 
-  await expect(page.getByLabel("Yield (units produced per purchased unit)")).toHaveValue("1");
+  await expect(page.getByLabel("Items made from one purchased unit")).toHaveValue("1");
 });
 
 test("template details can set a default shipping template", async ({ page, request }) => {
@@ -86,7 +86,7 @@ test("template details only offer materials matching the template type", async (
   await searchInput.click();
   await expect(page.getByRole("button", { name: "Fixture Backer" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Fixture Shipping Mailer" })).toHaveCount(0);
-  await page.getByRole("button", { name: "Cancel" }).click();
+  await page.keyboard.press("Escape");
 
   await page.goto(bootstrap.shippingTemplateUrl);
   await page.getByRole("button", { name: "Add material" }).click();

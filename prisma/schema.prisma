@@ -98,11 +98,11 @@ model MaterialLibraryItem {
   shopId           String
   name             String
   type             String // "production" | "shipping"
-  costingModel     String? // "yield" | "uses" — null for shipping materials
+  costingModel     String? // "counted" | "yield" | "uses"
   purchasePrice    Decimal  @db.Decimal(10, 4)
   purchaseQty      Decimal  @db.Decimal(10, 4)
   perUnitCost      Decimal  @db.Decimal(10, 6) // derived: purchasePrice ÷ purchaseQty
-  totalUsesPerUnit Decimal? @db.Decimal(10, 4) // uses-based only
+  totalUsesPerUnit Decimal? @db.Decimal(10, 4) // portioned-use only
   purchaseLink     String?
   weightGrams      Decimal? @db.Decimal(10, 3)
   unitDescription  String?

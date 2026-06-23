@@ -79,8 +79,9 @@ function decimalOrZero(value: Prisma.Decimal | null | undefined): Prisma.Decimal
 
 /**
  * Compute material line cost.
- * Yield-based:  (purchasePrice / purchaseQty / yield) * quantity
- * Uses-based:   (purchasePrice / purchaseQty / totalUsesPerUnit) * usesPerVariant
+ * Counted parts: perUnitCost * quantity
+ * Variable yield: (purchasePrice / purchaseQty / yield) * quantity
+ * Portioned use:  (purchasePrice / purchaseQty / totalUsesPerUnit) * usesPerVariant
  * Legacy flat shipping: perUnitCost * quantity
  */
 function computeMaterialLineCost(params: {
@@ -95,6 +96,10 @@ function computeMaterialLineCost(params: {
 }): Prisma.Decimal {
   const { costingModel, purchasePrice, purchaseQty, totalUsesPerUnit, yield_, quantity, usesPerVariant } = params;
   const perUnit = purchasePrice.div(purchaseQty);
+
+  if (costingModel === "counted") {
+    return perUnit.mul(quantity);
+  }
 
   if (costingModel === "yield" && yield_ && yield_.gt(ZERO)) {
     return perUnit.div(yield_).mul(quantity);

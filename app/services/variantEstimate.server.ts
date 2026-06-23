@@ -132,12 +132,16 @@ function materialRateDetail(line: {
   if (!line.purchasePrice || !line.purchaseQty || line.purchaseQty.lte(ZERO)) return null;
 
   const unit = displayUnit(line.unitDescription);
+  if (line.costingModel === "counted") {
+    return `$${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/${unit}`;
+  }
+
   if (line.costingModel === "yield" && line.yield && line.yield.gt(ZERO)) {
-    return `${formatDecimal(line.yield)} ${unit}/purchase unit @ $${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
+    return `${formatDecimal(line.yield)} items per purchased unit @ $${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
   }
 
   if (line.costingModel === "uses" && line.totalUsesPerUnit && line.totalUsesPerUnit.gt(ZERO)) {
-    return `${formatDecimal(line.totalUsesPerUnit)} ${unit}/purchase unit @ $${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
+    return `${formatDecimal(line.totalUsesPerUnit)} portions per purchased unit @ $${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
   }
 
   return `$${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;

@@ -113,7 +113,7 @@ describe("buildVariantEstimatePayload", () => {
     expect(result.materialLines[0]).toMatchObject({
       name: "Vinyl",
       lineCost: "2.00",
-      rateDetail: "10 sheet/purchase unit @ $20.00/purchase unit",
+      rateDetail: "10 items per purchased unit @ $20.00/purchase unit",
     });
   });
 

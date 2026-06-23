@@ -803,8 +803,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         templateLineId: line.templateLineId,
         materialId: line.materialId,
         quantity: parseOptionalNonNegativeWholeNumber(line.overrideQuantity, "Material quantity") ?? 0,
-        yield: parseOptionalNonNegativeWholeNumber(line.overrideYield, "Material yield"),
-        usesPerVariant: parseOptionalNonNegativeWholeNumber(line.overrideUsesPerVariant, "Material uses per variant"),
+        yield: parseOptionalNonNegativeWholeNumber(line.overrideYield, "Items made from one purchased unit"),
+        usesPerVariant: parseOptionalNonNegativeWholeNumber(line.overrideUsesPerVariant, "Portions used per item"),
       }));
 
     const equipmentOverrideLines = draft.templateEquipmentLines
@@ -821,8 +821,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       shopId,
       materialId: line.materialId,
       quantity: parseOptionalNonNegativeWholeNumber(line.quantity, "Material quantity") ?? 0,
-      yield: parseOptionalNonNegativeWholeNumber(line.yield, "Material yield"),
-      usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Material uses per variant"),
+      yield: parseOptionalNonNegativeWholeNumber(line.yield, "Items made from one purchased unit"),
+      usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Portions used per item"),
     }));
 
     const additionalEquipmentLines = draft.equipmentLines.map((line) => ({
@@ -1075,8 +1075,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const quantity = parseRequiredNonNegativeWholeNumber(formData.get("quantity")?.toString(), "Material quantity");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
-    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Material yield");
-    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Material uses per variant");
+    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Items made from one purchased unit");
+    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Portions used per item");
     const config = await ensureConfig();
     const templateLine = await requireTemplateMaterialLine(config.id, templateLineId);
     await requireMaterial(materialId);
@@ -1160,8 +1160,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const quantity = parseRequiredNonNegativeWholeNumber(formData.get("quantity")?.toString(), "Material quantity");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
-    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Material yield");
-    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Material uses per variant");
+    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Items made from one purchased unit");
+    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Portions used per item");
     const config = await ensureConfig();
 
     await prisma.$transaction([
@@ -1381,11 +1381,15 @@ function describeMaterialLine(line: {
   yield: string | null;
   usesPerVariant: string | null;
 }) {
-  if (line.costingModel === "uses") {
-    return `Uses: ${line.usesPerVariant ?? "0"}`;
+  if (line.costingModel === "counted") {
+    return `Counted parts: ${line.quantity ?? "0"} per item`;
   }
 
-  return `Qty: ${line.quantity ?? "0"} - Yield: ${line.yield ?? "0"}`;
+  if (line.costingModel === "uses") {
+    return `Portioned use: ${line.usesPerVariant ?? "0"} portion(s) per item`;
+  }
+
+  return `Variable yield: ${line.quantity ?? "0"} purchased unit(s), ${line.yield ?? "0"} items per purchased unit`;
 }
 
 function describeEquipmentLine(line: {
@@ -2523,10 +2527,21 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">
                 Default: {describeMaterialLine(materialOverrideTarget)}
               </Text>
+              {materialOverrideTarget.costingModel === "counted" && (
+                <TextField
+                  label="Quantity used per item"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={overrideMatQty}
+                  onChange={setOverrideMatQty}
+                  autoComplete="off"
+                />
+              )}
               {materialOverrideTarget.costingModel === "yield" && (
                 <>
                   <TextField
-                    label="Material quantity"
+                    label="Purchased units used"
                     type="number"
                     min={0}
                     step={1}
@@ -2535,7 +2550,7 @@ export default function VariantDetailPage() {
                     autoComplete="off"
                   />
                   <TextField
-                    label="Yield per piece"
+                    label="Items made from one purchased unit"
                     type="number"
                     min={0}
                     step={1}
@@ -2547,7 +2562,7 @@ export default function VariantDetailPage() {
               )}
               {materialOverrideTarget.costingModel === "uses" && (
                 <TextField
-                  label="Uses per variant"
+                  label="Portions used per item"
                   type="number"
                   min={0}
                   step={1}
@@ -2610,40 +2625,52 @@ export default function VariantDetailPage() {
                 </Text>
               }
             />
+            {selectedMaterial?.costingModel === "counted" && (
+              <TextField
+                label="Quantity used per item"
+                type="number"
+                min={0}
+                step={1}
+                value={matQty}
+                onChange={setMatQty}
+                autoComplete="off"
+                helpText="Number of discrete pieces from the purchased batch needed for this variant."
+              />
+            )}
             {selectedMaterial?.costingModel === "yield" && (
               <>
                 <TextField
-                  label="Material quantity"
+                  label="Purchased units used"
                   type="number"
                   min={0}
                   step={1}
                   value={matQty}
                   onChange={setMatQty}
                   autoComplete="off"
-                  helpText="Number of pieces of this material required to produce this variant."
+                  helpText="Usually 1, unless this variant needs multiple purchased units."
                 />
                 <TextField
-                  label="Yield per piece"
+                  label="Items made from one purchased unit"
                   type="number"
                   min={0}
                   step={1}
                   value={matYield}
                   onChange={setMatYield}
                   autoComplete="off"
-                  helpText="Number of variants produced from one piece of this material."
+                  helpText="How many finished items this material unit can make for this specific variant."
                 />
               </>
             )}
             {selectedMaterial?.costingModel === "uses" && (
               <TextField
-                label="Uses per variant"
+                label="Portions used per item"
                 type="number"
                 min={0}
                 step={1}
                 value={matUses}
                 onChange={setMatUses}
                 autoComplete="off"
-                helpText="Number of uses of the material this variant requires."
+                helpText="Estimated number of portions, such as glue dollops, required for this variant."
               />
             )}
           </BlockStack>

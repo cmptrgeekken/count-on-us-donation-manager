@@ -329,8 +329,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     for (const line of draft.materialLines) {
       const data = {
         quantity: parseRequiredNonNegativeWholeNumber(line.quantity, "Material quantity"),
-        yield: parseOptionalNonNegativeWholeNumber(line.yield, "Material yield"),
-        usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Material uses per variant"),
+        yield: parseOptionalNonNegativeWholeNumber(line.yield, "Items made from one purchased unit"),
+        usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Portions used per item"),
       };
 
       if (existingMaterialLines.has(line.id)) {
@@ -410,12 +410,16 @@ function serializeDraft(draft: TemplateDraft) {
 }
 
 function describeMaterialLine(line: TemplateDraftMaterialLine) {
+  if (line.costingModel === "counted") {
+    return `Counted parts: ${line.quantity} per item`;
+  }
+
   if (line.costingModel === "yield") {
-    return `Yield: ${line.yield ?? "-"} | Qty: ${line.quantity}`;
+    return `Variable yield: ${line.quantity} purchased unit(s), ${line.yield ?? "-"} items per purchased unit`;
   }
 
   if (line.costingModel === "uses") {
-    return `Uses/variant: ${line.usesPerVariant ?? "-"}`;
+    return `Portioned use: ${line.usesPerVariant ?? "-"} portion(s) per item`;
   }
 
   return `Qty: ${line.quantity}`;
@@ -606,6 +610,12 @@ export default function TemplateDetailPage() {
       const yieldValue = Number(matYield);
       if (Number.isNaN(yieldValue) || yieldValue <= 0) return null;
       return formatMoney((Number(selectedMaterial.perUnitCost) / yieldValue) * quantity);
+    }
+
+    if (selectedMaterial.costingModel === "counted") {
+      const quantity = Number(matQty);
+      if (Number.isNaN(quantity) || quantity <= 0) return null;
+      return formatMoney(Number(selectedMaterial.perUnitCost) * quantity);
     }
 
     if (selectedMaterial.costingModel === "uses") {
@@ -865,21 +875,42 @@ export default function TemplateDetailPage() {
                 }
               />
             )}
-            <TextField label="Quantity" type="number" min={0} step={1} value={matQty} onChange={setMatQty} autoComplete="off" />
-            {selectedMaterial?.costingModel === "yield" && (
+            {selectedMaterial?.costingModel === "counted" && (
               <TextField
-                label="Yield (units produced per purchased unit)"
+                label="Quantity used per item"
                 type="number"
                 min={0}
                 step={1}
-                value={matYield}
-                onChange={setMatYield}
+                value={matQty}
+                onChange={setMatQty}
                 autoComplete="off"
               />
             )}
+            {selectedMaterial?.costingModel === "yield" && (
+              <>
+                <TextField
+                  label="Purchased units used"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={matQty}
+                  onChange={setMatQty}
+                  autoComplete="off"
+                />
+                <TextField
+                  label="Items made from one purchased unit"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={matYield}
+                  onChange={setMatYield}
+                  autoComplete="off"
+                />
+              </>
+            )}
             {selectedMaterial?.costingModel === "uses" && (
               <TextField
-                label="Uses per variant"
+                label="Portions used per item"
                 type="number"
                 min={0}
                 step={1}

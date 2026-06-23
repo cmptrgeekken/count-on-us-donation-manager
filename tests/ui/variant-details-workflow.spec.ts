@@ -30,7 +30,7 @@ test("variant details save and discard work on the real route", async ({ page, r
   await expect(minutesField).toHaveValue("12");
 });
 
-test("variant details default new yield-based material lines to 1", async ({ page, request }) => {
+test("variant details default new variable-yield material lines to 1", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/variant-details-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
 
@@ -45,7 +45,7 @@ test("variant details default new yield-based material lines to 1", async ({ pag
   await searchInput.fill("Playwright Yield Material");
   await page.getByRole("button", { name: "Playwright Yield Material" }).click();
 
-  await expect(page.getByLabel("Yield per piece")).toHaveValue("1");
+  await expect(page.getByLabel("Items made from one purchased unit")).toHaveValue("1");
 });
 
 test("variant details groups additional shipping material lines separately", async ({ page, request }) => {
