@@ -23,6 +23,7 @@ This directory contains Architecture Decision Records (ADRs) for the Shopify Don
 | [ADR-015](adr-015-dedicated-admin-web-experience.md) | Dedicated admin web experience | Proposed | May 2026 |
 | [ADR-016](adr-016-vps-deployment-and-ci-cd-strategy.md) | Single-server Docker deployment and CI/CD strategy | Proposed | June 2026 |
 | [ADR-017](adr-017-outsourced-production-costs.md) | Outsourced production costs | Proposed | June 2026 |
+| [ADR-018](adr-018-production-cost-model-expansion.md) | Production cost model expansion candidates | Proposed | June 2026 |
 
 ## Dependencies
 
@@ -42,6 +43,7 @@ ADR-014 (Artist submission storefront widget) - extends ADR-004, ADR-012, and AD
 ADR-015 (Dedicated admin web experience) - extends ADR-001, ADR-003, ADR-004, ADR-010, ADR-012, ADR-013, and ADR-014 for a custom admin shell and shop-scoped capability configuration
 ADR-016 (Single-server Docker deployment and CI/CD strategy) - extends ADR-001, ADR-004, ADR-007, ADR-010, ADR-012, and ADR-015 for low-cost Proxmox/VPS hosting, Docker Compose production deployment, network-isolated containers, object storage, and staged GitHub Actions CI/CD
 ADR-017 (Outsourced production costs) - extends ADR-003, ADR-010, and ADR-013 for manual third-party production costs, variant-level production economics, and future variant donation override implications
+ADR-018 (Production cost model expansion candidates) - extends ADR-001, ADR-003, and ADR-017 for equipment-rate breakdowns, scrap/waste, batch/setup costs, indirect supplies, and optional overhead allocation
 ```
 
 ## Conventions
