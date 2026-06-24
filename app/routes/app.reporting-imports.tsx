@@ -27,6 +27,21 @@ function stringifySummary(summary: unknown) {
   return JSON.stringify(summary, null, 2);
 }
 
+async function readImportPayload(formData: FormData) {
+  const uploadedFile = formData.get("payloadFile");
+  if (uploadedFile instanceof File && uploadedFile.size > 0) {
+    return {
+      payload: await uploadedFile.text(),
+      fileName: uploadedFile.name,
+    };
+  }
+
+  return {
+    payload: formData.get("payload")?.toString() ?? "",
+    fileName: null,
+  };
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -94,8 +109,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   try {
     if (intent === "dry-run-import" || intent === "apply-import") {
       const kind = formData.get("kind")?.toString();
-      const payload = formData.get("payload")?.toString() ?? "";
-      const sourceName = formData.get("sourceName")?.toString().trim() || null;
+      const { payload, fileName } = await readImportPayload(formData);
+      const sourceName = formData.get("sourceName")?.toString().trim() || fileName || null;
       const rows = parseHistoricalImportRows(payload);
       const dryRun = intent === "dry-run-import";
 
@@ -166,7 +181,7 @@ export default function ReportingImportsPage() {
             <s-text>
               Import payouts, Shopify charges, and orders from JSON arrays. Historical order snapshots use the current Count On Us configuration at import time.
             </s-text>
-            <Form method="post" style={{ display: "grid", gap: "1rem" }}>
+            <Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: "1rem" }}>
               <div style={{ display: "grid", gap: "0.4rem" }}>
                 <label htmlFor="kind">Import type</label>
                 <select id="kind" name="kind" style={{ maxWidth: "24rem", padding: "0.65rem", font: "inherit" }}>
@@ -179,7 +194,13 @@ export default function ReportingImportsPage() {
               <s-text-field label="Source name" name="sourceName" placeholder="Optional filename or export name" />
 
               <div style={{ display: "grid", gap: "0.4rem" }}>
-                <label htmlFor="payload">JSON array</label>
+                <label htmlFor="payloadFile">JSON file</label>
+                <input id="payloadFile" name="payloadFile" type="file" accept="application/json,.json" />
+                <s-text color="subdued">Choose a JSON export file, or paste JSON below for a quick dry run.</s-text>
+              </div>
+
+              <div style={{ display: "grid", gap: "0.4rem" }}>
+                <label htmlFor="payload">JSON array fallback</label>
                 <textarea
                   id="payload"
                   name="payload"
