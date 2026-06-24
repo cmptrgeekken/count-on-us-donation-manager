@@ -33,7 +33,7 @@ type SnapshotLineItemPayload = {
   } | null;
 };
 
-type ShopifyOrderPayload = {
+export type ShopifyOrderPayload = {
   admin_graphql_api_id?: string;
   name?: string | null;
   order_number?: string | number | null;
@@ -338,8 +338,9 @@ export async function createSnapshot(
   shopId: string,
   order: ShopifyOrderPayload,
   db: any = prisma,
-  origin: "webhook" | "reconciliation" = "webhook",
+  origin: "webhook" | "reconciliation" | "historical_import" = "webhook",
   fetchImpl: typeof fetch = fetch,
+  metadata: { importBatchId?: string | null; importedAt?: Date | null; periodId?: string | null } = {},
 ): Promise<{ created: boolean; snapshotId?: string }> {
   const shopifyOrderId = order.admin_graphql_api_id ?? null;
   if (!shopifyOrderId) {
@@ -505,7 +506,7 @@ export async function createSnapshot(
             };
 
       let allocations: SnapshotResolution["allocations"] = [];
-      let artistAllocations: SnapshotResolution["artistAllocations"] = [];
+      const artistAllocations: SnapshotResolution["artistAllocations"] = [];
       if (line.productGid) {
         const product = productByGid.get(line.productGid);
         const productId = product?.id ?? "__missing_product__";
@@ -611,6 +612,9 @@ export async function createSnapshot(
           shopifyOrderId,
           orderNumber: order.name ?? order.order_number?.toString() ?? null,
           origin,
+          periodId: metadata.periodId ?? null,
+          importBatchId: metadata.importBatchId ?? null,
+          importedAt: metadata.importedAt ?? null,
           salesTaxCollected: getOrderSalesTax(order),
           createdAt: getOrderCreatedAt(order),
         },

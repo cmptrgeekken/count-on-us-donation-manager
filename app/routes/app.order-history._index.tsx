@@ -21,7 +21,19 @@ const ZERO = new Prisma.Decimal(0);
 const PAGE_SIZE = 50;
 
 function normaliseOrigin(value: string | null) {
-  return value === "webhook" || value === "reconciliation" ? value : "all";
+  return value === "webhook" || value === "reconciliation" || value === "historical_import" ? value : "all";
+}
+
+function formatOrigin(origin: string) {
+  if (origin === "webhook") return "Webhook";
+  if (origin === "historical_import") return "Historical import";
+  return "Reconciliation";
+}
+
+function originTone(origin: string) {
+  if (origin === "webhook") return "success";
+  if (origin === "historical_import") return "info";
+  return "caution";
 }
 
 function normaliseDate(value: string | null) {
@@ -226,6 +238,14 @@ export default function OrderHistoryPage() {
                 endDate={endDate}
                 playwrightShop={playwrightShop}
               />
+              <FilterLink
+                currentOrigin={origin}
+                targetOrigin="historical_import"
+                label="Historical import"
+                startDate={startDate}
+                endDate={endDate}
+                playwrightShop={playwrightShop}
+              />
             </div>
 
             <form
@@ -308,9 +328,7 @@ export default function OrderHistoryPage() {
                     <s-table-row key={snapshot.id}>
                       <s-table-cell>{snapshot.orderNumber}</s-table-cell>
                       <s-table-cell>
-                        <s-badge tone={snapshot.origin === "webhook" ? "success" : "caution"}>
-                          {snapshot.origin === "webhook" ? "Webhook" : "Reconciliation"}
-                        </s-badge>
+                        <s-badge tone={originTone(snapshot.origin)}>{formatOrigin(snapshot.origin)}</s-badge>
                       </s-table-cell>
                       <s-table-cell>{new Date(snapshot.createdAt).toLocaleString()}</s-table-cell>
                       <s-table-cell>{snapshot.lineCount}</s-table-cell>

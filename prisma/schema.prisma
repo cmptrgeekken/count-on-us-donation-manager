@@ -81,6 +81,25 @@ model AuditLog {
   @@index([shopId, createdAt])
 }
 
+model ImportBatch {
+  id          String   @id @default(cuid())
+  shopId      String
+  kind        String
+  status      String   @default("completed")
+  sourceName  String?
+  sourceType  String?
+  dryRun      Boolean  @default(false)
+  summary     Json?
+  createdAt   DateTime @default(now())
+  completedAt DateTime?
+
+  snapshots      OrderSnapshot[]
+  shopifyCharges ShopifyChargeTransaction[]
+
+  @@index([shopId, createdAt])
+  @@index([shopId, kind, createdAt])
+}
+
 // No FK to Shop — DeletionJob must outlive the Shop row it references
 model DeletionJob {
   id           String   @id @default(cuid())
@@ -632,6 +651,9 @@ model OrderSnapshot {
   origin         String   @default("webhook")
   periodId       String?
   period         ReportingPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  importBatchId  String?
+  importBatch    ImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
+  importedAt     DateTime?
   salesTaxCollected Decimal @default(0) @db.Decimal(10, 2)
   createdAt      DateTime @default(now())
 
@@ -642,6 +664,7 @@ model OrderSnapshot {
   @@unique([shopId, shopifyOrderId])
   @@index([shopId])
   @@index([shopId, periodId])
+  @@index([shopId, importBatchId])
 }
 
 model OrderPackageAllocation {
@@ -994,6 +1017,8 @@ model ShopifyChargeTransaction {
   shopifyTransactionId String
   periodId             String?
   period               ReportingPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  importBatchId        String?
+  importBatch          ImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
   shopifyPayoutId      String?
   transactionType      String?
   description          String?
@@ -1005,6 +1030,7 @@ model ShopifyChargeTransaction {
   @@unique([shopId, shopifyTransactionId])
   @@index([shopId])
   @@index([shopId, shopifyPayoutId])
+  @@index([shopId, importBatchId])
   @@index([periodId])
 }
 
