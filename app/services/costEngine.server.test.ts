@@ -248,6 +248,88 @@ describe("resolveCosts", () => {
     expect(result.equipmentLines.map((line) => line.minutes?.toString() ?? "")).toEqual(["10", "30"]);
     expect(result.equipmentCost.toString()).toBe("30");
   });
+
+  it("calculates equipment cost from duration yield", async () => {
+    const equipment = createEquipment("printer");
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: null,
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [
+        {
+          id: "equipment-line-1",
+          equipmentId: "printer",
+          equipment: {
+            ...equipment,
+            hourlyRate: decimal("12"),
+            perUseCost: null,
+          },
+          templateLineId: null,
+          usageMode: "duration_yield",
+          minutes: null,
+          uses: null,
+          yieldDurationMinutes: decimal("6000"),
+          yieldUses: null,
+          yieldQuantity: decimal("60"),
+        },
+      ],
+    };
+
+    const result = await resolveCosts("shop-1", "variant-1", decimal("50"), "preview", createDb(config));
+
+    expect(result.equipmentCost.toString()).toBe("20");
+    expect(result.equipmentLines[0]).toEqual(
+      expect.objectContaining({
+        usageMode: "duration_yield",
+        yieldDurationMinutes: decimal("6000"),
+        yieldQuantity: decimal("60"),
+      }),
+    );
+  });
+
+  it("calculates equipment cost from use yield", async () => {
+    const equipment = createEquipment("inkjet");
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: null,
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [
+        {
+          id: "equipment-line-1",
+          equipmentId: "inkjet",
+          equipment: {
+            ...equipment,
+            hourlyRate: null,
+            perUseCost: decimal("3"),
+          },
+          templateLineId: null,
+          usageMode: "use_yield",
+          minutes: null,
+          uses: null,
+          yieldDurationMinutes: null,
+          yieldUses: decimal("1"),
+          yieldQuantity: decimal("6"),
+        },
+      ],
+    };
+
+    const result = await resolveCosts("shop-1", "variant-1", decimal("50"), "preview", createDb(config));
+
+    expect(result.equipmentCost.toString()).toBe("0.5");
+    expect(result.equipmentLines[0]).toEqual(
+      expect.objectContaining({
+        usageMode: "use_yield",
+        yieldUses: decimal("1"),
+        yieldQuantity: decimal("6"),
+      }),
+    );
+  });
 });
 
 describe("resolveCosts material cost methods", () => {

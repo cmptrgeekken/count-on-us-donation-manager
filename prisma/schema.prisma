@@ -218,8 +218,12 @@ model CostTemplateEquipmentLine {
   template         CostTemplate           @relation(fields: [templateId], references: [id], onDelete: Cascade)
   equipmentId      String
   equipment        EquipmentLibraryItem   @relation(fields: [equipmentId], references: [id])
+  usageMode        String                 @default("direct")
   minutes          Decimal?               @db.Decimal(10, 4)
   uses             Decimal?               @db.Decimal(10, 4)
+  yieldDurationMinutes Decimal?           @db.Decimal(10, 4)
+  yieldUses        Decimal?               @db.Decimal(10, 4)
+  yieldQuantity    Decimal?               @db.Decimal(10, 4)
   variantOverrides VariantEquipmentLine[]
 }
 
@@ -356,8 +360,12 @@ model VariantEquipmentLine {
   equipment      EquipmentLibraryItem       @relation(fields: [equipmentId], references: [id])
   templateLineId String?
   templateLine   CostTemplateEquipmentLine? @relation(fields: [templateLineId], references: [id], onDelete: Cascade)
+  usageMode      String                     @default("direct")
   minutes        Decimal?                   @db.Decimal(10, 4)
   uses           Decimal?                   @db.Decimal(10, 4)
+  yieldDurationMinutes Decimal?             @db.Decimal(10, 4)
+  yieldUses      Decimal?                   @db.Decimal(10, 4)
+  yieldQuantity  Decimal?                   @db.Decimal(10, 4)
 
   @@unique([configId, templateLineId])
   @@index([shopId])
@@ -789,8 +797,12 @@ model OrderSnapshotEquipmentLine {
   equipmentName  String
   hourlyRate     Decimal?          @db.Decimal(10, 2)
   perUseCost     Decimal?          @db.Decimal(10, 2)
+  usageMode      String            @default("direct")
   minutes        Decimal?          @db.Decimal(10, 2)
   uses           Decimal?          @db.Decimal(10, 2)
+  yieldDurationMinutes Decimal?    @db.Decimal(10, 2)
+  yieldUses      Decimal?          @db.Decimal(10, 2)
+  yieldQuantity  Decimal?          @db.Decimal(10, 2)
   lineCost       Decimal           @db.Decimal(10, 4)
 }
 

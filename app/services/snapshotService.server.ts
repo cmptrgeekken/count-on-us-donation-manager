@@ -704,8 +704,12 @@ export async function createSnapshot(
               equipmentName: equipmentLine.name,
               hourlyRate: equipmentLine.hourlyRate,
               perUseCost: equipmentLine.perUseCost,
+              usageMode: equipmentLine.usageMode,
               minutes: scaleDecimal(equipmentLine.minutes, line.quantity),
               uses: scaleDecimal(equipmentLine.uses, line.quantity),
+              yieldDurationMinutes: equipmentLine.yieldDurationMinutes,
+              yieldUses: equipmentLine.yieldUses,
+              yieldQuantity: equipmentLine.yieldQuantity,
               lineCost: equipmentLine.lineCost.mul(line.quantity),
             })),
           });

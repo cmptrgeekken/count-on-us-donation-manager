@@ -69,8 +69,12 @@ type SerializedEquipmentLine = {
   equipmentName: string;
   hourlyRate: string | null;
   perUseCost: string | null;
+  usageMode: string;
   minutes: string | null;
   uses: string | null;
+  yieldDurationMinutes: string | null;
+  yieldUses: string | null;
+  yieldQuantity: string | null;
 };
 
 type TemplateMaterialOverrideLine = {
@@ -93,11 +97,16 @@ type TemplateEquipmentOverrideLine = {
   templateLineId: string;
   equipmentId: string;
   equipmentName: string;
+  usageMode: string;
   minutes: string | null;
   uses: string | null;
   overrideLineId: string | null;
+  overrideUsageMode: string | null;
   overrideMinutes: string | null;
   overrideUses: string | null;
+  overrideYieldDurationMinutes: string | null;
+  overrideYieldUses: string | null;
+  overrideYieldQuantity: string | null;
   hasOverride: boolean;
 };
 
@@ -160,8 +169,12 @@ function serializeVariantEquipmentLine(
     id: string;
     equipmentId: string;
     equipment: { name: string; hourlyRate: { toString(): string } | null; perUseCost: { toString(): string } | null };
+    usageMode: string;
     minutes: { toString(): string } | null;
     uses: { toString(): string } | null;
+    yieldDurationMinutes: { toString(): string } | null;
+    yieldUses: { toString(): string } | null;
+    yieldQuantity: { toString(): string } | null;
   },
 ): SerializedEquipmentLine {
   return {
@@ -170,8 +183,12 @@ function serializeVariantEquipmentLine(
     equipmentName: line.equipment.name,
     hourlyRate: line.equipment.hourlyRate?.toString() ?? null,
     perUseCost: line.equipment.perUseCost?.toString() ?? null,
+    usageMode: line.usageMode ?? "direct",
     minutes: line.minutes?.toString() ?? null,
     uses: line.uses?.toString() ?? null,
+    yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
+    yieldUses: line.yieldUses?.toString() ?? null,
+    yieldQuantity: line.yieldQuantity?.toString() ?? null,
   };
 }
 
@@ -211,8 +228,12 @@ const variantDraftSchema = z.object({
     templateLineId: z.string(),
     equipmentId: z.string(),
     hasOverride: z.boolean(),
+    overrideUsageMode: z.string().nullable().optional(),
     overrideMinutes: z.string().nullable(),
     overrideUses: z.string().nullable(),
+    overrideYieldDurationMinutes: z.string().nullable().optional(),
+    overrideYieldUses: z.string().nullable().optional(),
+    overrideYieldQuantity: z.string().nullable().optional(),
   })),
   materialLines: z.array(z.object({
     materialId: z.string(),
@@ -222,8 +243,12 @@ const variantDraftSchema = z.object({
   })),
   equipmentLines: z.array(z.object({
     equipmentId: z.string(),
+    usageMode: z.string().nullable().optional(),
     minutes: z.string().nullable(),
     uses: z.string().nullable(),
+    yieldDurationMinutes: z.string().nullable().optional(),
+    yieldUses: z.string().nullable().optional(),
+    yieldQuantity: z.string().nullable().optional(),
   })),
 });
 
@@ -389,11 +414,19 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         templateLineId: line.id,
         equipmentId: line.equipmentId,
         equipmentName: line.equipment.name,
+        usageMode: line.usageMode ?? "direct",
         minutes: line.minutes?.toString() ?? null,
         uses: line.uses?.toString() ?? null,
+        yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
+        yieldUses: line.yieldUses?.toString() ?? null,
+        yieldQuantity: line.yieldQuantity?.toString() ?? null,
         overrideLineId: override?.id ?? null,
+        overrideUsageMode: override?.usageMode ?? null,
         overrideMinutes: override?.minutes?.toString() ?? null,
         overrideUses: override?.uses?.toString() ?? null,
+        overrideYieldDurationMinutes: override?.yieldDurationMinutes?.toString() ?? null,
+        overrideYieldUses: override?.yieldUses?.toString() ?? null,
+        overrideYieldQuantity: override?.yieldQuantity?.toString() ?? null,
         hasOverride: Boolean(override),
       };
     });
@@ -486,8 +519,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         templateLineId: line.id,
         equipmentId: line.equipmentId,
         equipmentName: line.equipment.name,
+        usageMode: line.usageMode ?? "direct",
         minutes: line.minutes?.toString() ?? null,
         uses: line.uses?.toString() ?? null,
+        yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
+        yieldUses: line.yieldUses?.toString() ?? null,
+        yieldQuantity: line.yieldQuantity?.toString() ?? null,
       })),
     })),
     availableMaterials: materials.map((material) => ({
@@ -813,8 +850,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         shopId,
         templateLineId: line.templateLineId,
         equipmentId: line.equipmentId,
-        minutes: parseOptionalNonNegativeNumber(line.overrideMinutes, "Equipment minutes"),
-        uses: parseOptionalNonNegativeWholeNumber(line.overrideUses, "Equipment uses"),
+        usageMode: line.overrideUsageMode || "direct",
+        minutes: (line.overrideUsageMode || "direct") === "direct" ? parseOptionalNonNegativeNumber(line.overrideMinutes, "Equipment minutes") : null,
+        uses: (line.overrideUsageMode || "direct") === "direct" ? parseOptionalNonNegativeWholeNumber(line.overrideUses, "Equipment uses") : null,
+        yieldDurationMinutes: line.overrideUsageMode === "duration_yield" ? parseOptionalNonNegativeNumber(line.overrideYieldDurationMinutes, "Equipment yield duration") : null,
+        yieldUses: line.overrideUsageMode === "use_yield" ? parseOptionalNonNegativeWholeNumber(line.overrideYieldUses, "Equipment yield uses") : null,
+        yieldQuantity: line.overrideUsageMode && line.overrideUsageMode !== "direct" ? parseOptionalNonNegativeWholeNumber(line.overrideYieldQuantity, "Products yielded") : null,
       }));
 
     const additionalMaterialLines = draft.materialLines.map((line) => ({
@@ -828,8 +869,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const additionalEquipmentLines = draft.equipmentLines.map((line) => ({
       shopId,
       equipmentId: line.equipmentId,
-      minutes: parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes"),
-      uses: parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses"),
+      usageMode: line.usageMode || "direct",
+      minutes: (line.usageMode || "direct") === "direct" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
+      uses: (line.usageMode || "direct") === "direct" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
+      yieldDurationMinutes: line.usageMode === "duration_yield" ? parseOptionalNonNegativeNumber(line.yieldDurationMinutes, "Equipment yield duration") : null,
+      yieldUses: line.usageMode === "use_yield" ? parseOptionalNonNegativeWholeNumber(line.yieldUses, "Equipment yield uses") : null,
+      yieldQuantity: line.usageMode && line.usageMode !== "direct" ? parseOptionalNonNegativeWholeNumber(line.yieldQuantity, "Products yielded") : null,
     }));
 
     await prisma.$transaction(async (tx) => {
@@ -1393,9 +1438,19 @@ function describeMaterialLine(line: {
 }
 
 function describeEquipmentLine(line: {
+  usageMode?: string | null;
   minutes: string | null;
   uses: string | null;
+  yieldDurationMinutes?: string | null;
+  yieldUses?: string | null;
+  yieldQuantity?: string | null;
 }) {
+  if (line.usageMode === "duration_yield") {
+    return `${line.yieldDurationMinutes ?? "-"} min yields ${line.yieldQuantity ?? "-"} products`;
+  }
+  if (line.usageMode === "use_yield") {
+    return `${line.yieldUses ?? "-"} uses yields ${line.yieldQuantity ?? "-"} products`;
+  }
   return [line.minutes ? `${line.minutes} min` : null, line.uses ? `${line.uses} uses` : null]
     .filter(Boolean)
     .join(" · ");
@@ -1482,12 +1537,20 @@ export default function VariantDetailPage() {
   const [addEquipmentOpen, setAddEquipmentOpen] = useState(false);
   const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
   const [equipmentSearchValue, setEquipmentSearchValue] = useState("");
+  const [eqUsageMode, setEqUsageMode] = useState("direct");
   const [eqMinutes, setEqMinutes] = useState("");
   const [eqUses, setEqUses] = useState("");
+  const [eqYieldDurationMinutes, setEqYieldDurationMinutes] = useState("");
+  const [eqYieldUses, setEqYieldUses] = useState("");
+  const [eqYieldQuantity, setEqYieldQuantity] = useState("");
 
   const [equipmentOverrideTargetId, setEquipmentOverrideTargetId] = useState<string | null>(null);
+  const [overrideEqUsageMode, setOverrideEqUsageMode] = useState("direct");
   const [overrideEqMinutes, setOverrideEqMinutes] = useState("");
   const [overrideEqUses, setOverrideEqUses] = useState("");
+  const [overrideEqYieldDurationMinutes, setOverrideEqYieldDurationMinutes] = useState("");
+  const [overrideEqYieldUses, setOverrideEqYieldUses] = useState("");
+  const [overrideEqYieldQuantity, setOverrideEqYieldQuantity] = useState("");
 
   const [baseDraft, setBaseDraft] = useState(() => buildVariantDraft(config));
   const [draft, setDraft] = useState(() => buildVariantDraft(config));
@@ -1571,8 +1634,12 @@ export default function VariantDetailPage() {
   function resetAdditionalEquipmentModal() {
     setSelectedEquipmentId("");
     setEquipmentSearchValue("");
+    setEqUsageMode("direct");
     setEqMinutes("");
     setEqUses("");
+    setEqYieldDurationMinutes("");
+    setEqYieldUses("");
+    setEqYieldQuantity("");
   }
 
   function openMaterialOverride(line: VariantTemplateMaterialDraftLine) {
@@ -1591,14 +1658,22 @@ export default function VariantDetailPage() {
 
   function openEquipmentOverride(line: VariantTemplateEquipmentDraftLine) {
     setEquipmentOverrideTargetId(line.templateLineId);
+    setOverrideEqUsageMode(line.overrideUsageMode ?? line.usageMode ?? "direct");
     setOverrideEqMinutes(line.overrideMinutes ?? line.minutes ?? "");
     setOverrideEqUses(line.overrideUses ?? line.uses ?? "");
+    setOverrideEqYieldDurationMinutes(line.overrideYieldDurationMinutes ?? line.yieldDurationMinutes ?? "");
+    setOverrideEqYieldUses(line.overrideYieldUses ?? line.yieldUses ?? "");
+    setOverrideEqYieldQuantity(line.overrideYieldQuantity ?? line.yieldQuantity ?? "");
   }
 
   function closeEquipmentOverride() {
     setEquipmentOverrideTargetId(null);
+    setOverrideEqUsageMode("direct");
     setOverrideEqMinutes("");
     setOverrideEqUses("");
+    setOverrideEqYieldDurationMinutes("");
+    setOverrideEqYieldUses("");
+    setOverrideEqYieldQuantity("");
   }
 
   function discardChanges() {
@@ -1682,8 +1757,12 @@ export default function VariantDetailPage() {
       equipmentName: selectedEquipment.name,
       hourlyRate: selectedEquipment.hourlyRate,
       perUseCost: selectedEquipment.perUseCost,
-      minutes: eqMinutes || null,
-      uses: eqUses || null,
+      usageMode: eqUsageMode,
+      minutes: eqUsageMode === "direct" ? (eqMinutes || null) : null,
+      uses: eqUsageMode === "direct" ? (eqUses || null) : null,
+      yieldDurationMinutes: eqUsageMode === "duration_yield" ? (eqYieldDurationMinutes || null) : null,
+      yieldUses: eqUsageMode === "use_yield" ? (eqYieldUses || null) : null,
+      yieldQuantity: eqUsageMode !== "direct" ? (eqYieldQuantity || null) : null,
     };
 
     setDraft((current) => ({
@@ -1748,8 +1827,12 @@ export default function VariantDetailPage() {
           ? {
               ...line,
               hasOverride: true,
-              overrideMinutes: overrideEqMinutes || null,
-              overrideUses: overrideEqUses || null,
+              overrideUsageMode: overrideEqUsageMode,
+              overrideMinutes: overrideEqUsageMode === "direct" ? (overrideEqMinutes || null) : null,
+              overrideUses: overrideEqUsageMode === "direct" ? (overrideEqUses || null) : null,
+              overrideYieldDurationMinutes: overrideEqUsageMode === "duration_yield" ? (overrideEqYieldDurationMinutes || null) : null,
+              overrideYieldUses: overrideEqUsageMode === "use_yield" ? (overrideEqYieldUses || null) : null,
+              overrideYieldQuantity: overrideEqUsageMode !== "direct" ? (overrideEqYieldQuantity || null) : null,
             }
           : line,
       ),
@@ -1765,8 +1848,12 @@ export default function VariantDetailPage() {
           ? {
               ...line,
               hasOverride: false,
+              overrideUsageMode: null,
               overrideMinutes: null,
               overrideUses: null,
+              overrideYieldDurationMinutes: null,
+              overrideYieldUses: null,
+              overrideYieldQuantity: null,
             }
           : line,
       ),
@@ -2298,8 +2385,12 @@ export default function VariantDetailPage() {
                         {line.hasOverride && (
                           <Text as="p" variant="bodyMd" tone="subdued">
                             Override: {describeEquipmentLine({
+                              usageMode: line.overrideUsageMode,
                               minutes: line.overrideMinutes,
                               uses: line.overrideUses,
+                              yieldDurationMinutes: line.overrideYieldDurationMinutes,
+                              yieldUses: line.overrideYieldUses,
+                              yieldQuantity: line.overrideYieldQuantity,
                             })}
                           </Text>
                         )}
@@ -2694,30 +2785,94 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">
                 Default: {describeEquipmentLine(equipmentOverrideTarget)}
               </Text>
-              <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Minutes"
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={overrideEqMinutes}
-                    onChange={setOverrideEqMinutes}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Uses"
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={overrideEqUses}
-                    onChange={setOverrideEqUses}
-                    autoComplete="off"
-                  />
-                </div>
-              </InlineStack>
+              <Select
+                label="Usage mode"
+                value={overrideEqUsageMode}
+                onChange={setOverrideEqUsageMode}
+                options={[
+                  { label: "Direct minutes / uses", value: "direct" },
+                  { label: "Duration yield", value: "duration_yield" },
+                  { label: "Use yield", value: "use_yield" },
+                ]}
+              />
+              {overrideEqUsageMode === "direct" && (
+                <InlineStack gap="400" wrap={false}>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Minutes"
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={overrideEqMinutes}
+                      onChange={setOverrideEqMinutes}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Uses"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={overrideEqUses}
+                      onChange={setOverrideEqUses}
+                      autoComplete="off"
+                    />
+                  </div>
+                </InlineStack>
+              )}
+              {overrideEqUsageMode === "duration_yield" && (
+                <InlineStack gap="400" wrap={false}>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Run duration minutes"
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={overrideEqYieldDurationMinutes}
+                      onChange={setOverrideEqYieldDurationMinutes}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Products yielded"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={overrideEqYieldQuantity}
+                      onChange={setOverrideEqYieldQuantity}
+                      autoComplete="off"
+                    />
+                  </div>
+                </InlineStack>
+              )}
+              {overrideEqUsageMode === "use_yield" && (
+                <InlineStack gap="400" wrap={false}>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Run uses"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={overrideEqYieldUses}
+                      onChange={setOverrideEqYieldUses}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Products yielded"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={overrideEqYieldQuantity}
+                      onChange={setOverrideEqYieldQuantity}
+                      autoComplete="off"
+                    />
+                  </div>
+                </InlineStack>
+              )}
             </BlockStack>
           )}
         </Modal.Section>
@@ -2770,30 +2925,96 @@ export default function VariantDetailPage() {
                 </Text>
               }
             />
-            <InlineStack gap="400" wrap={false}>
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Minutes"
-                  type="number"
-                  min={0}
-                  step={0.5}
-                  value={eqMinutes}
-                  onChange={setEqMinutes}
-                  autoComplete="off"
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Uses"
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={eqUses}
-                  onChange={setEqUses}
-                  autoComplete="off"
-                />
-              </div>
-            </InlineStack>
+            <Select
+              label="Usage mode"
+              value={eqUsageMode}
+              onChange={setEqUsageMode}
+              options={[
+                { label: "Direct minutes / uses", value: "direct" },
+                { label: "Duration yield", value: "duration_yield" },
+                { label: "Use yield", value: "use_yield" },
+              ]}
+            />
+            {eqUsageMode === "direct" && (
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Minutes"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={eqMinutes}
+                    onChange={setEqMinutes}
+                    autoComplete="off"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Uses"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqUses}
+                    onChange={setEqUses}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+            )}
+            {eqUsageMode === "duration_yield" && (
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Run duration minutes"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={eqYieldDurationMinutes}
+                    onChange={setEqYieldDurationMinutes}
+                    autoComplete="off"
+                    helpText="Total equipment time for the run or batch."
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Products yielded"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqYieldQuantity}
+                    onChange={setEqYieldQuantity}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+            )}
+            {eqUsageMode === "use_yield" && (
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Run uses"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqYieldUses}
+                    onChange={setEqYieldUses}
+                    autoComplete="off"
+                    helpText="Total equipment uses for the run or batch."
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Products yielded"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqYieldQuantity}
+                    onChange={setEqYieldQuantity}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+            )}
           </BlockStack>
         </Modal.Section>
       </Modal>

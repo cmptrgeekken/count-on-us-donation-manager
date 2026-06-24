@@ -16,8 +16,12 @@ export type TemplateDraftEquipmentLine = {
   equipmentName: string;
   hourlyRate: string | null;
   perUseCost: string | null;
+  usageMode: string;
   minutes: string | null;
   uses: string | null;
+  yieldDurationMinutes: string | null;
+  yieldUses: string | null;
+  yieldQuantity: string | null;
 };
 
 export type TemplateDraft = {
@@ -43,8 +47,12 @@ export type TemplateCatalogEquipmentLine = {
   templateLineId: string;
   equipmentId: string;
   equipmentName: string;
+  usageMode: string;
   minutes: string | null;
   uses: string | null;
+  yieldDurationMinutes: string | null;
+  yieldUses: string | null;
+  yieldQuantity: string | null;
 };
 
 export type TemplateCatalogEntry = {
@@ -65,8 +73,12 @@ export type VariantTemplateMaterialDraftLine = TemplateCatalogMaterialLine & {
 
 export type VariantTemplateEquipmentDraftLine = TemplateCatalogEquipmentLine & {
   hasOverride: boolean;
+  overrideUsageMode: string | null;
   overrideMinutes: string | null;
   overrideUses: string | null;
+  overrideYieldDurationMinutes: string | null;
+  overrideYieldUses: string | null;
+  overrideYieldQuantity: string | null;
 };
 
 export type VariantAdditionalMaterialDraftLine = {
@@ -87,8 +99,12 @@ export type VariantAdditionalEquipmentDraftLine = {
   equipmentName: string;
   hourlyRate: string | null;
   perUseCost: string | null;
+  usageMode: string;
   minutes: string | null;
   uses: string | null;
+  yieldDurationMinutes: string | null;
+  yieldUses: string | null;
+  yieldQuantity: string | null;
 };
 
 export type VariantDraft = {
@@ -132,8 +148,12 @@ export function normalizeTemplateDraft(draft: TemplateDraft) {
     equipmentLines: draft.equipmentLines.map((line) => ({
       id: line.id,
       equipmentId: line.equipmentId,
+      usageMode: line.usageMode ?? "direct",
       minutes: line.minutes ?? "",
       uses: line.uses ?? "",
+      yieldDurationMinutes: line.yieldDurationMinutes ?? "",
+      yieldUses: line.yieldUses ?? "",
+      yieldQuantity: line.yieldQuantity ?? "",
     })),
   };
 }
@@ -155,9 +175,17 @@ export function buildVariantTemplateEquipmentDraftLines(
 ): VariantTemplateEquipmentDraftLine[] {
   return (template?.equipmentLines ?? []).map((line) => ({
     ...line,
+    usageMode: line.usageMode ?? "direct",
+    yieldDurationMinutes: line.yieldDurationMinutes ?? null,
+    yieldUses: line.yieldUses ?? null,
+    yieldQuantity: line.yieldQuantity ?? null,
     hasOverride: false,
+    overrideUsageMode: null,
     overrideMinutes: null,
     overrideUses: null,
+    overrideYieldDurationMinutes: null,
+    overrideYieldUses: null,
+    overrideYieldQuantity: null,
   }));
 }
 
@@ -208,8 +236,12 @@ export function normalizeVariantDraft(draft: VariantDraft) {
       templateLineId: line.templateLineId,
       equipmentId: line.equipmentId,
       hasOverride: line.hasOverride,
+      overrideUsageMode: line.overrideUsageMode ?? "",
       overrideMinutes: line.overrideMinutes ?? "",
       overrideUses: line.overrideUses ?? "",
+      overrideYieldDurationMinutes: line.overrideYieldDurationMinutes ?? "",
+      overrideYieldUses: line.overrideYieldUses ?? "",
+      overrideYieldQuantity: line.overrideYieldQuantity ?? "",
     })),
     materialLines: draft.materialLines.map((line) => ({
       materialId: line.materialId,
@@ -219,8 +251,12 @@ export function normalizeVariantDraft(draft: VariantDraft) {
     })),
     equipmentLines: draft.equipmentLines.map((line) => ({
       equipmentId: line.equipmentId,
+      usageMode: line.usageMode ?? "direct",
       minutes: line.minutes ?? "",
       uses: line.uses ?? "",
+      yieldDurationMinutes: line.yieldDurationMinutes ?? "",
+      yieldUses: line.yieldUses ?? "",
+      yieldQuantity: line.yieldQuantity ?? "",
     })),
   };
 }

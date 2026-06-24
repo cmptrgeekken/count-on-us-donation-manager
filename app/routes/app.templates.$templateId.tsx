@@ -53,8 +53,12 @@ const templateDraftSchema = z.object({
   equipmentLines: z.array(z.object({
     id: z.string(),
     equipmentId: z.string().min(1),
+    usageMode: z.string().nullable().optional(),
     minutes: z.string().nullable(),
     uses: z.string().nullable(),
+    yieldDurationMinutes: z.string().nullable().optional(),
+    yieldUses: z.string().nullable().optional(),
+    yieldQuantity: z.string().nullable().optional(),
   })),
 });
 
@@ -77,8 +81,12 @@ function serializeTemplate(template: {
     id: string;
     equipmentId: string;
     equipment: { name: string; hourlyRate: { toString(): string } | null; perUseCost: { toString(): string } | null };
+    usageMode: string;
     minutes: { toString(): string } | null;
     uses: { toString(): string } | null;
+    yieldDurationMinutes: { toString(): string } | null;
+    yieldUses: { toString(): string } | null;
+    yieldQuantity: { toString(): string } | null;
   }>;
 }) {
   return {
@@ -105,8 +113,12 @@ function serializeTemplate(template: {
       equipmentName: line.equipment.name,
       hourlyRate: line.equipment.hourlyRate?.toString() ?? null,
       perUseCost: line.equipment.perUseCost?.toString() ?? null,
+      usageMode: line.usageMode ?? "direct",
       minutes: line.minutes?.toString() ?? null,
       uses: line.uses?.toString() ?? null,
+      yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
+      yieldUses: line.yieldUses?.toString() ?? null,
+      yieldQuantity: line.yieldQuantity?.toString() ?? null,
     })),
   };
 }
@@ -351,8 +363,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     for (const line of draft.equipmentLines) {
       const data = {
-        minutes: parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes"),
-        uses: parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses"),
+        usageMode: line.usageMode || "direct",
+        minutes: (line.usageMode || "direct") === "direct" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
+        uses: (line.usageMode || "direct") === "direct" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
+        yieldDurationMinutes: line.usageMode === "duration_yield" ? parseOptionalNonNegativeNumber(line.yieldDurationMinutes, "Equipment yield duration") : null,
+        yieldUses: line.usageMode === "use_yield" ? parseOptionalNonNegativeWholeNumber(line.yieldUses, "Equipment yield uses") : null,
+        yieldQuantity: line.usageMode && line.usageMode !== "direct" ? parseOptionalNonNegativeWholeNumber(line.yieldQuantity, "Products yielded") : null,
       };
 
       if (existingEquipmentLines.has(line.id)) {
@@ -426,6 +442,12 @@ function describeMaterialLine(line: TemplateDraftMaterialLine) {
 }
 
 function describeEquipmentLine(line: TemplateDraftEquipmentLine) {
+  if (line.usageMode === "duration_yield") {
+    return `${line.yieldDurationMinutes ?? "-"} min yields ${line.yieldQuantity ?? "-"} products`;
+  }
+  if (line.usageMode === "use_yield") {
+    return `${line.yieldUses ?? "-"} uses yields ${line.yieldQuantity ?? "-"} products`;
+  }
   return [line.minutes ? `${line.minutes} min` : null, line.uses ? `${line.uses} uses` : null]
     .filter(Boolean)
     .join(" | ");
@@ -452,8 +474,12 @@ export default function TemplateDetailPage() {
   const [editingEquipmentLineId, setEditingEquipmentLineId] = useState<string | null>(null);
   const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
   const [equipmentSearchValue, setEquipmentSearchValue] = useState("");
+  const [eqUsageMode, setEqUsageMode] = useState("direct");
   const [eqMinutes, setEqMinutes] = useState("");
   const [eqUses, setEqUses] = useState("");
+  const [eqYieldDurationMinutes, setEqYieldDurationMinutes] = useState("");
+  const [eqYieldUses, setEqYieldUses] = useState("");
+  const [eqYieldQuantity, setEqYieldQuantity] = useState("");
 
   const handledSaveRef = useRef<string | null>(null);
 
@@ -489,8 +515,12 @@ export default function TemplateDetailPage() {
     setEditingEquipmentLineId(null);
     setSelectedEquipmentId("");
     setEquipmentSearchValue("");
+    setEqUsageMode("direct");
     setEqMinutes("");
     setEqUses("");
+    setEqYieldDurationMinutes("");
+    setEqYieldUses("");
+    setEqYieldQuantity("");
   }
 
   function closeEquipmentModal() {
@@ -566,8 +596,12 @@ export default function TemplateDetailPage() {
     setEditingEquipmentLineId(line.id);
     setSelectedEquipmentId(line.equipmentId);
     setEquipmentSearchValue(line.equipmentName);
+    setEqUsageMode(line.usageMode ?? "direct");
     setEqMinutes(line.minutes ?? "");
     setEqUses(line.uses ?? "");
+    setEqYieldDurationMinutes(line.yieldDurationMinutes ?? "");
+    setEqYieldUses(line.yieldUses ?? "");
+    setEqYieldQuantity(line.yieldQuantity ?? "");
     setEquipmentModalOpen(true);
   }
 
@@ -581,8 +615,12 @@ export default function TemplateDetailPage() {
       equipmentName: selectedEquipment.name,
       hourlyRate: selectedEquipment.hourlyRate,
       perUseCost: selectedEquipment.perUseCost,
-      minutes: eqMinutes || null,
-      uses: eqUses || null,
+      usageMode: eqUsageMode,
+      minutes: eqUsageMode === "direct" ? (eqMinutes || null) : null,
+      uses: eqUsageMode === "direct" ? (eqUses || null) : null,
+      yieldDurationMinutes: eqUsageMode === "duration_yield" ? (eqYieldDurationMinutes || null) : null,
+      yieldUses: eqUsageMode === "use_yield" ? (eqYieldUses || null) : null,
+      yieldQuantity: eqUsageMode !== "direct" ? (eqYieldQuantity || null) : null,
     };
 
     setDraft((current) => ({
@@ -633,6 +671,22 @@ export default function TemplateDetailPage() {
     if (!equipment) return null;
 
     let cost = 0;
+    if (eqUsageMode === "duration_yield") {
+      const duration = Number(eqYieldDurationMinutes);
+      const quantity = Number(eqYieldQuantity);
+      if (equipment.hourlyRate && duration > 0 && quantity > 0) {
+        return formatMoney(((Number(equipment.hourlyRate) * duration) / 60) / quantity);
+      }
+      return null;
+    }
+    if (eqUsageMode === "use_yield") {
+      const uses = Number(eqYieldUses);
+      const quantity = Number(eqYieldQuantity);
+      if (equipment.perUseCost && uses > 0 && quantity > 0) {
+        return formatMoney((Number(equipment.perUseCost) * uses) / quantity);
+      }
+      return null;
+    }
     if (equipment.hourlyRate && eqMinutes) {
       cost += (Number(equipment.hourlyRate) * Number(eqMinutes)) / 60;
     }
@@ -975,32 +1029,98 @@ export default function TemplateDetailPage() {
                 }
               />
             )}
-            <InlineStack gap="400" wrap={false}>
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Minutes"
-                  type="number"
-                  min={0}
-                  step={0.5}
-                  value={eqMinutes}
-                  onChange={setEqMinutes}
-                  autoComplete="off"
-                  helpText="Time on equipment per variant"
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Uses"
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={eqUses}
-                  onChange={setEqUses}
-                  autoComplete="off"
-                  helpText="Per-use charges (for example, needle passes)"
-                />
-              </div>
-            </InlineStack>
+            <Select
+              label="Usage mode"
+              value={eqUsageMode}
+              onChange={setEqUsageMode}
+              options={[
+                { label: "Direct minutes / uses", value: "direct" },
+                { label: "Duration yield", value: "duration_yield" },
+                { label: "Use yield", value: "use_yield" },
+              ]}
+            />
+            {eqUsageMode === "direct" && (
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Minutes"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={eqMinutes}
+                    onChange={setEqMinutes}
+                    autoComplete="off"
+                    helpText="Time on equipment per variant."
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Uses"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqUses}
+                    onChange={setEqUses}
+                    autoComplete="off"
+                    helpText="Per-use charges per variant."
+                  />
+                </div>
+              </InlineStack>
+            )}
+            {eqUsageMode === "duration_yield" && (
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Run duration minutes"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={eqYieldDurationMinutes}
+                    onChange={setEqYieldDurationMinutes}
+                    autoComplete="off"
+                    helpText="Total machine time for the run or batch."
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Products yielded"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqYieldQuantity}
+                    onChange={setEqYieldQuantity}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+            )}
+            {eqUsageMode === "use_yield" && (
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Run uses"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqYieldUses}
+                    onChange={setEqYieldUses}
+                    autoComplete="off"
+                    helpText="Total equipment uses for the run or batch."
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Products yielded"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqYieldQuantity}
+                    onChange={setEqYieldQuantity}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+            )}
             {previewEquipmentLineCost() && (
               <Text as="p" variant="bodyMd" tone="subdued">
                 Estimated line cost: <strong>{previewEquipmentLineCost()}</strong>
