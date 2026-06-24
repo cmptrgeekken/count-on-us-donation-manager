@@ -43,7 +43,13 @@ Every imported order snapshot should make this explicit through metadata:
 - imported timestamp
 - validation warnings when relevant
 
+The imported timestamp must be stored separately from `OrderSnapshot.createdAt`.
+For order snapshots, `createdAt` continues to represent the Shopify order date used for period assignment and reporting windows.
+
 This is intentionally less historically precise than true order-time configuration replay, but it is understandable, repeatable, and appropriate for owner-controlled rollout.
+
+Provider-backed POD costs follow the same rule: historical imports use the provider mappings, cached costs, and live/provider fallback behavior available at import time.
+The app should not imply that imported historical orders use provider costs that were accurate at the original order date.
 
 ### Import scope
 
@@ -76,6 +82,9 @@ When a payout id is unavailable, the import may use a strict composite fallback 
 
 The fallback key should be treated carefully to avoid accidentally merging unrelated manually-defined periods.
 
+For the first implementation, a stable payout id should be required unless a dedicated fallback identity model is designed.
+This avoids relying on a composite period identity that the current schema does not enforce.
+
 Imported periods should use a source such as `historical_import`.
 
 ### Shopify charge import
@@ -104,6 +113,9 @@ Duplicate orders should be skipped by default.
 
 An explicit replacement mode may be added later, but the first version should avoid overwriting existing snapshots unless the merchant chooses a rebuild/reset workflow that clearly explains the consequences.
 
+Replacement of an existing snapshot should be forbidden when that snapshot is associated with a closed reporting period, payment applications, tax true-ups, public disclosure exports, or other records that have already been treated as operational evidence.
+Those cases require a separate destructive reset workflow with explicit confirmation and audit logging.
+
 When a historical order references an unknown product or variant, import should not invent hidden cost or donation configuration.
 
 The dry run should report:
@@ -117,6 +129,10 @@ The dry run should report:
 - duplicate orders
 
 The implementation may choose strict failure or warning-based import for incomplete orders, but the preflight summary must make the outcome visible before the merchant confirms.
+
+After import, snapshots should be associated with reporting periods deterministically.
+The rebuild service should define whether it updates `OrderSnapshot.periodId`, relies on date-window queries, or does both.
+If both are used, `periodId` should be treated as a denormalized assignment derived from the snapshot order date and the imported payout period windows.
 
 ### Reporting regeneration
 
@@ -136,6 +152,8 @@ For a normal rebuild, preserve:
 - `ReportingPeriod` shell records
 - actual cause disbursements
 - actual artist payments
+- payment/disbursement application records
+- tax true-up records
 - receipt/file references
 - audit records
 
@@ -146,15 +164,21 @@ For a period rebuild, derived data may include:
 - cause payable rows, if present in the schema/implementation
 - artist payable rows, if present in the schema/implementation
 - analytical recalculation runs or cached recalculation summaries
-- tax reserve/true-up derived data when it is safe to recreate
+- computed tax reserve/cache data when it is safe to recreate
 
 The rebuild process must be careful with payment application records. If a `CauseAllocation` or `ArtistAllocation` has disbursement/payment applications, a normal rebuild should either:
 
 - refuse and ask the merchant to reverse payments first
-- preserve payment applications through a deterministic remap
+- preserve payment applications through a deterministic remap, if such a remap is explicitly designed and tested
 - provide a separate explicit destructive reset mode
 
 Silent deletion of real payment evidence is not allowed.
+
+Because `DisbursementApplication` and `ArtistPaymentApplication` are currently linked to allocations with cascading deletes, the first safe rebuild implementation should refuse to rebuild any period whose allocations have payment applications.
+The existing allocation materialization helpers must not be reused blindly for paid periods.
+
+Tax true-ups should also be preserved by default.
+They represent merchant-entered filing or payment facts, not disposable reporting cache.
 
 ### Configuration import/export is separate
 
@@ -174,6 +198,7 @@ Historical backfill assumes the destination shop's Count On Us configuration has
 - gives merchants an explicit dry-run and confirmation flow
 - lets reporting history be rebuilt after payouts, charges, or orders are imported
 - preserves immutable snapshots as the source of reporting history
+- preserves real payment evidence during ordinary rebuilds
 
 ### Costs
 
@@ -182,6 +207,7 @@ Historical backfill assumes the destination shop's Count On Us configuration has
 - rebuild workflows can become dangerous if they interact with logged disbursements, artist payments, receipts, or audit history
 - import parsing, dedupe, dry-run previews, and batch tracking add significant operational surface area
 - historical order import may still require Shopify data access that depends on how the merchant exports the data
+- first-version period import may require stable payout IDs even when some merchant exports omit them
 
 ## Alternatives considered
 
@@ -195,14 +221,21 @@ Historical backfill assumes the destination shop's Count On Us configuration has
 
 **Delete raw data during reporting rebuild** - Rejected. Rebuild should operate on derived reporting records. Raw imported orders, charges, and reporting period definitions are source data and should only be deleted through explicit import-batch rollback or destructive reset workflows.
 
+**Allow rebuild to cascade-delete allocation applications** - Rejected. Application records connect real payments to payable obligations. Losing them during a rebuild would destroy operational evidence and could make already-recorded payments appear unpaid.
+
+**Treat tax true-ups as rebuildable derived data** - Rejected for normal rebuilds. True-ups are merchant-entered filing facts and should survive ordinary report regeneration.
+
+**Allow payout imports without stable IDs in v1** - Rejected for the first implementation. A fallback identity may be added later, but requiring stable payout IDs avoids ambiguous period upserts.
+
 ## Follow-up implications
 
-- Add import batch metadata models or equivalent audit fields.
+- Add import batch metadata models or equivalent audit fields before order, payout, or charge import is implemented.
 - Add a Reporting "Imports and rebuild" admin workflow.
 - Define accepted file formats for payouts, Shopify charges, and orders.
 - Build dry-run validators with duplicate and missing-configuration summaries.
 - Add historical order snapshot creation using current configuration and `origin = "historical_import"`.
-- Add period and full-history reporting rebuild services with safeguards around payments and receipts.
+- Add period and full-history reporting rebuild services with safeguards around payments, payment applications, tax true-ups, and receipts.
+- Decide and document how rebuild assigns `OrderSnapshot.periodId`.
 - Decide whether import-batch rollback is needed and how it interacts with payment records.
 - Consider configuration export/import separately after the core backfill workflow is stable.
 
