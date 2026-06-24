@@ -16,6 +16,27 @@ type ActionData = {
   ok: boolean;
   message: string;
   summary?: unknown;
+  importPayload?: string;
+  importKind?: string | null;
+  sourceName?: string | null;
+};
+
+type LineMappingRequest = {
+  key: string;
+  title: string;
+  variantTitle: string;
+  sku: string | null;
+  reason: "unresolved" | "ambiguous";
+  candidates: Array<{
+    shopifyVariantId: string;
+    label: string;
+    matchReason: string;
+  }>;
+};
+
+type VariantOption = {
+  shopifyId: string;
+  label: string;
 };
 
 function formatDate(value: string | null) {
@@ -25,6 +46,25 @@ function formatDate(value: string | null) {
 
 function stringifySummary(summary: unknown) {
   return JSON.stringify(summary, null, 2);
+}
+
+function lineMappingRequests(summary: unknown): LineMappingRequest[] {
+  if (!summary || typeof summary !== "object" || !("lineMappingRequests" in summary)) return [];
+  const requests = (summary as { lineMappingRequests?: unknown }).lineMappingRequests;
+  return Array.isArray(requests) ? (requests as LineMappingRequest[]) : [];
+}
+
+function buildMappingOptions(request: LineMappingRequest, variants: VariantOption[]) {
+  const candidateIds = new Set(request.candidates.map((candidate) => candidate.shopifyVariantId));
+  return [
+    ...request.candidates.map((candidate) => ({
+      value: candidate.shopifyVariantId,
+      label: `${candidate.label} (${candidate.matchReason})`,
+    })),
+    ...variants
+      .filter((variant) => !candidateIds.has(variant.shopifyId))
+      .map((variant) => ({ value: variant.shopifyId, label: variant.label })),
+  ];
 }
 
 async function readImportPayload(formData: FormData) {
@@ -46,7 +86,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
 
-  const [periods, batches] = await Promise.all([
+  const [periods, batches, variants] = await Promise.all([
     prisma.reportingPeriod.findMany({
       where: { shopId },
       orderBy: { startDate: "desc" },
@@ -75,6 +115,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         completedAt: true,
       },
     }),
+    prisma.variant.findMany({
+      where: { shopId },
+      orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
+      take: 500,
+      select: {
+        shopifyId: true,
+        sku: true,
+        title: true,
+        product: { select: { title: true } },
+      },
+    }),
   ]);
 
   return jsonResponse({
@@ -97,8 +148,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       createdAt: batch.createdAt.toISOString(),
       completedAt: batch.completedAt?.toISOString() ?? null,
     })),
+    variants: variants.map<VariantOption>((variant) => ({
+      shopifyId: variant.shopifyId,
+      label: `${variant.product.title} - ${variant.title}${variant.sku ? ` (${variant.sku})` : ""}`,
+    })),
   });
 };
+
+function parseVariantMappings(formData: FormData) {
+  const mappings: Record<string, string> = {};
+  for (const [key, value] of formData.entries()) {
+    if (!key.startsWith("variantMapping:")) continue;
+    const mappingKey = key.slice("variantMapping:".length);
+    const variantId = value.toString().trim();
+    if (mappingKey && variantId) mappings[mappingKey] = variantId;
+  }
+  return mappings;
+}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -113,20 +179,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const sourceName = formData.get("sourceName")?.toString().trim() || fileName || null;
       const rows = parseHistoricalImportRows(payload, kind);
       const dryRun = intent === "dry-run-import";
+      const mappingOverrides = parseVariantMappings(formData);
 
       if (kind === "payouts") {
         const summary = await importHistoricalPayouts({ shopId, rows, dryRun, sourceName });
-        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Payout dry run complete." : "Payout import complete.", summary });
+        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Payout dry run complete." : "Payout import complete.", summary, importPayload: payload, importKind: kind, sourceName });
       }
 
       if (kind === "charges") {
         const summary = await importHistoricalCharges({ shopId, rows, dryRun, sourceName });
-        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Charge dry run complete." : "Charge import complete.", summary });
+        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Charge dry run complete." : "Charge import complete.", summary, importPayload: payload, importKind: kind, sourceName });
       }
 
       if (kind === "orders") {
-        const summary = await importHistoricalOrders({ shopId, rows, dryRun, sourceName });
-        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Order dry run complete." : "Order import complete.", summary });
+        const summary = await importHistoricalOrders({ shopId, rows, dryRun, sourceName, mappingOverrides });
+        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Order dry run complete." : "Order import complete.", summary, importPayload: payload, importKind: kind, sourceName });
       }
 
       return jsonResponse<ActionData>({ ok: false, message: "Choose an import type." }, { status: 400 });
@@ -156,10 +223,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function ReportingImportsPage() {
-  const { periods, batches } = useLoaderData<typeof loader>();
+  const { periods, batches, variants } = useLoaderData<typeof loader>();
   const actionData = useActionData<typeof action>();
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
+  const mappingRequests = lineMappingRequests(actionData?.summary);
 
   return (
     <>
@@ -194,7 +262,7 @@ export default function ReportingImportsPage() {
               <s-text-field label="Source name" name="sourceName" placeholder="Optional filename or export name" />
 
               <div style={{ display: "grid", gap: "0.4rem" }}>
-                <label htmlFor="payloadFile">JSON file</label>
+                <label htmlFor="payloadFile">Import file</label>
                 <input id="payloadFile" name="payloadFile" type="file" accept="text/csv,application/csv,application/json,.csv,.json" />
                 <s-text color="subdued">Choose a Shopify CSV or JSON export file, or paste JSON below for a quick dry run.</s-text>
               </div>
@@ -226,6 +294,44 @@ export default function ReportingImportsPage() {
                 </s-button>
               </div>
             </Form>
+
+            {actionData?.importKind === "orders" && actionData.importPayload && mappingRequests.length > 0 ? (
+              <Form method="post" style={{ display: "grid", gap: "1rem" }}>
+                <input type="hidden" name="kind" value="orders" />
+                <input type="hidden" name="sourceName" value={actionData.sourceName ?? ""} />
+                <textarea name="payload" value={actionData.importPayload} readOnly hidden />
+                <s-banner tone="warning">
+                  <s-text>Some order lines need a product/variant mapping before import.</s-text>
+                </s-banner>
+                <div style={{ display: "grid", gap: "0.85rem" }}>
+                  {mappingRequests.map((request) => {
+                    const options = buildMappingOptions(request, variants);
+                    return (
+                      <label key={request.key} style={{ display: "grid", gap: "0.35rem" }}>
+                        <span>
+                          {request.title} - {request.variantTitle}
+                          {request.sku ? ` (${request.sku})` : ""}
+                        </span>
+                        <select name={`variantMapping:${request.key}`} required style={{ padding: "0.65rem", font: "inherit" }} defaultValue="">
+                          <option value="">Choose product / variant</option>
+                          {options.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <s-button type="submit" name="intent" value="dry-run-import" variant="secondary" disabled={busy}>
+                    Dry run with mappings
+                  </s-button>
+                  <s-button type="submit" name="intent" value="apply-import" variant="primary" disabled={busy}>
+                    Import with mappings
+                  </s-button>
+                </div>
+              </Form>
+            ) : null}
           </div>
         </s-section>
 

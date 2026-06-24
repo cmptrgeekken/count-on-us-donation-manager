@@ -15,6 +15,7 @@ type SnapshotLineItemPayload = {
   title?: string | null;
   variant_title?: string | null;
   sku?: string | null;
+  importMappingKey?: string | null;
   quantity?: number | string | null;
   price?: string | number | null;
   total_discount?: string | number | null;

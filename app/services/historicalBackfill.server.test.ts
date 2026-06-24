@@ -111,6 +111,157 @@ describe("historical backfill imports", () => {
     expect(summary.errors).toEqual([{ row: 1, message: "Order admin_graphql_api_id is required." }]);
     expect(db.orderSnapshot.findUnique).not.toHaveBeenCalled();
   });
+
+  it("matches renamed CSV order products by normalized product and variant titles", async () => {
+    const variant = {
+      id: "variant-1",
+      shopifyId: "gid://shopify/ProductVariant/1",
+      title: "Blue",
+      costConfig: { id: "cost-1" },
+      product: {
+        shopifyId: "gid://shopify/Product/1",
+        title: "New Product A",
+        causeAssignments: [{ id: "cause-assignment-1" }],
+        artistAssignments: [],
+      },
+    };
+    const db = {
+      orderSnapshot: { findUnique: vi.fn().mockResolvedValue(null) },
+      variant: {
+        findMany: vi.fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([variant]),
+        findFirst: vi.fn().mockResolvedValue({
+          shopifyId: variant.shopifyId,
+          product: { shopifyId: variant.product.shopifyId },
+        }),
+        findUnique: vi.fn().mockResolvedValue(variant),
+      },
+      reportingPeriod: { findFirst: vi.fn().mockResolvedValue({ id: "period-1" }) },
+    };
+
+    const summary = await importHistoricalOrders({
+      shopId: "shop-1",
+      rows: [{
+        admin_graphql_api_id: "gid://shopify/Order/1",
+        created_at: "2026-01-02T00:00:00.000Z",
+        line_items: [{
+          title: "Product A",
+          variant_title: "Blue",
+          quantity: "1",
+          price: "10.00",
+        }],
+      }],
+      dryRun: true,
+      db: db as any,
+    });
+
+    expect(summary.created).toBe(1);
+    expect(summary.lineMappingRequests).toBeUndefined();
+    expect(summary.errors).toEqual([]);
+  });
+
+  it("surfaces ambiguous CSV order line mappings for merchant selection", async () => {
+    const candidates = [
+      {
+        shopifyId: "gid://shopify/ProductVariant/1",
+        title: "Default Title",
+        product: { shopifyId: "gid://shopify/Product/1", title: "Sticker" },
+      },
+      {
+        shopifyId: "gid://shopify/ProductVariant/2",
+        title: "Default Title",
+        product: { shopifyId: "gid://shopify/Product/2", title: "Sticker Pack" },
+      },
+    ];
+    const db = {
+      orderSnapshot: { findUnique: vi.fn().mockResolvedValue(null) },
+      variant: {
+        findMany: vi.fn()
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce(candidates),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
+      reportingPeriod: { findFirst: vi.fn().mockResolvedValue({ id: "period-1" }) },
+    };
+
+    const summary = await importHistoricalOrders({
+      shopId: "shop-1",
+      rows: [{
+        admin_graphql_api_id: "gid://shopify/Order/1",
+        created_at: "2026-01-02T00:00:00.000Z",
+        line_items: [{
+          title: "Sticker",
+          variant_title: "Default Title",
+          importMappingKey: "sticker|default title|",
+          quantity: "1",
+          price: "10.00",
+        }],
+      }],
+      dryRun: true,
+      db: db as any,
+    });
+
+    expect(summary.lineMappingRequests).toEqual([
+      expect.objectContaining({
+        key: "sticker|default title|",
+        reason: "ambiguous",
+        candidates: [
+          expect.objectContaining({ shopifyVariantId: "gid://shopify/ProductVariant/1" }),
+          expect.objectContaining({ shopifyVariantId: "gid://shopify/ProductVariant/2" }),
+        ],
+      }),
+    ]);
+  });
+
+  it("uses merchant-selected CSV line mappings before import", async () => {
+    const variant = {
+      id: "variant-1",
+      shopifyId: "gid://shopify/ProductVariant/1",
+      title: "Default Title",
+      costConfig: { id: "cost-1" },
+      product: {
+        shopifyId: "gid://shopify/Product/1",
+        title: "Current Sticker",
+        causeAssignments: [{ id: "cause-assignment-1" }],
+        artistAssignments: [],
+      },
+    };
+    const db = {
+      orderSnapshot: { findUnique: vi.fn().mockResolvedValue(null) },
+      variant: {
+        findFirst: vi.fn().mockResolvedValue({
+          shopifyId: variant.shopifyId,
+          title: variant.title,
+          product: { shopifyId: variant.product.shopifyId, title: variant.product.title },
+        }),
+        findUnique: vi.fn().mockResolvedValue(variant),
+      },
+      reportingPeriod: { findFirst: vi.fn().mockResolvedValue({ id: "period-1" }) },
+    };
+
+    const summary = await importHistoricalOrders({
+      shopId: "shop-1",
+      rows: [{
+        admin_graphql_api_id: "gid://shopify/Order/1",
+        created_at: "2026-01-02T00:00:00.000Z",
+        line_items: [{
+          title: "Old Sticker",
+          variant_title: "Default Title",
+          importMappingKey: "old sticker|default title|",
+          quantity: "1",
+          price: "10.00",
+        }],
+      }],
+      dryRun: true,
+      mappingOverrides: { "old sticker|default title|": "gid://shopify/ProductVariant/1" },
+      db: db as any,
+    });
+
+    expect(summary.created).toBe(1);
+    expect(summary.lineMappingRequests).toBeUndefined();
+    expect(summary.errors).toEqual([]);
+  });
 });
 
 describe("historical backfill rebuild", () => {

@@ -38,6 +38,21 @@ type ImportIssue = {
   message: string;
 };
 
+type VariantMappingCandidate = {
+  shopifyVariantId: string;
+  label: string;
+  matchReason: string;
+};
+
+type LineMappingRequest = {
+  key: string;
+  title: string;
+  variantTitle: string;
+  sku: string | null;
+  reason: "unresolved" | "ambiguous";
+  candidates: VariantMappingCandidate[];
+};
+
 type ImportSummary = {
   kind: ImportKind | "rebuild";
   totalRows: number;
@@ -46,6 +61,7 @@ type ImportSummary = {
   skipped: number;
   warnings: ImportIssue[];
   errors: ImportIssue[];
+  lineMappingRequests?: LineMappingRequest[];
 };
 
 const ZERO_SUMMARY = {
@@ -73,6 +89,23 @@ function optionalDate(value: string | null | undefined) {
 function normalizeId(value: string | number | null | undefined) {
   if (value === null || value === undefined) return "";
   return value.toString().trim();
+}
+
+function normalizeText(value: string | null | undefined) {
+  return (value ?? "")
+    .toLowerCase()
+    .replace(/&/g, " and ")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function lineMappingKey(input: { title?: string | null; variantTitle?: string | null; sku?: string | null }) {
+  return [
+    normalizeText(input.title),
+    normalizeText(input.variantTitle),
+    normalizeText(input.sku),
+  ].join("|");
 }
 
 function normalizeCsvHeader(value: string) {
@@ -254,6 +287,7 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
       title: productTitle,
       variant_title: variantTitle,
       sku: getCsvValue(row, "Lineitem sku") || null,
+      importMappingKey: lineMappingKey({ title: productTitle, variantTitle, sku: getCsvValue(row, "Lineitem sku") || null }),
       quantity: getCsvValue(row, "Lineitem quantity") || "0",
       price: getCsvValue(row, "Lineitem price") || "0",
       total_discount: getCsvValue(row, "Lineitem discount") || "0",
@@ -286,6 +320,17 @@ function createEmptySummary(kind: ImportSummary["kind"], totalRows: number): Imp
     warnings: [],
     errors: [],
   };
+}
+
+function addLineMappingRequests(summary: ImportSummary, requests: LineMappingRequest[]) {
+  if (requests.length === 0) return;
+  const existingKeys = new Set((summary.lineMappingRequests ?? []).map((request) => request.key));
+  const nextRequests = requests.filter((request) => {
+    if (existingKeys.has(request.key)) return false;
+    existingKeys.add(request.key);
+    return true;
+  });
+  summary.lineMappingRequests = [...(summary.lineMappingRequests ?? []), ...nextRequests];
 }
 
 async function createImportBatch(input: {
@@ -547,21 +592,35 @@ async function resolveCsvLineVariant(input: {
   title?: string | null;
   variantTitle?: string | null;
   sku?: string | null;
+  mappingOverrides?: Record<string, string>;
   db: DbClient;
-}) {
+}): Promise<
+  | { status: "matched"; variant: { shopifyId: string; product: { shopifyId: string } }; reason: string }
+  | { status: "unresolved" | "ambiguous"; candidates: VariantMappingCandidate[] }
+> {
+  const mappingKey = lineMappingKey(input);
+  const overrideVariantId = input.mappingOverrides?.[mappingKey]?.trim();
+  if (overrideVariantId) {
+    const override = await input.db.variant.findFirst({
+      where: { shopId: input.shopId, shopifyId: overrideVariantId },
+      select: { shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
+    });
+    if (override) return { status: "matched", variant: override, reason: "merchant-selected mapping" };
+  }
+
   const sku = input.sku?.trim();
   if (sku) {
     const skuMatch = await input.db.variant.findFirst({
       where: { shopId: input.shopId, sku },
-      select: { shopifyId: true, product: { select: { shopifyId: true } } },
+      select: { shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
     });
-    if (skuMatch) return skuMatch;
+    if (skuMatch) return { status: "matched", variant: skuMatch, reason: "SKU match" };
   }
 
   const title = input.title?.trim();
-  if (!title) return null;
+  if (!title) return { status: "unresolved", candidates: [] };
   const variantTitle = input.variantTitle?.trim() || "Default Title";
-  const titleMatch = await input.db.variant.findFirst({
+  const exactMatches = await input.db.variant.findMany({
     where: {
       shopId: input.shopId,
       product: { title },
@@ -570,36 +629,112 @@ async function resolveCsvLineVariant(input: {
         ...(variantTitle === "Default Title" ? [{ title: "Default" }] : []),
       ],
     },
-    select: { shopifyId: true, product: { select: { shopifyId: true } } },
+    take: 5,
+    select: { shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
   });
-  return titleMatch;
+  if (exactMatches.length === 1) return { status: "matched", variant: exactMatches[0], reason: "exact title match" };
+  if (exactMatches.length > 1) {
+    return {
+      status: "ambiguous",
+      candidates: exactMatches.map((variant) => ({
+        shopifyVariantId: variant.shopifyId,
+        label: `${variant.product.title} - ${variant.title}`,
+        matchReason: "exact title match",
+      })),
+    };
+  }
+
+  const normalizedTitle = normalizeText(title);
+  const normalizedVariantTitle = normalizeText(variantTitle);
+  const variants = await input.db.variant.findMany({
+    where: { shopId: input.shopId },
+    take: 500,
+    select: { shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
+  });
+  const candidates = variants
+    .map((variant) => {
+      const productTitle = normalizeText(variant.product.title);
+      const candidateVariantTitle = normalizeText(variant.title);
+      const productMatches =
+        productTitle === normalizedTitle ||
+        productTitle.includes(normalizedTitle) ||
+        normalizedTitle.includes(productTitle);
+      const variantMatches =
+        normalizedVariantTitle === "default title" ||
+        candidateVariantTitle === normalizedVariantTitle ||
+        candidateVariantTitle.includes(normalizedVariantTitle) ||
+        normalizedVariantTitle.includes(candidateVariantTitle);
+      if (!productMatches || !variantMatches) return null;
+
+      return {
+        shopifyVariantId: variant.shopifyId,
+        label: `${variant.product.title} - ${variant.title}`,
+        matchReason: "normalized title match",
+      };
+    })
+    .filter((candidate): candidate is VariantMappingCandidate => Boolean(candidate))
+    .slice(0, 10);
+
+  if (candidates.length === 1) {
+    const candidate = candidates[0];
+    const variant = await input.db.variant.findFirst({
+      where: { shopId: input.shopId, shopifyId: candidate.shopifyVariantId },
+      select: { shopifyId: true, product: { select: { shopifyId: true } } },
+    });
+    if (variant) return { status: "matched", variant, reason: candidate.matchReason };
+  }
+
+  return {
+    status: candidates.length > 1 ? "ambiguous" : "unresolved",
+    candidates,
+  };
 }
 
-async function enrichHistoricalOrderRows(shopId: string, order: ShopifyOrderPayload, db: DbClient) {
+async function enrichHistoricalOrderRows(
+  shopId: string,
+  order: ShopifyOrderPayload,
+  db: DbClient,
+  mappingOverrides: Record<string, string>,
+) {
   const warnings: string[] = [];
+  const lineMappingRequests: LineMappingRequest[] = [];
 
   for (const lineItem of order.line_items ?? []) {
     const existingVariantId = normalizeId(lineItem.admin_graphql_api_id?.includes("ProductVariant") ? lineItem.admin_graphql_api_id : lineItem.variant_id);
     if (existingVariantId) continue;
 
-    const variant = await resolveCsvLineVariant({
+    const resolution = await resolveCsvLineVariant({
       shopId,
       title: lineItem.title,
       variantTitle: lineItem.variant_title,
       sku: lineItem.sku,
+      mappingOverrides,
       db,
     });
 
-    if (!variant) {
-      warnings.push(`Line ${lineItem.title ?? "Untitled"}${lineItem.sku ? ` (${lineItem.sku})` : ""} could not be matched to a synced variant.`);
+    if (resolution.status !== "matched") {
+      const key = lineItem.importMappingKey ?? lineMappingKey(lineItem);
+      lineMappingRequests.push({
+        key,
+        title: lineItem.title ?? "Untitled",
+        variantTitle: lineItem.variant_title ?? "Default Title",
+        sku: lineItem.sku ?? null,
+        reason: resolution.status,
+        candidates: resolution.candidates,
+      });
+      warnings.push(
+        resolution.status === "ambiguous"
+          ? `Line ${lineItem.title ?? "Untitled"}${lineItem.sku ? ` (${lineItem.sku})` : ""} matched multiple synced variants. Choose one before importing.`
+          : `Line ${lineItem.title ?? "Untitled"}${lineItem.sku ? ` (${lineItem.sku})` : ""} could not be matched to a synced variant.`,
+      );
       continue;
     }
 
-    lineItem.variant_id = variant.shopifyId;
-    lineItem.product_id = variant.product.shopifyId;
+    lineItem.variant_id = resolution.variant.shopifyId;
+    lineItem.product_id = resolution.variant.product.shopifyId;
   }
 
-  return warnings;
+  return { warnings, lineMappingRequests };
 }
 
 export async function importHistoricalOrders(input: {
@@ -607,6 +742,7 @@ export async function importHistoricalOrders(input: {
   rows: unknown[];
   dryRun?: boolean;
   sourceName?: string | null;
+  mappingOverrides?: Record<string, string>;
   db?: DbClient;
   fetchImpl?: typeof fetch;
 }) {
@@ -633,9 +769,14 @@ export async function importHistoricalOrders(input: {
         continue;
       }
 
-      const enrichmentWarnings = await enrichHistoricalOrderRows(input.shopId, order, db);
-      for (const warning of enrichmentWarnings) {
+      const enrichment = await enrichHistoricalOrderRows(input.shopId, order, db, input.mappingOverrides ?? {});
+      for (const warning of enrichment.warnings) {
         summary.warnings.push({ row: index + 1, message: warning });
+      }
+      addLineMappingRequests(summary, enrichment.lineMappingRequests);
+      if (!input.dryRun && enrichment.lineMappingRequests.length > 0) {
+        summary.errors.push({ row: index + 1, message: "Resolve line item mappings before importing this order." });
+        continue;
       }
 
       const warnings = await validateOrderRow(input.shopId, order, db);
