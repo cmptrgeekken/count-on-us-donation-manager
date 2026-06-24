@@ -19,6 +19,7 @@ type ActionData = {
   importPayload?: string;
   importKind?: string | null;
   sourceName?: string | null;
+  mappingOverrides?: Record<string, string>;
 };
 
 type LineMappingRequest = {
@@ -193,7 +194,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       if (kind === "orders") {
         const summary = await importHistoricalOrders({ shopId, rows, dryRun, sourceName, mappingOverrides });
-        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Order dry run complete." : "Order import complete.", summary, importPayload: payload, importKind: kind, sourceName });
+        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Order dry run complete." : "Order import complete.", summary, importPayload: payload, importKind: kind, sourceName, mappingOverrides });
       }
 
       return jsonResponse<ActionData>({ ok: false, message: "Choose an import type." }, { status: 400 });
@@ -228,6 +229,12 @@ export default function ReportingImportsPage() {
   const navigation = useNavigation();
   const busy = navigation.state !== "idle";
   const mappingRequests = lineMappingRequests(actionData?.summary);
+  const mappingOverrides = actionData?.mappingOverrides ?? {};
+  const hasReviewedMappings = actionData?.importKind === "orders" &&
+    Boolean(actionData.importPayload) &&
+    Object.keys(mappingOverrides).length > 0 &&
+    mappingRequests.length === 0 &&
+    actionData.message.includes("dry run");
 
   return (
     <>
@@ -328,6 +335,25 @@ export default function ReportingImportsPage() {
                   </s-button>
                   <s-button type="submit" name="intent" value="apply-import" variant="primary" disabled={busy}>
                     Import with mappings
+                  </s-button>
+                </div>
+              </Form>
+            ) : null}
+
+            {hasReviewedMappings ? (
+              <Form method="post" style={{ display: "grid", gap: "1rem" }}>
+                <input type="hidden" name="kind" value="orders" />
+                <input type="hidden" name="sourceName" value={actionData?.sourceName ?? ""} />
+                <textarea name="payload" value={actionData?.importPayload ?? ""} readOnly hidden />
+                {Object.entries(mappingOverrides).map(([key, value]) => (
+                  <input key={key} type="hidden" name={`variantMapping:${key}`} value={value} />
+                ))}
+                <s-banner tone="success">
+                  <s-text>Mappings look ready. Import will save these choices for future historical imports.</s-text>
+                </s-banner>
+                <div>
+                  <s-button type="submit" name="intent" value="apply-import" variant="primary" disabled={busy}>
+                    Import with reviewed mappings
                   </s-button>
                 </div>
               </Form>

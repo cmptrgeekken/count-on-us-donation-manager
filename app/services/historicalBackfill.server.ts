@@ -53,6 +53,16 @@ type LineMappingRequest = {
   candidates: VariantMappingCandidate[];
 };
 
+type ResolvedImportVariant = {
+  id: string;
+  shopifyId: string;
+  title?: string;
+  product: {
+    shopifyId: string;
+    title?: string;
+  };
+};
+
 type ImportSummary = {
   kind: ImportKind | "rebuild";
   totalRows: number;
@@ -118,6 +128,10 @@ function getCsvValue(row: CsvRow, ...keys: string[]) {
     if (value !== undefined && value.trim() !== "") return value.trim();
   }
   return "";
+}
+
+function variantCandidateLabel(variant: { title?: string; product: { title?: string } }) {
+  return `${variant.product.title ?? "Unknown product"} - ${variant.title ?? "Default Title"}`;
 }
 
 function parseCsvRows(input: string): CsvRow[] {
@@ -595,26 +609,40 @@ async function resolveCsvLineVariant(input: {
   mappingOverrides?: Record<string, string>;
   db: DbClient;
 }): Promise<
-  | { status: "matched"; variant: { shopifyId: string; product: { shopifyId: string } }; reason: string }
+  | { status: "matched"; variant: ResolvedImportVariant; reason: string }
   | { status: "unresolved" | "ambiguous"; candidates: VariantMappingCandidate[] }
 > {
+  const sku = input.sku?.trim();
+  if (sku) {
+    const skuMatch = await input.db.variant.findFirst({
+      where: { shopId: input.shopId, sku },
+      select: { id: true, shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
+    });
+    if (skuMatch) return { status: "matched", variant: skuMatch, reason: "SKU match" };
+  }
+
   const mappingKey = lineMappingKey(input);
   const overrideVariantId = input.mappingOverrides?.[mappingKey]?.trim();
   if (overrideVariantId) {
     const override = await input.db.variant.findFirst({
       where: { shopId: input.shopId, shopifyId: overrideVariantId },
-      select: { shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
+      select: { id: true, shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
     });
     if (override) return { status: "matched", variant: override, reason: "merchant-selected mapping" };
   }
 
-  const sku = input.sku?.trim();
-  if (sku) {
-    const skuMatch = await input.db.variant.findFirst({
-      where: { shopId: input.shopId, sku },
-      select: { shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
-    });
-    if (skuMatch) return { status: "matched", variant: skuMatch, reason: "SKU match" };
+  const savedMapping = input.db.historicalLineItemMapping?.findUnique
+    ? await input.db.historicalLineItemMapping.findUnique({
+        where: { shopId_mappingKey: { shopId: input.shopId, mappingKey } },
+        select: {
+          variant: {
+            select: { id: true, shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
+          },
+        },
+      })
+    : null;
+  if (savedMapping?.variant) {
+    return { status: "matched", variant: savedMapping.variant, reason: "saved import mapping" };
   }
 
   const title = input.title?.trim();
@@ -630,7 +658,7 @@ async function resolveCsvLineVariant(input: {
       ],
     },
     take: 5,
-    select: { shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
+    select: { id: true, shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
   });
   if (exactMatches.length === 1) return { status: "matched", variant: exactMatches[0], reason: "exact title match" };
   if (exactMatches.length > 1) {
@@ -638,7 +666,7 @@ async function resolveCsvLineVariant(input: {
       status: "ambiguous",
       candidates: exactMatches.map((variant) => ({
         shopifyVariantId: variant.shopifyId,
-        label: `${variant.product.title} - ${variant.title}`,
+        label: variantCandidateLabel(variant),
         matchReason: "exact title match",
       })),
     };
@@ -649,7 +677,7 @@ async function resolveCsvLineVariant(input: {
   const variants = await input.db.variant.findMany({
     where: { shopId: input.shopId },
     take: 500,
-    select: { shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
+    select: { id: true, shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
   });
   const candidates = variants
     .map((variant) => {
@@ -668,7 +696,7 @@ async function resolveCsvLineVariant(input: {
 
       return {
         shopifyVariantId: variant.shopifyId,
-        label: `${variant.product.title} - ${variant.title}`,
+        label: variantCandidateLabel(variant),
         matchReason: "normalized title match",
       };
     })
@@ -679,7 +707,7 @@ async function resolveCsvLineVariant(input: {
     const candidate = candidates[0];
     const variant = await input.db.variant.findFirst({
       where: { shopId: input.shopId, shopifyId: candidate.shopifyVariantId },
-      select: { shopifyId: true, product: { select: { shopifyId: true } } },
+      select: { id: true, shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
     });
     if (variant) return { status: "matched", variant, reason: candidate.matchReason };
   }
@@ -735,6 +763,61 @@ async function enrichHistoricalOrderRows(
   }
 
   return { warnings, lineMappingRequests };
+}
+
+export async function persistHistoricalLineItemMappings(input: {
+  shopId: string;
+  orders: ShopifyOrderPayload[];
+  mappingOverrides: Record<string, string>;
+  importBatchId?: string | null;
+  db?: DbClient;
+}) {
+  const db = input.db ?? prisma;
+  const persisted = new Set<string>();
+
+  for (const order of input.orders) {
+    for (const lineItem of order.line_items ?? []) {
+      const mappingKey = lineItem.importMappingKey ?? lineMappingKey(lineItem);
+      const overrideVariantId = input.mappingOverrides[mappingKey]?.trim();
+      if (!overrideVariantId || persisted.has(mappingKey)) continue;
+
+      const variant = await db.variant.findFirst({
+        where: { shopId: input.shopId, shopifyId: overrideVariantId },
+        select: { id: true },
+      });
+      if (!variant) continue;
+
+      await db.historicalLineItemMapping.upsert({
+        where: { shopId_mappingKey: { shopId: input.shopId, mappingKey } },
+        create: {
+          shopId: input.shopId,
+          mappingKey,
+          lineTitle: lineItem.title ?? "Untitled",
+          normalizedLineTitle: normalizeText(lineItem.title),
+          variantTitle: lineItem.variant_title ?? null,
+          normalizedVariantTitle: normalizeText(lineItem.variant_title),
+          sku: lineItem.sku ?? null,
+          variantId: variant.id,
+          firstImportBatchId: input.importBatchId ?? null,
+          lastImportBatchId: input.importBatchId ?? null,
+          useCount: 1,
+        },
+        update: {
+          lineTitle: lineItem.title ?? "Untitled",
+          normalizedLineTitle: normalizeText(lineItem.title),
+          variantTitle: lineItem.variant_title ?? null,
+          normalizedVariantTitle: normalizeText(lineItem.variant_title),
+          sku: lineItem.sku ?? null,
+          variantId: variant.id,
+          lastImportBatchId: input.importBatchId ?? null,
+          useCount: { increment: 1 },
+        },
+      });
+      persisted.add(mappingKey);
+    }
+  }
+
+  return { persisted: persisted.size };
 }
 
 export async function importHistoricalOrders(input: {
@@ -812,6 +895,16 @@ export async function importHistoricalOrders(input: {
         input.fetchImpl ?? fetch,
         { importBatchId: batch.id, importedAt, periodId },
       );
+    }
+
+    if (Object.keys(input.mappingOverrides ?? {}).length > 0) {
+      await persistHistoricalLineItemMappings({
+        shopId: input.shopId,
+        orders: preparedOrders.map((preparedOrder) => preparedOrder.order),
+        mappingOverrides: input.mappingOverrides ?? {},
+        importBatchId: batch.id,
+        db,
+      });
     }
   }
 

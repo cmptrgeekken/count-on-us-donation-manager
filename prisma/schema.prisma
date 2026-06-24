@@ -100,6 +100,28 @@ model ImportBatch {
   @@index([shopId, kind, createdAt])
 }
 
+model HistoricalLineItemMapping {
+  id                     String   @id @default(cuid())
+  shopId                 String
+  mappingKey             String
+  lineTitle              String
+  normalizedLineTitle    String
+  variantTitle           String?
+  normalizedVariantTitle String?
+  sku                    String?
+  variantId              String
+  variant                Variant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  firstImportBatchId     String?
+  lastImportBatchId      String?
+  useCount               Int      @default(0)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([shopId, mappingKey])
+  @@index([shopId])
+  @@index([shopId, variantId])
+}
+
 // No FK to Shop — DeletionJob must outlive the Shop row it references
 model DeletionJob {
   id           String   @id @default(cuid())
@@ -235,6 +257,7 @@ model Variant {
 
   costConfig        VariantCostConfig?
   providerMappings  ProviderVariantMapping[]
+  historicalLineItemMappings HistoricalLineItemMapping[]
 
   @@unique([shopId, shopifyId])
   @@index([shopId])
