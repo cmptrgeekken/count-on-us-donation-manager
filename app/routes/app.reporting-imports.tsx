@@ -111,7 +111,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const kind = formData.get("kind")?.toString();
       const { payload, fileName } = await readImportPayload(formData);
       const sourceName = formData.get("sourceName")?.toString().trim() || fileName || null;
-      const rows = parseHistoricalImportRows(payload);
+      const rows = parseHistoricalImportRows(payload, kind);
       const dryRun = intent === "dry-run-import";
 
       if (kind === "payouts") {
@@ -179,7 +179,7 @@ export default function ReportingImportsPage() {
         <s-section heading="Historical import">
           <div style={{ display: "grid", gap: "1rem" }}>
             <s-text>
-              Import payouts, Shopify charges, and orders from JSON arrays. Historical order snapshots use the current Count On Us configuration at import time.
+              Import Shopify CSV exports or JSON arrays for payouts, Shopify charges, and orders. Historical order snapshots use the current Count On Us configuration at import time.
             </s-text>
             <Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: "1rem" }}>
               <div style={{ display: "grid", gap: "0.4rem" }}>
@@ -195,12 +195,12 @@ export default function ReportingImportsPage() {
 
               <div style={{ display: "grid", gap: "0.4rem" }}>
                 <label htmlFor="payloadFile">JSON file</label>
-                <input id="payloadFile" name="payloadFile" type="file" accept="application/json,.json" />
-                <s-text color="subdued">Choose a JSON export file, or paste JSON below for a quick dry run.</s-text>
+                <input id="payloadFile" name="payloadFile" type="file" accept="text/csv,application/csv,application/json,.csv,.json" />
+                <s-text color="subdued">Choose a Shopify CSV or JSON export file, or paste JSON below for a quick dry run.</s-text>
               </div>
 
               <div style={{ display: "grid", gap: "0.4rem" }}>
-                <label htmlFor="payload">JSON array fallback</label>
+                <label htmlFor="payload">JSON or CSV fallback</label>
                 <textarea
                   id="payload"
                   name="payload"

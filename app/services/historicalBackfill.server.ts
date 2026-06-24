@@ -9,6 +9,7 @@ import {
 type DbClient = typeof prisma;
 
 type ImportKind = "payouts" | "charges" | "orders";
+type CsvRow = Record<string, string>;
 
 type PayoutImportRow = {
   id?: string | number | null;
@@ -74,6 +75,74 @@ function normalizeId(value: string | number | null | undefined) {
   return value.toString().trim();
 }
 
+function normalizeCsvHeader(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function getCsvValue(row: CsvRow, ...keys: string[]) {
+  for (const key of keys) {
+    const value = row[normalizeCsvHeader(key)];
+    if (value !== undefined && value.trim() !== "") return value.trim();
+  }
+  return "";
+}
+
+function parseCsvRows(input: string): CsvRow[] {
+  const rows: string[][] = [];
+  let current = "";
+  let row: string[] = [];
+  let inQuotes = false;
+
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input[index];
+    const nextCharacter = input[index + 1];
+
+    if (character === '"' && inQuotes && nextCharacter === '"') {
+      current += '"';
+      index += 1;
+      continue;
+    }
+
+    if (character === '"') {
+      inQuotes = !inQuotes;
+      continue;
+    }
+
+    if (character === "," && !inQuotes) {
+      row.push(current);
+      current = "";
+      continue;
+    }
+
+    if ((character === "\n" || character === "\r") && !inQuotes) {
+      if (character === "\r" && nextCharacter === "\n") index += 1;
+      row.push(current);
+      if (row.some((cell) => cell.trim() !== "")) rows.push(row);
+      row = [];
+      current = "";
+      continue;
+    }
+
+    current += character;
+  }
+
+  row.push(current);
+  if (row.some((cell) => cell.trim() !== "")) rows.push(row);
+
+  const [headers, ...dataRows] = rows;
+  if (!headers || headers.length === 0) {
+    throw new Error("CSV import payload must include a header row.");
+  }
+
+  const normalizedHeaders = headers.map(normalizeCsvHeader);
+  return dataRows.map((dataRow) =>
+    normalizedHeaders.reduce<CsvRow>((record, header, index) => {
+      record[header] = dataRow[index]?.trim() ?? "";
+      return record;
+    }, {}),
+  );
+}
+
 function parseJsonArray(input: string) {
   const parsed = JSON.parse(input);
   if (!Array.isArray(parsed)) {
@@ -82,9 +151,131 @@ function parseJsonArray(input: string) {
   return parsed as unknown[];
 }
 
-export function parseHistoricalImportRows(input: string) {
+function parseShopifyChargesCsv(rows: CsvRow[]): ChargeImportRow[] {
+  return rows.map((row, index) => {
+    const order = getCsvValue(row, "Order");
+    const category = getCsvValue(row, "Charge category");
+    const description = getCsvValue(row, "Description") || "Historical Shopify charge";
+    const amount = getCsvValue(row, "Amount", "Original amount");
+    const date = getCsvValue(row, "Date", "Start of billing cycle", "End of billing cycle");
+
+    return {
+      shopifyTransactionId: getCsvValue(row, "Bill #") || `charges-csv:${order || "no-order"}:${category}:${description}:${amount}:${index + 1}`,
+      transactionType: category,
+      description: order ? `${description} (${order})` : description,
+      amount,
+      currency: getCsvValue(row, "Currency", "Original currency") || "USD",
+      processedAt: date || null,
+    };
+  });
+}
+
+function parseShopifyPaymentTransactionsCsv(rows: CsvRow[]): PayoutImportRow[] {
+  const grouped = new Map<string, Date[]>();
+
+  for (const row of rows) {
+    const payoutId = getCsvValue(row, "Payout ID");
+    if (!payoutId) continue;
+
+    const transactionDate = optionalDate(getCsvValue(row, "Transaction Date"));
+    const payoutDate = optionalDate(getCsvValue(row, "Payout Date", "Available On"));
+    const date = transactionDate ?? payoutDate;
+    if (!date) continue;
+
+    grouped.set(payoutId, [...(grouped.get(payoutId) ?? []), date]);
+  }
+
+  return Array.from(grouped.entries()).map(([shopifyPayoutId, dates]) => {
+    const timestamps = dates.map((date) => date.getTime());
+    const startDate = new Date(Math.min(...timestamps));
+    const endDate = new Date(Math.max(...timestamps) + 1);
+    return {
+      shopifyPayoutId,
+      startDate: startDate.toISOString(),
+      endDate: endDate.toISOString(),
+      source: "shopify_payment_transactions_csv",
+    };
+  });
+}
+
+function splitLineItemName(name: string) {
+  const separator = " - ";
+  const separatorIndex = name.lastIndexOf(separator);
+  if (separatorIndex === -1) {
+    return { productTitle: name, variantTitle: "Default Title" };
+  }
+
+  return {
+    productTitle: name.slice(0, separatorIndex),
+    variantTitle: name.slice(separatorIndex + separator.length),
+  };
+}
+
+function toOrderGid(value: string) {
+  if (!value) return "";
+  return value.startsWith("gid://") ? value : `gid://shopify/Order/${value}`;
+}
+
+function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
+  const orders = new Map<string, ShopifyOrderPayload>();
+  const lineIndexes = new Map<string, number>();
+  const orderKeyByName = new Map<string, string>();
+
+  for (const row of rows) {
+    const orderName = getCsvValue(row, "Name");
+    const explicitOrderId = getCsvValue(row, "Id");
+    const orderKey = explicitOrderId || (orderName ? orderKeyByName.get(orderName) : "") || orderName;
+    if (!orderKey) continue;
+    if (orderName) orderKeyByName.set(orderName, orderKey);
+
+    const existing = orders.get(orderKey);
+    const order = existing ?? {
+      admin_graphql_api_id: toOrderGid(explicitOrderId || orderKey),
+      name: orderName,
+      created_at: getCsvValue(row, "Created at"),
+      total_tax: getCsvValue(row, "Taxes") || "0",
+      current_total_tax: getCsvValue(row, "Taxes") || "0",
+      line_items: [],
+    };
+    if (!existing) {
+      orders.set(orderKey, order);
+      lineIndexes.set(orderKey, 0);
+    }
+
+    const lineName = getCsvValue(row, "Lineitem name");
+    if (!lineName) continue;
+
+    const lineIndex = (lineIndexes.get(orderKey) ?? 0) + 1;
+    lineIndexes.set(orderKey, lineIndex);
+    const { productTitle, variantTitle } = splitLineItemName(lineName);
+
+    order.line_items?.push({
+      id: `${orderKey}:${lineIndex}`,
+      title: productTitle,
+      variant_title: variantTitle,
+      sku: getCsvValue(row, "Lineitem sku") || null,
+      quantity: getCsvValue(row, "Lineitem quantity") || "0",
+      price: getCsvValue(row, "Lineitem price") || "0",
+      total_discount: getCsvValue(row, "Lineitem discount") || "0",
+    });
+  }
+
+  return Array.from(orders.values());
+}
+
+function parseCsvImportRows(input: string, kind?: string) {
+  const rows = parseCsvRows(input);
+  if (kind === "payouts") return parseShopifyPaymentTransactionsCsv(rows);
+  if (kind === "charges") return parseShopifyChargesCsv(rows);
+  if (kind === "orders") return parseShopifyOrdersCsv(rows);
+  throw new Error("Choose an import type before uploading CSV.");
+}
+
+export function parseHistoricalImportRows(input: string, kind?: string) {
   if (!input.trim()) return [];
-  return parseJsonArray(input);
+  const trimmed = input.trimStart();
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) return parseJsonArray(input);
+  return parseCsvImportRows(input, kind);
 }
 
 function createEmptySummary(kind: ImportSummary["kind"], totalRows: number): ImportSummary {
@@ -351,6 +542,66 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
   return warnings;
 }
 
+async function resolveCsvLineVariant(input: {
+  shopId: string;
+  title?: string | null;
+  variantTitle?: string | null;
+  sku?: string | null;
+  db: DbClient;
+}) {
+  const sku = input.sku?.trim();
+  if (sku) {
+    const skuMatch = await input.db.variant.findFirst({
+      where: { shopId: input.shopId, sku },
+      select: { shopifyId: true, product: { select: { shopifyId: true } } },
+    });
+    if (skuMatch) return skuMatch;
+  }
+
+  const title = input.title?.trim();
+  if (!title) return null;
+  const variantTitle = input.variantTitle?.trim() || "Default Title";
+  const titleMatch = await input.db.variant.findFirst({
+    where: {
+      shopId: input.shopId,
+      product: { title },
+      OR: [
+        { title: variantTitle },
+        ...(variantTitle === "Default Title" ? [{ title: "Default" }] : []),
+      ],
+    },
+    select: { shopifyId: true, product: { select: { shopifyId: true } } },
+  });
+  return titleMatch;
+}
+
+async function enrichHistoricalOrderRows(shopId: string, order: ShopifyOrderPayload, db: DbClient) {
+  const warnings: string[] = [];
+
+  for (const lineItem of order.line_items ?? []) {
+    const existingVariantId = normalizeId(lineItem.admin_graphql_api_id?.includes("ProductVariant") ? lineItem.admin_graphql_api_id : lineItem.variant_id);
+    if (existingVariantId) continue;
+
+    const variant = await resolveCsvLineVariant({
+      shopId,
+      title: lineItem.title,
+      variantTitle: lineItem.variant_title,
+      sku: lineItem.sku,
+      db,
+    });
+
+    if (!variant) {
+      warnings.push(`Line ${lineItem.title ?? "Untitled"}${lineItem.sku ? ` (${lineItem.sku})` : ""} could not be matched to a synced variant.`);
+      continue;
+    }
+
+    lineItem.variant_id = variant.shopifyId;
+    lineItem.product_id = variant.product.shopifyId;
+  }
+
+  return warnings;
+}
+
 export async function importHistoricalOrders(input: {
   shopId: string;
   rows: unknown[];
@@ -380,6 +631,11 @@ export async function importHistoricalOrders(input: {
       if (existing) {
         summary.skipped += 1;
         continue;
+      }
+
+      const enrichmentWarnings = await enrichHistoricalOrderRows(input.shopId, order, db);
+      for (const warning of enrichmentWarnings) {
+        summary.warnings.push({ row: index + 1, message: warning });
       }
 
       const warnings = await validateOrderRow(input.shopId, order, db);
