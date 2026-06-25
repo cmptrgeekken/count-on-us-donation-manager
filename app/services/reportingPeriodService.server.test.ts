@@ -107,7 +107,8 @@ describe("materializeCauseAllocationsForPeriod", () => {
 
   it("materializes cause allocation totals with proportional adjustments", async () => {
     const deleteMany = vi.fn().mockResolvedValue(undefined);
-    const createMany = vi.fn().mockResolvedValue(undefined);
+    const create = vi.fn().mockResolvedValue(undefined);
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
     const db = {
       orderSnapshotLine: {
         findMany: vi.fn().mockResolvedValue([
@@ -144,8 +145,26 @@ describe("materializeCauseAllocationsForPeriod", () => {
         ]),
       },
       causeAllocation: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "existing-cause-1",
+            causeId: "cause-1",
+            _count: { applications: 1 },
+          },
+          {
+            id: "stale-unpaid-cause",
+            causeId: "cause-stale",
+            _count: { applications: 0 },
+          },
+          {
+            id: "stale-paid-cause",
+            causeId: "cause-paid-stale",
+            _count: { applications: 1 },
+          },
+        ]),
+        updateMany,
         deleteMany,
-        createMany,
+        create,
       },
     };
 
@@ -162,19 +181,27 @@ describe("materializeCauseAllocationsForPeriod", () => {
     expect(result).toHaveLength(2);
     expect(result.find((row) => row.causeId === "cause-1")?.allocated.toString()).toBe("55");
     expect(result.find((row) => row.causeId === "cause-2")?.allocated.toString()).toBe("30");
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: "existing-cause-1",
+        shopId: "shop-1",
+      },
+      data: expect.objectContaining({
+        causeName: "Cause One",
+        allocated: expect.any(Prisma.Decimal),
+      }),
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        causeId: "cause-2",
+        allocated: expect.any(Prisma.Decimal),
+      }),
+    });
     expect(deleteMany).toHaveBeenCalledWith({
       where: {
         shopId: "shop-1",
-        periodId: "period-1",
+        id: { in: ["stale-unpaid-cause"] },
       },
-    });
-    expect(createMany).toHaveBeenCalledWith({
-      data: expect.arrayContaining([
-        expect.objectContaining({
-          causeId: "cause-1",
-          allocated: expect.any(Prisma.Decimal),
-        }),
-      ]),
     });
   });
 });
@@ -208,7 +235,8 @@ describe("closeReportingPeriod", () => {
       },
       causeAllocation: {
         deleteMany: vi.fn().mockResolvedValue(undefined),
-        createMany: vi.fn().mockResolvedValue(undefined),
+        create: vi.fn().mockResolvedValue(undefined),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         findMany: vi.fn().mockResolvedValue([]),
       },
       auditLog: {

@@ -7,6 +7,7 @@ const shopId = "playwright-test-shop.myshopify.com";
 const shopifyDomain = "playwright-test-shop.myshopify.com";
 const productShopifyId = "gid://shopify/Product/900000000001";
 const variantShopifyId = "gid://shopify/ProductVariant/900000000001";
+const sourceVariantShopifyId = "gid://shopify/ProductVariant/900000000002";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
@@ -74,10 +75,42 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  const sourceVariant = await prisma.variant.upsert({
+    where: {
+      shopId_shopifyId: {
+        shopId,
+        shopifyId: sourceVariantShopifyId,
+      },
+    },
+    update: {
+      productId: product.id,
+      title: "Playwright Source Variant",
+      sku: "PW-SOURCE",
+      price: "24.99",
+      syncedAt,
+    },
+    create: {
+      shopId,
+      shopifyId: sourceVariantShopifyId,
+      productId: product.id,
+      title: "Playwright Source Variant",
+      sku: "PW-SOURCE",
+      price: "24.99",
+      syncedAt,
+    },
+  });
+
   await prisma.variantCostConfig.deleteMany({
     where: {
       shopId,
-      variantId: variant.id,
+      variantId: { in: [variant.id, sourceVariant.id] },
+    },
+  });
+
+  await prisma.shippingPackage.deleteMany({
+    where: {
+      shopId,
+      name: "Playwright Source Package",
     },
   });
 
@@ -140,7 +173,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  await prisma.materialLibraryItem.create({
+  const productionMaterial = await prisma.materialLibraryItem.create({
     data: {
       shopId,
       name: "Playwright Yield Material",
@@ -168,7 +201,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  await prisma.equipmentLibraryItem.create({
+  const heatPress = await prisma.equipmentLibraryItem.create({
     data: {
       shopId,
       name: "Playwright Heat Press",
@@ -206,7 +239,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  await prisma.costTemplate.create({
+  const productionTemplate = await prisma.costTemplate.create({
     data: {
       shopId,
       name: "Playwright Production Template",
@@ -216,9 +249,64 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  const sourcePackage = await prisma.shippingPackage.create({
+    data: {
+      shopId,
+      name: "Playwright Source Package",
+      length: "10",
+      width: "8",
+      height: "3",
+      emptyWeightGrams: "50",
+      maxWeightGrams: "900",
+      status: "active",
+    },
+  });
+
+  await prisma.variantCostConfig.create({
+    data: {
+      shopId,
+      variantId: sourceVariant.id,
+      productionTemplateId: productionTemplate.id,
+      shippingTemplateId: inheritedShippingTemplate.id,
+      preferredPackageId: sourcePackage.id,
+      packedLength: "10",
+      packedWidth: "8",
+      packedHeight: "3",
+      packedWeightGrams: "250",
+      canSharePackage: false,
+      laborMinutes: "17",
+      laborRate: "18.50",
+      mistakeBuffer: "0.0750",
+      lineItemCount: 2,
+      materialLines: {
+        create: [
+          {
+            shopId,
+            materialId: productionMaterial.id,
+            quantity: "2",
+            yield: "5",
+            usesPerVariant: null,
+          },
+        ],
+      },
+      equipmentLines: {
+        create: [
+          {
+            shopId,
+            equipmentId: heatPress.id,
+            usageMode: "direct",
+            minutes: "4",
+            uses: "1",
+          },
+        ],
+      },
+    },
+  });
+
   return jsonResponse({
     shopId,
     variantId: variant.id,
+    sourceVariantId: sourceVariant.id,
     variantUrl: `${baseUrl}/app/variants/${variant.id}?__playwrightShop=${encodeURIComponent(shopId)}`,
   });
 };

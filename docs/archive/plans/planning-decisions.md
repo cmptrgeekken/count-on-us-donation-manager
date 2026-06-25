@@ -1,10 +1,12 @@
 # Planning Decisions
 
+Archived June 2026. GitHub Issues are now authoritative for open work and unresolved questions. This document is retained for historical context.
+
 This document records product, process, and operational decisions that were worked through from the old pending-questions log.
 
 It is meant to hold decisions and rationale that are useful to keep, but that do not rise to the level of an ADR.
 
-For still-open items, see [docs/plans/pending-questions.md](./pending-questions.md).
+For current open items, use GitHub Issues.
 
 ## Resolved Decisions
 
@@ -38,7 +40,7 @@ Related:
 - `#96`
 - `#97`
 - `#98`
-- [docs/plans/issue-85-printify-pod-rollout-plan.md](./issue-85-printify-pod-rollout-plan.md)
+- [issue-85-printify-pod-rollout-plan.md](./issue-85-printify-pod-rollout-plan.md)
 - [docs/adrs/adr-010-provider-rollout-strategy.md](../adrs/adr-010-provider-rollout-strategy.md)
 
 ### `#45` Shopify charge sync completion scope
@@ -141,7 +143,7 @@ Related:
 
 - `#57`
 - `#99`
-- [docs/plans/issue-99-public-transparency-page-plan.md](./issue-99-public-transparency-page-plan.md)
+- [issue-99-public-transparency-page-plan.md](./issue-99-public-transparency-page-plan.md)
 
 ### `#55` Post-purchase estimate parity for discounted orders
 

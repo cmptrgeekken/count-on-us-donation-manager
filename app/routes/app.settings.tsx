@@ -1,10 +1,11 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import { useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 
+import { adminFieldStyle, FetcherBanners, SectionHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
@@ -95,7 +96,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       defaultLaborRate: true,
       effectiveTaxRate: true,
       taxDeductionMode: true,
-      postPurchaseEmailEnabled: false,
+      postPurchaseEmailEnabled: true,
       artistSubmissionNotificationEmail: true,
     },
   });
@@ -113,6 +114,21 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     artistSubmissionNotificationEmail: shop?.artistSubmissionNotificationEmail ?? "",
   });
 };
+
+type SettingsTab = "financial" | "costs" | "tax" | "notifications" | "localization" | "advanced";
+
+const SETTINGS_TABS: Array<{ value: SettingsTab; label: string }> = [
+  { value: "financial", label: "Financial" },
+  { value: "costs", label: "Cost Defaults" },
+  { value: "tax", label: "Tax" },
+  { value: "notifications", label: "Notifications" },
+  { value: "localization", label: "Localization" },
+  { value: "advanced", label: "Advanced" },
+];
+
+function parseSettingsTab(value: string | null): SettingsTab {
+  return SETTINGS_TABS.some((tab) => tab.value === value) ? (value as SettingsTab) : "financial";
+}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticateAdminRequest(request);
@@ -418,6 +434,7 @@ export default function Settings() {
     artistSubmissionNotificationEmail,
   } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const [searchParams] = useSearchParams();
   const { currency, locale, formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
   const statusRef = useRef<HTMLDivElement>(null);
@@ -431,6 +448,7 @@ export default function Settings() {
   const [artistSubmissionNotificationEmailInput, setArtistSubmissionNotificationEmailInput] = useState(
     artistSubmissionNotificationEmail ?? "",
   );
+  const activeTab = parseSettingsTab(searchParams.get("section"));
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
@@ -445,10 +463,13 @@ export default function Settings() {
         aria-atomic="true"
         style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
       >
-        {statusMessage}
+        {statusMessage ? "Settings status updated." : ""}
       </div>
 
       <s-page>
+        <FetcherBanners data={fetcher.data} />
+
+        {activeTab === "financial" ? (
         <s-section heading="Shopify Payments">
           <div style={{ display: "grid", gap: "1rem" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
@@ -514,16 +535,7 @@ export default function Settings() {
                     type="date"
                     value={managedMarketsEnableDateInput}
                     onChange={(event) => setManagedMarketsEnableDateInput(event.currentTarget.value)}
-                    style={{
-                      width: "100%",
-                      boxSizing: "border-box",
-                      padding: "0.75rem",
-                      borderRadius: "0.75rem",
-                      border: "1px solid var(--p-color-border, #c9cccf)",
-                      background: "var(--p-color-bg-surface, #fff)",
-                      color: "var(--p-color-text, #303030)",
-                      font: "inherit",
-                    }}
+                    style={adminFieldStyle}
                   />
                 </div>
                 <s-text>
@@ -537,7 +549,9 @@ export default function Settings() {
             </fetcher.Form>
           </div>
         </s-section>
+        ) : null}
 
+        {activeTab === "costs" ? (
         <s-section heading="Cost Defaults">
           <fetcher.Form method="post">
             <input type="hidden" name="intent" value="update-cost-defaults" />
@@ -574,7 +588,9 @@ export default function Settings() {
             </div>
           </fetcher.Form>
         </s-section>
+        ) : null}
 
+        {activeTab === "tax" ? (
         <s-section heading="Tax Estimation">
           <fetcher.Form method="post">
             <input type="hidden" name="intent" value="update-tax-settings" />
@@ -612,7 +628,7 @@ export default function Settings() {
                         flexWrap: "wrap",
                         padding: "0.6rem 0.75rem",
                         border: "1px solid var(--p-color-border, #d2d5d8)",
-                        borderRadius: "0.75rem",
+                        borderRadius: "0.5rem",
                         background: "var(--p-color-bg-surface-secondary, #f6f6f7)",
                       }}
                     >
@@ -644,16 +660,7 @@ export default function Settings() {
                   name="taxDeductionMode"
                   value={taxDeductionModeInput}
                   onChange={(event) => setTaxDeductionModeInput(event.currentTarget.value)}
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: "0.75rem",
-                    borderRadius: "0.75rem",
-                    border: "1px solid var(--p-color-border, #c9cccf)",
-                    background: "var(--p-color-bg-surface, #fff)",
-                    color: "var(--p-color-text, #303030)",
-                    font: "inherit",
-                  }}
+                  style={adminFieldStyle}
                 >
                   <option value="dont_deduct">Don&apos;t deduct</option>
                   <option value="non_501c3_only">Deduct from non-501(c)3 causes only</option>
@@ -669,7 +676,9 @@ export default function Settings() {
             </div>
           </fetcher.Form>
         </s-section>
+        ) : null}
 
+        {activeTab === "localization" ? (
         <s-section heading="Localization">
           <div style={{ display: "grid", gap: "1rem" }}>
             <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
@@ -698,7 +707,9 @@ export default function Settings() {
             </fetcher.Form>
           </div>
         </s-section>
+        ) : null}
 
+        {activeTab === "notifications" ? (
         <s-section heading="Donation Email">
           <fetcher.Form method="post">
             <input type="hidden" name="intent" value="update-email-settings" />
@@ -744,17 +755,26 @@ export default function Settings() {
             </div>
           </fetcher.Form>
         </s-section>
+        ) : null}
 
-        <s-section heading="Audit Log">
+        {activeTab === "advanced" ? (
+        <s-section heading="Advanced">
           <div style={{ display: "grid", gap: "0.75rem" }}>
-            <s-text>Browse financial change history, filter by event type, and inspect payload details.</s-text>
+            <SectionHeader
+              title="Audit Log"
+              description="Browse financial change history, filter by event type, and inspect payload details."
+            />
             <div>
               <Link to="/app/audit-log">
                 <s-button>Open audit log</s-button>
               </Link>
             </div>
+            <s-text color="subdued">
+              Future capability, disclosure, and data lifecycle controls should live in this advanced group rather than in the financial setup flow.
+            </s-text>
           </div>
         </s-section>
+        ) : null}
       </s-page>
     </>
   );

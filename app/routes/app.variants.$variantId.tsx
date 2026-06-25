@@ -32,6 +32,8 @@ import {
 import {
   parseOptionalNonNegativeNumber,
   parseOptionalNonNegativeWholeNumber,
+  parseOptionalPositiveNumber,
+  parseOptionalPositiveWholeNumber,
   parseOptionalPercent,
   parseRequiredNonNegativeWholeNumber,
 } from "../utils/number-parsing";
@@ -69,8 +71,12 @@ type SerializedEquipmentLine = {
   equipmentName: string;
   hourlyRate: string | null;
   perUseCost: string | null;
+  usageMode: string;
   minutes: string | null;
   uses: string | null;
+  yieldDurationMinutes: string | null;
+  yieldUses: string | null;
+  yieldQuantity: string | null;
 };
 
 type TemplateMaterialOverrideLine = {
@@ -93,11 +99,19 @@ type TemplateEquipmentOverrideLine = {
   templateLineId: string;
   equipmentId: string;
   equipmentName: string;
+  usageMode: string;
   minutes: string | null;
   uses: string | null;
+  yieldDurationMinutes: string | null;
+  yieldUses: string | null;
+  yieldQuantity: string | null;
   overrideLineId: string | null;
+  overrideUsageMode: string | null;
   overrideMinutes: string | null;
   overrideUses: string | null;
+  overrideYieldDurationMinutes: string | null;
+  overrideYieldUses: string | null;
+  overrideYieldQuantity: string | null;
   hasOverride: boolean;
 };
 
@@ -160,8 +174,12 @@ function serializeVariantEquipmentLine(
     id: string;
     equipmentId: string;
     equipment: { name: string; hourlyRate: { toString(): string } | null; perUseCost: { toString(): string } | null };
+    usageMode: string;
     minutes: { toString(): string } | null;
     uses: { toString(): string } | null;
+    yieldDurationMinutes: { toString(): string } | null;
+    yieldUses: { toString(): string } | null;
+    yieldQuantity: { toString(): string } | null;
   },
 ): SerializedEquipmentLine {
   return {
@@ -170,9 +188,21 @@ function serializeVariantEquipmentLine(
     equipmentName: line.equipment.name,
     hourlyRate: line.equipment.hourlyRate?.toString() ?? null,
     perUseCost: line.equipment.perUseCost?.toString() ?? null,
+    usageMode: line.usageMode ?? "direct",
     minutes: line.minutes?.toString() ?? null,
     uses: line.uses?.toString() ?? null,
+    yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
+    yieldUses: line.yieldUses?.toString() ?? null,
+    yieldQuantity: line.yieldQuantity?.toString() ?? null,
   };
+}
+
+function sortSerializedMaterialLines(lines: SerializedMaterialLine[]) {
+  return [...lines].sort((a, b) => a.materialName.localeCompare(b.materialName));
+}
+
+function sortSerializedEquipmentLines(lines: SerializedEquipmentLine[]) {
+  return [...lines].sort((a, b) => a.equipmentName.localeCompare(b.equipmentName));
 }
 
 function formatProviderName(provider: string) {
@@ -203,8 +233,12 @@ const variantDraftSchema = z.object({
     templateLineId: z.string(),
     equipmentId: z.string(),
     hasOverride: z.boolean(),
+    overrideUsageMode: z.string().nullable().optional(),
     overrideMinutes: z.string().nullable(),
     overrideUses: z.string().nullable(),
+    overrideYieldDurationMinutes: z.string().nullable().optional(),
+    overrideYieldUses: z.string().nullable().optional(),
+    overrideYieldQuantity: z.string().nullable().optional(),
   })),
   materialLines: z.array(z.object({
     materialId: z.string(),
@@ -214,9 +248,17 @@ const variantDraftSchema = z.object({
   })),
   equipmentLines: z.array(z.object({
     equipmentId: z.string(),
+    usageMode: z.string().nullable().optional(),
     minutes: z.string().nullable(),
     uses: z.string().nullable(),
+    yieldDurationMinutes: z.string().nullable().optional(),
+    yieldUses: z.string().nullable().optional(),
+    yieldQuantity: z.string().nullable().optional(),
   })),
+});
+
+const copyVariantConfigSchema = z.object({
+  sourceVariantId: z.string().min(1),
 });
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -250,12 +292,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         include: {
           productionTemplate: {
             include: {
-              materialLines: { include: { material: true } },
-              equipmentLines: { include: { equipment: true } },
+              materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+              equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
             },
           },
-          materialLines: { include: { material: true, templateLine: true } },
-          equipmentLines: { include: { equipment: true, templateLine: true } },
+          materialLines: { include: { material: true, templateLine: true }, orderBy: { material: { name: "asc" } } },
+          equipmentLines: { include: { equipment: true, templateLine: true }, orderBy: { equipment: { name: "asc" } } },
         },
       },
     },
@@ -265,13 +307,13 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const [templates, materials, equipment, packages] = await Promise.all([
+  const [templates, materials, equipment, packages, copySourceVariants] = await Promise.all([
     prisma.costTemplate.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
       include: {
-        materialLines: { include: { material: true }, orderBy: { id: "asc" } },
-        equipmentLines: { include: { equipment: true }, orderBy: { id: "asc" } },
+        materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+        equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
       },
     }),
     prisma.materialLibraryItem.findMany({
@@ -288,6 +330,26 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
       select: { id: true, name: true, length: true, width: true, height: true },
+    }),
+    prisma.variant.findMany({
+      where: {
+        shopId,
+        id: { not: variant.id },
+        costConfig: { isNot: null },
+      },
+      orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
+      select: {
+        id: true,
+        title: true,
+        sku: true,
+        product: { select: { title: true } },
+        costConfig: {
+          select: {
+            lineItemCount: true,
+            productionTemplate: { select: { name: true } },
+          },
+        },
+      },
     }),
   ]);
 
@@ -347,6 +409,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     additionalMaterialLines = config.materialLines
       .filter((line) => !line.templateLineId && !consumedMaterialLineIds.has(line.id))
       .map(serializeVariantMaterialLine);
+    additionalMaterialLines = sortSerializedMaterialLines(additionalMaterialLines);
 
     const templateEquipmentSource = config.productionTemplate?.equipmentLines ?? [];
     const explicitEquipmentOverrides = new Map(
@@ -380,11 +443,19 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         templateLineId: line.id,
         equipmentId: line.equipmentId,
         equipmentName: line.equipment.name,
+        usageMode: line.usageMode ?? "direct",
         minutes: line.minutes?.toString() ?? null,
         uses: line.uses?.toString() ?? null,
+        yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
+        yieldUses: line.yieldUses?.toString() ?? null,
+        yieldQuantity: line.yieldQuantity?.toString() ?? null,
         overrideLineId: override?.id ?? null,
+        overrideUsageMode: override?.usageMode ?? null,
         overrideMinutes: override?.minutes?.toString() ?? null,
         overrideUses: override?.uses?.toString() ?? null,
+        overrideYieldDurationMinutes: override?.yieldDurationMinutes?.toString() ?? null,
+        overrideYieldUses: override?.yieldUses?.toString() ?? null,
+        overrideYieldQuantity: override?.yieldQuantity?.toString() ?? null,
         hasOverride: Boolean(override),
       };
     });
@@ -392,6 +463,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     additionalEquipmentLines = config.equipmentLines
       .filter((line) => !line.templateLineId && !consumedEquipmentLineIds.has(line.id))
       .map(serializeVariantEquipmentLine);
+    additionalEquipmentLines = sortSerializedEquipmentLines(additionalEquipmentLines);
   }
 
   const serializedProviderMappings: SerializedProviderMapping[] = variant.providerMappings.map((mapping) => {
@@ -476,8 +548,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         templateLineId: line.id,
         equipmentId: line.equipmentId,
         equipmentName: line.equipment.name,
+        usageMode: line.usageMode ?? "direct",
         minutes: line.minutes?.toString() ?? null,
         uses: line.uses?.toString() ?? null,
+        yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
+        yieldUses: line.yieldUses?.toString() ?? null,
+        yieldQuantity: line.yieldQuantity?.toString() ?? null,
       })),
     })),
     availableMaterials: materials.map((material) => ({
@@ -498,6 +574,14 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       id: pkg.id,
       name: pkg.name,
       dimensions: `${pkg.length} x ${pkg.width} x ${pkg.height}`,
+    })),
+    copySourceVariants: copySourceVariants.map((sourceVariant) => ({
+      id: sourceVariant.id,
+      title: sourceVariant.title,
+      sku: sourceVariant.sku ?? "",
+      productTitle: sourceVariant.product.title,
+      templateName: sourceVariant.costConfig?.productionTemplate?.name ?? null,
+      lineItemCount: sourceVariant.costConfig?.lineItemCount ?? 0,
     })),
   });
 };
@@ -793,34 +877,72 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         templateLineId: line.templateLineId,
         materialId: line.materialId,
         quantity: parseOptionalNonNegativeWholeNumber(line.overrideQuantity, "Material quantity") ?? 0,
-        yield: parseOptionalNonNegativeWholeNumber(line.overrideYield, "Material yield"),
-        usesPerVariant: parseOptionalNonNegativeWholeNumber(line.overrideUsesPerVariant, "Material uses per variant"),
+        yield: parseOptionalNonNegativeWholeNumber(line.overrideYield, "Items made from one purchased unit"),
+        usesPerVariant: parseOptionalNonNegativeWholeNumber(line.overrideUsesPerVariant, "Portions used per item"),
       }));
 
     const equipmentOverrideLines = draft.templateEquipmentLines
       .filter((line) => line.hasOverride)
-      .map((line) => ({
-        shopId,
-        templateLineId: line.templateLineId,
-        equipmentId: line.equipmentId,
-        minutes: parseOptionalNonNegativeNumber(line.overrideMinutes, "Equipment minutes"),
-        uses: parseOptionalNonNegativeWholeNumber(line.overrideUses, "Equipment uses"),
-      }));
+      .map((line) => {
+        const usageMode = line.overrideUsageMode || "direct";
+        const data = {
+          shopId,
+          templateLineId: line.templateLineId,
+          equipmentId: line.equipmentId,
+          usageMode,
+          minutes: usageMode === "direct" ? parseOptionalNonNegativeNumber(line.overrideMinutes, "Equipment minutes") : null,
+          uses: usageMode === "direct" ? parseOptionalNonNegativeWholeNumber(line.overrideUses, "Equipment uses") : null,
+          yieldDurationMinutes: usageMode === "duration_yield" ? parseOptionalPositiveNumber(line.overrideYieldDurationMinutes, "Equipment yield duration") : null,
+          yieldUses: usageMode === "use_yield" ? parseOptionalPositiveWholeNumber(line.overrideYieldUses, "Equipment yield uses") : null,
+          yieldQuantity: usageMode !== "direct" ? parseOptionalPositiveWholeNumber(line.overrideYieldQuantity, "Products yielded") : null,
+        };
+
+        if (usageMode === "duration_yield" && data.yieldDurationMinutes === null) {
+          throw new Response("Equipment yield duration must be greater than 0.", { status: 400 });
+        }
+        if (usageMode === "use_yield" && data.yieldUses === null) {
+          throw new Response("Equipment yield uses must be a positive whole number.", { status: 400 });
+        }
+        if (usageMode !== "direct" && data.yieldQuantity === null) {
+          throw new Response("Products yielded must be a positive whole number.", { status: 400 });
+        }
+
+        return data;
+      });
 
     const additionalMaterialLines = draft.materialLines.map((line) => ({
       shopId,
       materialId: line.materialId,
       quantity: parseOptionalNonNegativeWholeNumber(line.quantity, "Material quantity") ?? 0,
-      yield: parseOptionalNonNegativeWholeNumber(line.yield, "Material yield"),
-      usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Material uses per variant"),
+      yield: parseOptionalNonNegativeWholeNumber(line.yield, "Items made from one purchased unit"),
+      usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Portions used per item"),
     }));
 
-    const additionalEquipmentLines = draft.equipmentLines.map((line) => ({
-      shopId,
-      equipmentId: line.equipmentId,
-      minutes: parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes"),
-      uses: parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses"),
-    }));
+    const additionalEquipmentLines = draft.equipmentLines.map((line) => {
+      const usageMode = line.usageMode || "direct";
+      const data = {
+        shopId,
+        equipmentId: line.equipmentId,
+        usageMode,
+        minutes: usageMode === "direct" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
+        uses: usageMode === "direct" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
+        yieldDurationMinutes: usageMode === "duration_yield" ? parseOptionalPositiveNumber(line.yieldDurationMinutes, "Equipment yield duration") : null,
+        yieldUses: usageMode === "use_yield" ? parseOptionalPositiveWholeNumber(line.yieldUses, "Equipment yield uses") : null,
+        yieldQuantity: usageMode !== "direct" ? parseOptionalPositiveWholeNumber(line.yieldQuantity, "Products yielded") : null,
+      };
+
+      if (usageMode === "duration_yield" && data.yieldDurationMinutes === null) {
+        throw new Response("Equipment yield duration must be greater than 0.", { status: 400 });
+      }
+      if (usageMode === "use_yield" && data.yieldUses === null) {
+        throw new Response("Equipment yield uses must be a positive whole number.", { status: 400 });
+      }
+      if (usageMode !== "direct" && data.yieldQuantity === null) {
+        throw new Response("Products yielded must be a positive whole number.", { status: 400 });
+      }
+
+      return data;
+    });
 
     await prisma.$transaction(async (tx) => {
       let configId = existingConfig?.id;
@@ -900,6 +1022,130 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return jsonResponse({
       ok: true,
       message: "Variant configuration saved.",
+      savedAt: new Date().toISOString(),
+    });
+  }
+
+  if (intent === "copy-variant-config") {
+    const parsed = copyVariantConfigSchema.safeParse({
+      sourceVariantId: formData.get("sourceVariantId")?.toString() ?? "",
+    });
+
+    if (!parsed.success) {
+      return jsonResponse({ ok: false, message: "Select a source variant." }, { status: 400 });
+    }
+
+    const { sourceVariantId } = parsed.data;
+    if (sourceVariantId === variantId) {
+      return jsonResponse({ ok: false, message: "Choose a different source variant." }, { status: 400 });
+    }
+
+    const sourceConfig = await prisma.variantCostConfig.findFirst({
+      where: {
+        shopId,
+        variant: { id: sourceVariantId, shopId },
+      },
+      include: {
+        materialLines: true,
+        equipmentLines: true,
+      },
+    });
+
+    if (!sourceConfig) {
+      return jsonResponse({ ok: false, message: "Source variant configuration not found." }, { status: 404 });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const copiedConfigData = {
+        productionTemplateId: sourceConfig.productionTemplateId,
+        shippingTemplateId: sourceConfig.shippingTemplateId,
+        preferredPackageId: sourceConfig.preferredPackageId,
+        packedLength: sourceConfig.packedLength,
+        packedWidth: sourceConfig.packedWidth,
+        packedHeight: sourceConfig.packedHeight,
+        packedWeightGrams: sourceConfig.packedWeightGrams,
+        canSharePackage: sourceConfig.canSharePackage,
+        laborMinutes: sourceConfig.laborMinutes,
+        laborRate: sourceConfig.laborRate,
+        mistakeBuffer: sourceConfig.mistakeBuffer,
+        lineItemCount: sourceConfig.materialLines.length + sourceConfig.equipmentLines.length,
+      };
+
+      const existingTargetConfig = await tx.variantCostConfig.findFirst({
+        where: { variantId, shopId },
+        select: { id: true },
+      });
+
+      const targetConfig = existingTargetConfig
+        ? existingTargetConfig
+        : await tx.variantCostConfig.create({
+            data: {
+              shopId,
+              variantId,
+              ...copiedConfigData,
+            },
+          });
+
+      if (existingTargetConfig) {
+        await tx.variantCostConfig.updateMany({
+          where: { id: existingTargetConfig.id, shopId },
+          data: copiedConfigData,
+        });
+      }
+
+      await tx.variantMaterialLine.deleteMany({ where: { configId: targetConfig.id, shopId } });
+      await tx.variantEquipmentLine.deleteMany({ where: { configId: targetConfig.id, shopId } });
+
+      if (sourceConfig.materialLines.length > 0) {
+        await tx.variantMaterialLine.createMany({
+          data: sourceConfig.materialLines.map((line) => ({
+            shopId,
+            configId: targetConfig.id,
+            materialId: line.materialId,
+            templateLineId: line.templateLineId,
+            quantity: line.quantity,
+            yield: line.yield,
+            usesPerVariant: line.usesPerVariant,
+          })),
+        });
+      }
+
+      if (sourceConfig.equipmentLines.length > 0) {
+        await tx.variantEquipmentLine.createMany({
+          data: sourceConfig.equipmentLines.map((line) => ({
+            shopId,
+            configId: targetConfig.id,
+            equipmentId: line.equipmentId,
+            templateLineId: line.templateLineId,
+            usageMode: line.usageMode,
+            minutes: line.minutes,
+            uses: line.uses,
+            yieldDurationMinutes: line.yieldDurationMinutes,
+            yieldUses: line.yieldUses,
+            yieldQuantity: line.yieldQuantity,
+          })),
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "VariantCostConfig",
+          entityId: targetConfig.id,
+          action: "VARIANT_CONFIG_COPIED",
+          actor: "merchant",
+          payload: {
+            sourceVariantId,
+            materialLineCount: sourceConfig.materialLines.length,
+            equipmentLineCount: sourceConfig.equipmentLines.length,
+          },
+        },
+      });
+    });
+
+    return jsonResponse({
+      ok: true,
+      message: "Variant configuration copied.",
       savedAt: new Date().toISOString(),
     });
   }
@@ -1065,8 +1311,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const quantity = parseRequiredNonNegativeWholeNumber(formData.get("quantity")?.toString(), "Material quantity");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
-    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Material yield");
-    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Material uses per variant");
+    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Items made from one purchased unit");
+    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Portions used per item");
     const config = await ensureConfig();
     const templateLine = await requireTemplateMaterialLine(config.id, templateLineId);
     await requireMaterial(materialId);
@@ -1150,8 +1396,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const quantity = parseRequiredNonNegativeWholeNumber(formData.get("quantity")?.toString(), "Material quantity");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
-    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Material yield");
-    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Material uses per variant");
+    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Items made from one purchased unit");
+    const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Portions used per item");
     const config = await ensureConfig();
 
     await prisma.$transaction([
@@ -1365,23 +1611,46 @@ type AvailablePackage = {
   dimensions: string;
 };
 
+type CopySourceVariant = {
+  id: string;
+  title: string;
+  sku: string;
+  productTitle: string;
+  templateName: string | null;
+  lineItemCount: number;
+};
+
 function describeMaterialLine(line: {
   costingModel: string | null;
   quantity: string | null;
   yield: string | null;
   usesPerVariant: string | null;
 }) {
-  if (line.costingModel === "uses") {
-    return `Uses: ${line.usesPerVariant ?? "0"}`;
+  if (line.costingModel === "counted") {
+    return `Counted parts: ${line.quantity ?? "0"} per item`;
   }
 
-  return `Qty: ${line.quantity ?? "0"} - Yield: ${line.yield ?? "0"}`;
+  if (line.costingModel === "uses") {
+    return `Portioned use: ${line.usesPerVariant ?? "0"} portion(s) per item`;
+  }
+
+  return `Variable yield: ${line.quantity ?? "0"} purchased unit(s), ${line.yield ?? "0"} items per purchased unit`;
 }
 
 function describeEquipmentLine(line: {
+  usageMode?: string | null;
   minutes: string | null;
   uses: string | null;
+  yieldDurationMinutes?: string | null;
+  yieldUses?: string | null;
+  yieldQuantity?: string | null;
 }) {
+  if (line.usageMode === "duration_yield") {
+    return `${line.yieldDurationMinutes ?? "-"} min yields ${line.yieldQuantity ?? "-"} products`;
+  }
+  if (line.usageMode === "use_yield") {
+    return `${line.yieldUses ?? "-"} uses yields ${line.yieldQuantity ?? "-"} products`;
+  }
   return [line.minutes ? `${line.minutes} min` : null, line.uses ? `${line.uses} uses` : null]
     .filter(Boolean)
     .join(" · ");
@@ -1428,9 +1697,10 @@ function serializeVariantDraftState(draft: VariantDraft) {
 }
 
 export default function VariantDetailPage() {
-  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment, packages } =
+  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment, packages, copySourceVariants } =
     useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
+  const copyFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
   const previewFetcher = useFetcher<{
     ok: boolean;
     message: string;
@@ -1468,18 +1738,33 @@ export default function VariantDetailPage() {
   const [addEquipmentOpen, setAddEquipmentOpen] = useState(false);
   const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
   const [equipmentSearchValue, setEquipmentSearchValue] = useState("");
+  const [eqUsageMode, setEqUsageMode] = useState("direct");
   const [eqMinutes, setEqMinutes] = useState("");
   const [eqUses, setEqUses] = useState("");
+  const [eqYieldDurationMinutes, setEqYieldDurationMinutes] = useState("");
+  const [eqYieldUses, setEqYieldUses] = useState("");
+  const [eqYieldQuantity, setEqYieldQuantity] = useState("");
 
   const [equipmentOverrideTargetId, setEquipmentOverrideTargetId] = useState<string | null>(null);
+  const [overrideEqUsageMode, setOverrideEqUsageMode] = useState("direct");
   const [overrideEqMinutes, setOverrideEqMinutes] = useState("");
   const [overrideEqUses, setOverrideEqUses] = useState("");
+  const [overrideEqYieldDurationMinutes, setOverrideEqYieldDurationMinutes] = useState("");
+  const [overrideEqYieldUses, setOverrideEqYieldUses] = useState("");
+  const [overrideEqYieldQuantity, setOverrideEqYieldQuantity] = useState("");
+
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [selectedCopySourceId, setSelectedCopySourceId] = useState("");
+  const [copySourceSearchValue, setCopySourceSearchValue] = useState("");
 
   const [baseDraft, setBaseDraft] = useState(() => buildVariantDraft(config));
   const [draft, setDraft] = useState(() => buildVariantDraft(config));
   const handledSaveRef = useRef<string | null>(null);
+  const handledCopyRef = useRef<string | null>(null);
+  const preCopyDraftStateRef = useRef<string | null>(null);
 
   const isSaving = saveFetcher.state !== "idle";
+  const isCopying = copyFetcher.state !== "idle";
   const productionTemplates = templates.filter((template: TemplateCatalogEntry) => template.type !== "shipping");
   const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
   const packageOptions = [
@@ -1515,6 +1800,23 @@ export default function VariantDetailPage() {
       equipment.name.toLowerCase().includes(equipmentSearchValue.trim().toLowerCase()),
     )
     .map((equipment: AvailableEquipment) => ({ label: equipment.name, value: equipment.id }));
+  const filteredCopySourceOptions = copySourceVariants
+    .filter((sourceVariant: CopySourceVariant) => {
+      const query = copySourceSearchValue.trim().toLowerCase();
+      if (!query) return true;
+      return [
+        sourceVariant.productTitle,
+        sourceVariant.title,
+        sourceVariant.sku,
+        sourceVariant.templateName ?? "",
+      ].some((value) => value.toLowerCase().includes(query));
+    })
+    .map((sourceVariant: CopySourceVariant) => ({
+      value: sourceVariant.id,
+      label: `${sourceVariant.productTitle} - ${sourceVariant.title}${
+        sourceVariant.sku ? ` (${sourceVariant.sku})` : ""
+      }`,
+    }));
   const additionalProductionMaterialLines = draft.materialLines.filter(
     (line: SerializedMaterialLine) => line.materialType === "production",
   );
@@ -1536,6 +1838,9 @@ export default function VariantDetailPage() {
   const laborRateHelpText = shopDefaultLaborRate
     ? `Leave blank to use the shop default of ${formatMoney(shopDefaultLaborRate)}/hr.`
     : "Leave blank to avoid a variant override. Set a shop default in Settings to make variants inherit one.";
+  const loadedVariantDraftState = serializeVariantDraftState(buildVariantDraft(config));
+  const selectedCopySource =
+    copySourceVariants.find((sourceVariant: CopySourceVariant) => sourceVariant.id === selectedCopySourceId) ?? null;
 
   useEffect(() => {
     if (!saveFetcher.data?.ok || !saveFetcher.data.savedAt || saveFetcher.data.savedAt === handledSaveRef.current) return;
@@ -1545,6 +1850,24 @@ export default function VariantDetailPage() {
     setDraft(committedDraft);
     revalidator.revalidate();
   }, [draft, revalidator, saveFetcher.data]);
+
+  useEffect(() => {
+    if (!copyFetcher.data?.ok || !copyFetcher.data.savedAt || copyFetcher.data.savedAt === handledCopyRef.current) return;
+    handledCopyRef.current = copyFetcher.data.savedAt;
+    preCopyDraftStateRef.current = loadedVariantDraftState;
+    setCopyDialogOpen(false);
+    setSelectedCopySourceId("");
+    setCopySourceSearchValue("");
+    revalidator.revalidate();
+  }, [copyFetcher.data, loadedVariantDraftState, revalidator]);
+
+  useEffect(() => {
+    if (!preCopyDraftStateRef.current || preCopyDraftStateRef.current === loadedVariantDraftState) return;
+    preCopyDraftStateRef.current = null;
+    const loadedDraft = buildVariantDraft(config);
+    setBaseDraft(loadedDraft);
+    setDraft(cloneDraft(loadedDraft));
+  }, [config, loadedVariantDraftState]);
 
   function resetAdditionalMaterialModal() {
     setSelectedMaterialId("");
@@ -1557,8 +1880,12 @@ export default function VariantDetailPage() {
   function resetAdditionalEquipmentModal() {
     setSelectedEquipmentId("");
     setEquipmentSearchValue("");
+    setEqUsageMode("direct");
     setEqMinutes("");
     setEqUses("");
+    setEqYieldDurationMinutes("");
+    setEqYieldUses("");
+    setEqYieldQuantity("");
   }
 
   function openMaterialOverride(line: VariantTemplateMaterialDraftLine) {
@@ -1577,20 +1904,31 @@ export default function VariantDetailPage() {
 
   function openEquipmentOverride(line: VariantTemplateEquipmentDraftLine) {
     setEquipmentOverrideTargetId(line.templateLineId);
+    setOverrideEqUsageMode(line.overrideUsageMode ?? line.usageMode ?? "direct");
     setOverrideEqMinutes(line.overrideMinutes ?? line.minutes ?? "");
     setOverrideEqUses(line.overrideUses ?? line.uses ?? "");
+    setOverrideEqYieldDurationMinutes(line.overrideYieldDurationMinutes ?? line.yieldDurationMinutes ?? "");
+    setOverrideEqYieldUses(line.overrideYieldUses ?? line.yieldUses ?? "");
+    setOverrideEqYieldQuantity(line.overrideYieldQuantity ?? line.yieldQuantity ?? "");
   }
 
   function closeEquipmentOverride() {
     setEquipmentOverrideTargetId(null);
+    setOverrideEqUsageMode("direct");
     setOverrideEqMinutes("");
     setOverrideEqUses("");
+    setOverrideEqYieldDurationMinutes("");
+    setOverrideEqYieldUses("");
+    setOverrideEqYieldQuantity("");
   }
 
   function discardChanges() {
     setDraft(cloneDraft(baseDraft));
     setAssignTemplateOpen(false);
     setAssignShippingTemplateOpen(false);
+    setCopyDialogOpen(false);
+    setSelectedCopySourceId("");
+    setCopySourceSearchValue("");
     setMaterialOverrideTargetId(null);
     setEquipmentOverrideTargetId(null);
     setAddMaterialOpen(false);
@@ -1606,6 +1944,14 @@ export default function VariantDetailPage() {
     formData.append("intent", "save-variant-draft");
     formData.append("draft", JSON.stringify(normalizeVariantDraft(draft)));
     saveFetcher.submit(formData, { method: "post" });
+  }
+
+  function copySelectedVariantConfig() {
+    if (!selectedCopySourceId || isDirty) return;
+    const formData = new FormData();
+    formData.append("intent", "copy-variant-config");
+    formData.append("sourceVariantId", selectedCopySourceId);
+    copyFetcher.submit(formData, { method: "post" });
   }
 
   function applySelectedTemplate() {
@@ -1644,7 +1990,10 @@ export default function VariantDetailPage() {
       usesPerVariant: selectedMaterial.costingModel === "uses" ? (matUses || null) : null,
     };
 
-    setDraft((current) => ({ ...current, materialLines: [...current.materialLines, nextLine] }));
+    setDraft((current) => ({
+      ...current,
+      materialLines: sortSerializedMaterialLines([...current.materialLines, nextLine]),
+    }));
     setAddMaterialOpen(false);
     resetAdditionalMaterialModal();
   }
@@ -1665,11 +2014,18 @@ export default function VariantDetailPage() {
       equipmentName: selectedEquipment.name,
       hourlyRate: selectedEquipment.hourlyRate,
       perUseCost: selectedEquipment.perUseCost,
-      minutes: eqMinutes || null,
-      uses: eqUses || null,
+      usageMode: eqUsageMode,
+      minutes: eqUsageMode === "direct" ? (eqMinutes || null) : null,
+      uses: eqUsageMode === "direct" ? (eqUses || null) : null,
+      yieldDurationMinutes: eqUsageMode === "duration_yield" ? (eqYieldDurationMinutes || null) : null,
+      yieldUses: eqUsageMode === "use_yield" ? (eqYieldUses || null) : null,
+      yieldQuantity: eqUsageMode !== "direct" ? (eqYieldQuantity || null) : null,
     };
 
-    setDraft((current) => ({ ...current, equipmentLines: [...current.equipmentLines, nextLine] }));
+    setDraft((current) => ({
+      ...current,
+      equipmentLines: sortSerializedEquipmentLines([...current.equipmentLines, nextLine]),
+    }));
     setAddEquipmentOpen(false);
     resetAdditionalEquipmentModal();
   }
@@ -1728,8 +2084,12 @@ export default function VariantDetailPage() {
           ? {
               ...line,
               hasOverride: true,
-              overrideMinutes: overrideEqMinutes || null,
-              overrideUses: overrideEqUses || null,
+              overrideUsageMode: overrideEqUsageMode,
+              overrideMinutes: overrideEqUsageMode === "direct" ? (overrideEqMinutes || null) : null,
+              overrideUses: overrideEqUsageMode === "direct" ? (overrideEqUses || null) : null,
+              overrideYieldDurationMinutes: overrideEqUsageMode === "duration_yield" ? (overrideEqYieldDurationMinutes || null) : null,
+              overrideYieldUses: overrideEqUsageMode === "use_yield" ? (overrideEqYieldUses || null) : null,
+              overrideYieldQuantity: overrideEqUsageMode !== "direct" ? (overrideEqYieldQuantity || null) : null,
             }
           : line,
       ),
@@ -1745,8 +2105,12 @@ export default function VariantDetailPage() {
           ? {
               ...line,
               hasOverride: false,
+              overrideUsageMode: null,
               overrideMinutes: null,
               overrideUses: null,
+              overrideYieldDurationMinutes: null,
+              overrideYieldUses: null,
+              overrideYieldQuantity: null,
             }
           : line,
       ),
@@ -1772,7 +2136,7 @@ export default function VariantDetailPage() {
         aria-atomic="true"
         style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
       >
-        {saveFetcher.data?.message ?? previewFetcher.data?.message ?? ""}
+        {saveFetcher.data?.message ?? copyFetcher.data?.message ?? previewFetcher.data?.message ?? ""}
       </div>
 
       <BlockStack gap="600">
@@ -1782,6 +2146,39 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">SKU: {variant.sku || "-"}</Text>
               <Text as="p" variant="bodyMd" tone="subdued">Price: {formatMoney(variant.price)}</Text>
             </InlineStack>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between" blockAlign="center">
+              <BlockStack gap="100">
+                <Text as="h2" variant="headingMd">Copy configuration</Text>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Overwrite this variant with settings from another configured variant.
+                </Text>
+              </BlockStack>
+              <Button
+                onClick={() => {
+                  setSelectedCopySourceId("");
+                  setCopySourceSearchValue("");
+                  setCopyDialogOpen(true);
+                }}
+                disabled={copySourceVariants.length === 0 || isDirty}
+              >
+                Copy from variant
+              </Button>
+            </InlineStack>
+            {isDirty ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Save or discard your staged changes before copying another variant configuration.
+              </Text>
+            ) : null}
+            {copySourceVariants.length === 0 ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                No other configured variants are available to copy from.
+              </Text>
+            ) : null}
           </BlockStack>
         </Card>
 
@@ -2278,8 +2675,12 @@ export default function VariantDetailPage() {
                         {line.hasOverride && (
                           <Text as="p" variant="bodyMd" tone="subdued">
                             Override: {describeEquipmentLine({
+                              usageMode: line.overrideUsageMode,
                               minutes: line.overrideMinutes,
                               uses: line.overrideUses,
+                              yieldDurationMinutes: line.overrideYieldDurationMinutes,
+                              yieldUses: line.overrideYieldUses,
+                              yieldQuantity: line.overrideYieldQuantity,
                             })}
                           </Text>
                         )}
@@ -2394,6 +2795,10 @@ export default function VariantDetailPage() {
                   <Text as="p" variant="bodyMd">{formatMoney(preview.mistakeBufferAmount)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
+                  <Text as="p" variant="bodyMd">Artist payout</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.artistPayout)}</Text>
+                </InlineStack>
+                <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Approx. Shopify/payment fees</Text>
                   <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.shopifyFees)}</Text>
                 </InlineStack>
@@ -2442,6 +2847,73 @@ export default function VariantDetailPage() {
           </BlockStack>
         </Card>
       </BlockStack>
+
+      <Modal
+        open={copyDialogOpen}
+        onClose={() => setCopyDialogOpen(false)}
+        title="Copy variant configuration"
+        primaryAction={{
+          content: "Copy configuration",
+          loading: isCopying,
+          disabled: !selectedCopySourceId || isDirty,
+          onAction: copySelectedVariantConfig,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setCopyDialogOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            <Text as="p" variant="bodyMd" tone="subdued">
+              This will overwrite the production template, shipping override, package settings, labor, mistake buffer,
+              material lines, and equipment lines on this variant.
+            </Text>
+            <Autocomplete
+              options={filteredCopySourceOptions}
+              selected={selectedCopySourceId ? [selectedCopySourceId] : []}
+              onSelect={(selected) => {
+                const nextId = selected[0] ?? "";
+                const nextSource = copySourceVariants.find((sourceVariant: CopySourceVariant) => sourceVariant.id === nextId);
+                setSelectedCopySourceId(nextId);
+                setCopySourceSearchValue(
+                  nextSource
+                    ? `${nextSource.productTitle} - ${nextSource.title}${nextSource.sku ? ` (${nextSource.sku})` : ""}`
+                    : "",
+                );
+              }}
+              textField={
+                <Autocomplete.TextField
+                  label="Source variant"
+                  value={copySourceSearchValue}
+                  onChange={(value) => {
+                    setCopySourceSearchValue(value);
+                    if (selectedCopySourceId) setSelectedCopySourceId("");
+                  }}
+                  autoComplete="off"
+                  placeholder="Search configured variants"
+                />
+              }
+              emptyState={
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  No matching configured variants found.
+                </Text>
+              }
+            />
+            {selectedCopySource ? (
+              <BlockStack gap="100">
+                <Text as="p" variant="bodyMd" fontWeight="semibold">
+                  {selectedCopySource.productTitle} - {selectedCopySource.title}
+                </Text>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  {selectedCopySource.templateName
+                    ? `Production template: ${selectedCopySource.templateName}`
+                    : "No production template assigned"}
+                  {" · "}
+                  {selectedCopySource.lineItemCount} saved line item{selectedCopySource.lineItemCount === 1 ? "" : "s"}
+                </Text>
+              </BlockStack>
+            ) : null}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
 
       <Modal
         open={assignTemplateOpen}
@@ -2507,10 +2979,21 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">
                 Default: {describeMaterialLine(materialOverrideTarget)}
               </Text>
+              {materialOverrideTarget.costingModel === "counted" && (
+                <TextField
+                  label="Quantity used per item"
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={overrideMatQty}
+                  onChange={setOverrideMatQty}
+                  autoComplete="off"
+                />
+              )}
               {materialOverrideTarget.costingModel === "yield" && (
                 <>
                   <TextField
-                    label="Material quantity"
+                    label="Purchased units used"
                     type="number"
                     min={0}
                     step={1}
@@ -2519,7 +3002,7 @@ export default function VariantDetailPage() {
                     autoComplete="off"
                   />
                   <TextField
-                    label="Yield per piece"
+                    label="Items made from one purchased unit"
                     type="number"
                     min={0}
                     step={1}
@@ -2531,7 +3014,7 @@ export default function VariantDetailPage() {
               )}
               {materialOverrideTarget.costingModel === "uses" && (
                 <TextField
-                  label="Uses per variant"
+                  label="Portions used per item"
                   type="number"
                   min={0}
                   step={1}
@@ -2594,40 +3077,52 @@ export default function VariantDetailPage() {
                 </Text>
               }
             />
+            {selectedMaterial?.costingModel === "counted" && (
+              <TextField
+                label="Quantity used per item"
+                type="number"
+                min={0}
+                step={1}
+                value={matQty}
+                onChange={setMatQty}
+                autoComplete="off"
+                helpText="Number of discrete pieces from the purchased batch needed for this variant."
+              />
+            )}
             {selectedMaterial?.costingModel === "yield" && (
               <>
                 <TextField
-                  label="Material quantity"
+                  label="Purchased units used"
                   type="number"
                   min={0}
                   step={1}
                   value={matQty}
                   onChange={setMatQty}
                   autoComplete="off"
-                  helpText="Number of pieces of this material required to produce this variant."
+                  helpText="Usually 1, unless this variant needs multiple purchased units."
                 />
                 <TextField
-                  label="Yield per piece"
+                  label="Items made from one purchased unit"
                   type="number"
                   min={0}
                   step={1}
                   value={matYield}
                   onChange={setMatYield}
                   autoComplete="off"
-                  helpText="Number of variants produced from one piece of this material."
+                  helpText="How many finished items this material unit can make for this specific variant."
                 />
               </>
             )}
             {selectedMaterial?.costingModel === "uses" && (
               <TextField
-                label="Uses per variant"
+                label="Portions used per item"
                 type="number"
                 min={0}
                 step={1}
                 value={matUses}
                 onChange={setMatUses}
                 autoComplete="off"
-                helpText="Number of uses of the material this variant requires."
+                helpText="Estimated number of portions, such as glue dollops, required for this variant."
               />
             )}
           </BlockStack>
@@ -2651,30 +3146,94 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">
                 Default: {describeEquipmentLine(equipmentOverrideTarget)}
               </Text>
-              <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Minutes"
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={overrideEqMinutes}
-                    onChange={setOverrideEqMinutes}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Uses"
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={overrideEqUses}
-                    onChange={setOverrideEqUses}
-                    autoComplete="off"
-                  />
-                </div>
-              </InlineStack>
+              <Select
+                label="Usage mode"
+                value={overrideEqUsageMode}
+                onChange={setOverrideEqUsageMode}
+                options={[
+                  { label: "Direct minutes / uses", value: "direct" },
+                  { label: "Duration yield", value: "duration_yield" },
+                  { label: "Use yield", value: "use_yield" },
+                ]}
+              />
+              {overrideEqUsageMode === "direct" && (
+                <InlineStack gap="400" wrap={false}>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Minutes"
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={overrideEqMinutes}
+                      onChange={setOverrideEqMinutes}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Uses"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={overrideEqUses}
+                      onChange={setOverrideEqUses}
+                      autoComplete="off"
+                    />
+                  </div>
+                </InlineStack>
+              )}
+              {overrideEqUsageMode === "duration_yield" && (
+                <InlineStack gap="400" wrap={false}>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Run duration minutes"
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={overrideEqYieldDurationMinutes}
+                      onChange={setOverrideEqYieldDurationMinutes}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Products yielded"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={overrideEqYieldQuantity}
+                      onChange={setOverrideEqYieldQuantity}
+                      autoComplete="off"
+                    />
+                  </div>
+                </InlineStack>
+              )}
+              {overrideEqUsageMode === "use_yield" && (
+                <InlineStack gap="400" wrap={false}>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Run uses"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={overrideEqYieldUses}
+                      onChange={setOverrideEqYieldUses}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Products yielded"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={overrideEqYieldQuantity}
+                      onChange={setOverrideEqYieldQuantity}
+                      autoComplete="off"
+                    />
+                  </div>
+                </InlineStack>
+              )}
             </BlockStack>
           )}
         </Modal.Section>
@@ -2727,30 +3286,96 @@ export default function VariantDetailPage() {
                 </Text>
               }
             />
-            <InlineStack gap="400" wrap={false}>
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Minutes"
-                  type="number"
-                  min={0}
-                  step={0.5}
-                  value={eqMinutes}
-                  onChange={setEqMinutes}
-                  autoComplete="off"
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <TextField
-                  label="Uses"
-                  type="number"
-                  min={0}
-                  step={1}
-                  value={eqUses}
-                  onChange={setEqUses}
-                  autoComplete="off"
-                />
-              </div>
-            </InlineStack>
+            <Select
+              label="Usage mode"
+              value={eqUsageMode}
+              onChange={setEqUsageMode}
+              options={[
+                { label: "Direct minutes / uses", value: "direct" },
+                { label: "Duration yield", value: "duration_yield" },
+                { label: "Use yield", value: "use_yield" },
+              ]}
+            />
+            {eqUsageMode === "direct" && (
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Minutes"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={eqMinutes}
+                    onChange={setEqMinutes}
+                    autoComplete="off"
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Uses"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqUses}
+                    onChange={setEqUses}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+            )}
+            {eqUsageMode === "duration_yield" && (
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Run duration minutes"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={eqYieldDurationMinutes}
+                    onChange={setEqYieldDurationMinutes}
+                    autoComplete="off"
+                    helpText="Total equipment time for the run or batch."
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Products yielded"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqYieldQuantity}
+                    onChange={setEqYieldQuantity}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+            )}
+            {eqUsageMode === "use_yield" && (
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Run uses"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqYieldUses}
+                    onChange={setEqYieldUses}
+                    autoComplete="off"
+                    helpText="Total equipment uses for the run or batch."
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Products yielded"
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={eqYieldQuantity}
+                    onChange={setEqYieldQuantity}
+                    autoComplete="off"
+                  />
+                </div>
+              </InlineStack>
+            )}
           </BlockStack>
         </Modal.Section>
       </Modal>

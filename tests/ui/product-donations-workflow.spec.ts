@@ -1,6 +1,26 @@
 /* eslint-disable testing-library/prefer-screen-queries */
 import { expect, test } from "@playwright/test";
 
+test("product detail summarizes and links to product variants", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/product-donations-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.productUrl);
+
+  await expect(page.getByRole("heading", { name: "Variants" })).toBeVisible();
+  await expect(page.getByText("Review whether each variant is ready for donation estimates.")).toBeVisible();
+  await expect(page.getByText("Needs setup")).toHaveCount(2);
+  await expect(page.getByText("Small")).toBeVisible();
+  await expect(page.getByText("Large")).toBeVisible();
+  await expect(page.getByText("Playwright Product Detail Template")).toBeVisible();
+  await expect(page.getByRole("link", { name: "View all variants for this product" })).toHaveAttribute(
+    "href",
+    new RegExp(`/app/variants\\?__playwrightShop=.*&product=${bootstrap.productId}`),
+  );
+  await expect(page.getByRole("button", { name: "Configure" })).toHaveCount(2);
+});
+
 test("product donations can add a second cause assignment and persist it", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/product-donations-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();

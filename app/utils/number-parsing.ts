@@ -7,11 +7,29 @@ export function parseOptionalNonNegativeNumber(value: string | null | undefined,
   return parsed;
 }
 
+export function parseOptionalPositiveNumber(value: string | null | undefined, field: string) {
+  if (!value || !value.trim()) return null;
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    throw new Response(`${field} must be greater than 0.`, { status: 400 });
+  }
+  return parsed;
+}
+
 export function parseOptionalNonNegativeWholeNumber(value: string | null | undefined, field: string) {
   if (!value || !value.trim()) return null;
   const parsed = Number(value);
   if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
     throw new Response(`${field} must be a non-negative whole number.`, { status: 400 });
+  }
+  return parsed;
+}
+
+export function parseOptionalPositiveWholeNumber(value: string | null | undefined, field: string) {
+  if (!value || !value.trim()) return null;
+  const parsed = Number(value);
+  if (Number.isNaN(parsed) || parsed <= 0 || !Number.isInteger(parsed)) {
+    throw new Response(`${field} must be a positive whole number.`, { status: 400 });
   }
   return parsed;
 }

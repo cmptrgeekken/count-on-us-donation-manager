@@ -4,6 +4,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { MetricCard, SectionHeader, StatusBanners, WorkflowTabs } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import {
   ArtistPaymentError,
@@ -129,6 +130,16 @@ type ArtistPaymentOption = {
   priorOutstanding: string;
   totalOutstanding: string;
 };
+
+type ReportingTab = "details" | "cause-payments" | "artist-payments" | "tax" | "diagnostics";
+
+const REPORTING_TABS: Array<{ value: ReportingTab; label: string }> = [
+  { value: "details", label: "Details" },
+  { value: "cause-payments", label: "Cause Payments" },
+  { value: "artist-payments", label: "Artist Payments" },
+  { value: "tax", label: "Tax" },
+  { value: "diagnostics", label: "Diagnostics" },
+];
 
 type CausePayablePeriodRow = {
   periodId: string;
@@ -612,10 +623,14 @@ export default function ReportingPage() {
   const revalidator = useRevalidator();
   const { formatMoney, formatPct, locale } = useAppLocalization();
   const closeDialogRef = useRef<HTMLDialogElement>(null);
+  const artistPaymentDialogRef = useRef<HTMLDialogElement>(null);
+  const taxTrueUpDialogRef = useRef<HTMLDialogElement>(null);
   const disbursementFormRef = useRef<HTMLFormElement>(null);
   const artistPaymentFormRef = useRef<HTMLFormElement>(null);
   const trueUpFormRef = useRef<HTMLFormElement>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [artistPaymentDialogOpen, setArtistPaymentDialogOpen] = useState(false);
+  const [taxTrueUpDialogOpen, setTaxTrueUpDialogOpen] = useState(false);
   const [exportingFormat, setExportingFormat] = useState<"csv" | "pdf" | null>(null);
   const [exportError, setExportError] = useState("");
 
@@ -630,6 +645,26 @@ export default function ReportingPage() {
   }, [closeDialogOpen]);
 
   useEffect(() => {
+    const dialog = artistPaymentDialogRef.current;
+    if (!dialog) return;
+    if (artistPaymentDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!artistPaymentDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [artistPaymentDialogOpen]);
+
+  useEffect(() => {
+    const dialog = taxTrueUpDialogRef.current;
+    if (!dialog) return;
+    if (taxTrueUpDialogOpen && !dialog.open) {
+      dialog.showModal();
+    } else if (!taxTrueUpDialogOpen && dialog.open) {
+      dialog.close();
+    }
+  }, [taxTrueUpDialogOpen]);
+
+  useEffect(() => {
     if (disbursementFetcher.data?.ok) {
       disbursementFormRef.current?.reset();
     }
@@ -638,12 +673,16 @@ export default function ReportingPage() {
   useEffect(() => {
     if (artistPaymentFetcher.data?.ok) {
       artistPaymentFormRef.current?.reset();
+      setArtistPaymentDialogOpen(false);
+      setActiveReportingTab("artist-payments");
     }
   }, [artistPaymentFetcher.data]);
 
   useEffect(() => {
     if (trueUpFetcher.data?.ok) {
       trueUpFormRef.current?.reset();
+      setTaxTrueUpDialogOpen(false);
+      setActiveReportingTab("tax");
     }
   }, [trueUpFetcher.data]);
 
@@ -788,6 +827,7 @@ export default function ReportingPage() {
   const [selectedArtistPaymentArtistId, setSelectedArtistPaymentArtistId] = useState(
     artistPaymentOptions[0]?.artistId ?? "",
   );
+  const [activeReportingTab, setActiveReportingTab] = useState<ReportingTab>("details");
   const disbursementFieldStyle: CSSProperties = {
     width: "100%",
     boxSizing: "border-box",
@@ -825,6 +865,37 @@ export default function ReportingPage() {
     artistPaymentOptions[0] ??
     null;
   const selectedArtistPaymentTotalOutstandingAmount = floorCurrency(selectedArtistPaymentOption?.totalOutstanding ?? "0");
+  const totalCauseOutstanding = causePayables
+    .reduce((sum, payable) => sum.add(new Prisma.Decimal(payable.totalOutstanding)), ZERO)
+    .toString();
+  const totalArtistOutstanding = artistPayables
+    .reduce((sum, payable) => sum.add(new Prisma.Decimal(payable.totalOutstanding)), ZERO)
+    .toString();
+  const overdueCauseCount = causePayables.filter((payable) => payable.overdue).length;
+  const overdueArtistCount = artistPayables.filter((payable) => payable.overdue).length;
+  const donationPoolIsNegative = new Prisma.Decimal(summary.track1.donationPool).lessThan(0);
+  const shopifyChargesArePositive = new Prisma.Decimal(summary.track1.shopifyCharges).greaterThan(0);
+  const artistPayoutsArePositive = new Prisma.Decimal(summary.track1.artistPayoutTotal ?? "0").greaterThan(0);
+  const trueUpShortfallIsPositive = new Prisma.Decimal(summary.track1.taxTrueUpShortfallApplied).greaterThan(0);
+  const selectCauseForPayment = (causeId: string) => {
+    setSelectedDisbursementCauseId(causeId);
+    setActiveReportingTab("cause-payments");
+  };
+  const selectArtistForPayment = (artistId: string) => {
+    setSelectedArtistPaymentArtistId(artistId);
+    setArtistPaymentDialogOpen(true);
+  };
+  const dashboardActionStyle = (primary: boolean, disabled: boolean): CSSProperties => ({
+    borderRadius: "0.5rem",
+    border: primary ? "1px solid #111" : "1px solid var(--p-color-border, #d2d5d8)",
+    background: disabled ? "var(--p-color-bg-fill-disabled, #f1f1f1)" : primary ? "#111" : "var(--p-color-bg-surface, #fff)",
+    color: disabled ? "var(--p-color-text-disabled, #8c9196)" : primary ? "#fff" : "var(--p-color-text, #303030)",
+    padding: "0.55rem 0.8rem",
+    font: "inherit",
+    fontWeight: 600,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.7 : 1,
+  });
   const disbursementTwoColumnGridStyle: CSSProperties = {
     display: "grid",
     gap: "0.9rem",
@@ -904,46 +975,15 @@ export default function ReportingPage() {
       </div>
 
       <s-page>
-        {closeFetcher.data && !closeFetcher.data.ok && (
-          <s-banner tone="critical">
-            <s-text>{closeFetcher.data.message}</s-text>
-          </s-banner>
-        )}
-        {closeFetcher.data?.ok && closeFetcher.data.message && (
-          <s-banner tone="success">
-            <s-text>{closeFetcher.data.message}</s-text>
-          </s-banner>
-        )}
-        {disbursementFetcher.data && !disbursementFetcher.data.ok && (
-          <s-banner tone="critical">
-            <s-text>{disbursementFetcher.data.message}</s-text>
-          </s-banner>
-        )}
-        {disbursementFetcher.data?.ok && disbursementFetcher.data.message && (
-          <s-banner tone="success">
-            <s-text>{disbursementFetcher.data.message}</s-text>
-          </s-banner>
-        )}
-        {artistPaymentFetcher.data && !artistPaymentFetcher.data.ok && (
-          <s-banner tone="critical">
-            <s-text>{artistPaymentFetcher.data.message}</s-text>
-          </s-banner>
-        )}
-        {artistPaymentFetcher.data?.ok && artistPaymentFetcher.data.message && (
-          <s-banner tone="success">
-            <s-text>{artistPaymentFetcher.data.message}</s-text>
-          </s-banner>
-        )}
-        {trueUpFetcher.data && !trueUpFetcher.data.ok && (
-          <s-banner tone="critical">
-            <s-text>{trueUpFetcher.data.message}</s-text>
-          </s-banner>
-        )}
-        {trueUpFetcher.data?.ok && trueUpFetcher.data.message && (
-          <s-banner tone="success">
-            <s-text>{trueUpFetcher.data.message}</s-text>
-          </s-banner>
-        )}
+        <StatusBanners
+          items={[
+            closeFetcher.data,
+            disbursementFetcher.data,
+            artistPaymentFetcher.data,
+            trueUpFetcher.data,
+            recalculationFetcher.data,
+          ]}
+        />
         {exportError ? (
           <s-banner tone="critical">
             <s-text>{exportError}</s-text>
@@ -980,81 +1020,528 @@ export default function ReportingPage() {
                 {formatDateRange(selectedPeriod.startDate, selectedPeriod.endDate, locale)} · {selectedPeriod.status}
               </s-text>
             ) : null}
-            {selectedPeriod ? (
-              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <button
-                  type="button"
-                  aria-label="Export reporting period as CSV"
-                  onClick={() => void exportPeriod("csv")}
-                  disabled={exportingFormat !== null}
-                  style={disbursementSubmitStyle}
-                >
-                  {exportingFormat === "csv" ? "Exporting CSV..." : "Export CSV"}
-                </button>
-                <button
-                  type="button"
-                  aria-label="Export reporting period as PDF"
-                  onClick={() => void exportPeriod("pdf")}
-                  disabled={exportingFormat !== null}
-                  style={disbursementSubmitStyle}
-                >
-                  {exportingFormat === "pdf" ? "Exporting PDF..." : "Export PDF"}
-                </button>
+          </div>
+        </s-section>
+
+        <s-section heading="What needs attention">
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <SectionHeader
+              title={selectedPeriod?.status === "OPEN" ? "Open reporting period" : "Payables dashboard"}
+              description={
+                selectedPeriod?.status === "OPEN"
+                  ? "Close this period when the payout window is final, then use the payable actions to record payments."
+                  : "Use this summary to decide which cause or artist balances need payment next."
+              }
+              actions={(
+                <>
+                  {selectedPeriod?.status === "OPEN" ? (
+                    <s-button
+                      variant="primary"
+                      onClick={() => setCloseDialogOpen(true)}
+                      disabled={closeFetcher.state !== "idle"}
+                    >
+                      Close reporting period
+                    </s-button>
+                  ) : null}
+                  <s-button
+                    variant="secondary"
+                    onClick={() => void exportPeriod("csv")}
+                    disabled={exportingFormat !== null}
+                  >
+                    {exportingFormat === "csv" ? "Exporting CSV..." : "Export CSV"}
+                  </s-button>
+                  <s-button
+                    variant="secondary"
+                    onClick={() => void exportPeriod("pdf")}
+                    disabled={exportingFormat !== null}
+                  >
+                    {exportingFormat === "pdf" ? "Exporting PDF..." : "Export PDF"}
+                  </s-button>
+                </>
+              )}
+            />
+
+            {activeReportingTab === "cause-payments" && selectedPeriod?.status === "CLOSED" ? (
+              <div id="log-disbursement" style={{ display: "grid", gap: "0.9rem" }}>
+                <h2 style={{ margin: 0, fontSize: "1rem" }}>Log disbursement</h2>
+                <SectionHeader
+                  title="Log cause disbursement"
+                  description="Record funds paid out to the selected cause. Allocated amounts auto-apply to the oldest outstanding closed balances first."
+                  actions={(
+                    <button
+                      type="button"
+                      style={dashboardActionStyle(false, false)}
+                      onClick={() => setActiveReportingTab("details")}
+                    >
+                      Back to payables
+                    </button>
+                  )}
+                />
+                {disbursementCauseOptions.length === 0 ? (
+                  <s-banner tone="info">
+                    <s-text>All closed-period cause payables through this reporting period have already been fully disbursed.</s-text>
+                  </s-banner>
+                ) : (
+                  <disbursementFetcher.Form
+                    ref={disbursementFormRef}
+                    method="post"
+                    encType="multipart/form-data"
+                    style={{ display: "grid", gap: "0.9rem" }}
+                  >
+                    <input type="hidden" name="intent" value="log-disbursement" />
+                    <input type="hidden" name="periodId" value={selectedPeriod.id} />
+                    <div
+                      aria-live="polite"
+                      aria-atomic="true"
+                      style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
+                    >
+                      {disbursementStatusMessage}
+                    </div>
+
+                    {disbursementFetcher.data && !disbursementFetcher.data.ok ? (
+                      <s-banner tone="critical">
+                        <s-text>{disbursementFetcher.data.message}</s-text>
+                      </s-banner>
+                    ) : null}
+
+                    <div style={{ display: "grid", gap: "0.35rem" }}>
+                      <label htmlFor="disbursement-cause">Cause</label>
+                      <select
+                        id="disbursement-cause"
+                        name="causeId"
+                        value={selectedDisbursementCauseId}
+                        onChange={(event) => setSelectedDisbursementCauseId(event.currentTarget.value)}
+                        style={disbursementFieldStyle}
+                      >
+                        {disbursementOptions.map((option) => (
+                          <option key={option.causeId} value={option.causeId}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedDisbursementOption ? (
+                        <div style={{ display: "grid", gap: "0.2rem" }}>
+                          <s-text color="subdued">
+                            Current period outstanding: {formatMoney(selectedDisbursementOption.currentOutstanding)}
+                          </s-text>
+                          <s-text color="subdued">
+                            Prior-period outstanding: {formatMoney(selectedDisbursementOption.priorOutstanding)}
+                          </s-text>
+                          <s-text color="subdued">
+                            Total outstanding eligible for auto-application: {formatMoney(selectedDisbursementOption.totalOutstanding)}
+                          </s-text>
+                        </div>
+                      ) : null}
+                      {disbursementFetcher.data?.fieldErrors?.causeId?.map((message) => (
+                        <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                      ))}
+                    </div>
+
+                    <div style={disbursementTwoColumnGridStyle}>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="disbursement-allocated-amount">Allocated amount</label>
+                        <input
+                          id="disbursement-allocated-amount"
+                          name="allocatedAmount"
+                          type="number"
+                          min="0"
+                          max={selectedRemainingAmountInputMax}
+                          step="0.01"
+                          style={disbursementFieldStyle}
+                        />
+                        <s-text color="subdued" style={disbursementHelpTextStyle}>
+                          Auto-applies FIFO against closed outstanding balances through this period. Max {formatMoney(selectedTotalOutstandingAmount)}.
+                        </s-text>
+                        {disbursementFetcher.data?.fieldErrors?.allocatedAmount?.map((message) => (
+                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                        ))}
+                      </div>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="disbursement-paid-at">Paid date</label>
+                        <input
+                          id="disbursement-paid-at"
+                          name="paidAt"
+                          type="date"
+                          defaultValue={new Date().toISOString().slice(0, 10)}
+                          style={disbursementFieldStyle}
+                        />
+                        <s-text color="subdued" style={disbursementHelpTextStyle}>
+                          Use the date the funds were actually sent to the cause.
+                        </s-text>
+                        {disbursementFetcher.data?.fieldErrors?.paidAt?.map((message) => (
+                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={disbursementTwoColumnGridStyle}>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="disbursement-extra-contribution">Extra contribution</label>
+                        <input
+                          id="disbursement-extra-contribution"
+                          name="extraContributionAmount"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          style={disbursementFieldStyle}
+                        />
+                        <s-text color="subdued" style={disbursementHelpTextStyle}>
+                          Additional gift above the allocated amount. Does not reduce future allocations.
+                        </s-text>
+                        {disbursementFetcher.data?.fieldErrors?.extraContributionAmount?.map((message) => (
+                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                        ))}
+                      </div>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="disbursement-fees-covered">Fees covered</label>
+                        <input
+                          id="disbursement-fees-covered"
+                          name="feesCoveredAmount"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          style={disbursementFieldStyle}
+                        />
+                        <s-text color="subdued" style={disbursementHelpTextStyle}>
+                          Extra amount to help cover the cause&apos;s processing or operating costs.
+                        </s-text>
+                        {disbursementFetcher.data?.fieldErrors?.feesCoveredAmount?.map((message) => (
+                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div style={disbursementTwoColumnGridStyle}>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="disbursement-method">Payment method</label>
+                        <input
+                          id="disbursement-method"
+                          name="paymentMethod"
+                          type="text"
+                          placeholder="ACH, check, wire..."
+                          style={disbursementFieldStyle}
+                        />
+                        {disbursementFetcher.data?.fieldErrors?.paymentMethod?.map((message) => (
+                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                        ))}
+                      </div>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor="disbursement-reference">Reference id</label>
+                        <input
+                          id="disbursement-reference"
+                          name="referenceId"
+                          type="text"
+                          placeholder="Optional payout or check id"
+                          style={disbursementFieldStyle}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: "grid", gap: "0.35rem" }}>
+                      <label htmlFor="disbursement-receipt">Receipt</label>
+                      <input
+                        id="disbursement-receipt"
+                        name="receipt"
+                        type="file"
+                        accept=".pdf,image/*"
+                        style={disbursementFileStyle}
+                      />
+                      <s-text color="subdued">Optional. PDF or image, up to 10 MB.</s-text>
+                      <s-text color="subdued">
+                        This receipt may be publicly visible. Redact all personal information before uploading.
+                      </s-text>
+                      {disbursementFetcher.data?.fieldErrors?.receipt?.map((message) => (
+                        <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                      ))}
+                    </div>
+
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                      <button
+                        type="submit"
+                        disabled={disbursementFetcher.state !== "idle"}
+                        style={disbursementSubmitStyle}
+                      >
+                        Log disbursement
+                      </button>
+                    </div>
+                  </disbursementFetcher.Form>
+                )}
+
+                <s-table>
+                  <s-table-header-row>
+                    <s-table-header listSlot="primary">Cause</s-table-header>
+                    <s-table-header listSlot="secondary">Paid</s-table-header>
+                    <s-table-header listSlot="secondary">Applied to</s-table-header>
+                    <s-table-header listSlot="secondary">Allocated</s-table-header>
+                    <s-table-header listSlot="secondary">Extra</s-table-header>
+                    <s-table-header listSlot="secondary">Fees</s-table-header>
+                    <s-table-header listSlot="secondary">Method</s-table-header>
+                    <s-table-header listSlot="secondary">Reference</s-table-header>
+                    <s-table-header listSlot="secondary">Receipt</s-table-header>
+                    <s-table-header listSlot="labeled" format="currency">Total paid</s-table-header>
+                  </s-table-header-row>
+                  <s-table-body>
+                    {disbursements.length === 0 ? (
+                      <s-table-row>
+                        <s-table-cell>No disbursements logged for this period.</s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                        <s-table-cell></s-table-cell>
+                      </s-table-row>
+                    ) : (
+                      disbursements.map((disbursement) => (
+                        <s-table-row key={disbursement.id}>
+                          <s-table-cell>{disbursement.causeName}</s-table-cell>
+                          <s-table-cell>{formatDate(disbursement.paidAt, locale)}</s-table-cell>
+                          <s-table-cell>
+                            {disbursement.applications.length > 0 ? (
+                              <div style={{ display: "grid", gap: "0.2rem" }}>
+                                {disbursement.applications.map((application) => (
+                                  <span key={`${disbursement.id}-${application.periodId}`}>
+                                    {formatDateRange(application.periodStartDate, application.periodEndDate, locale)}: {formatMoney(application.amount)}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : "None"}
+                          </s-table-cell>
+                          <s-table-cell>{formatMoney(disbursement.allocatedAmount)}</s-table-cell>
+                          <s-table-cell>{formatMoney(disbursement.extraContributionAmount)}</s-table-cell>
+                          <s-table-cell>{formatMoney(disbursement.feesCoveredAmount)}</s-table-cell>
+                          <s-table-cell>{disbursement.paymentMethod}</s-table-cell>
+                          <s-table-cell>{disbursement.referenceId ?? "—"}</s-table-cell>
+                          <s-table-cell>
+                            {disbursement.receiptUrl ? (
+                              <a href={disbursement.receiptUrl} target="_blank" rel="noreferrer">
+                                View receipt
+                              </a>
+                            ) : "—"}
+                          </s-table-cell>
+                          <s-table-cell>{formatMoney(disbursement.amount)}</s-table-cell>
+                        </s-table-row>
+                      ))
+                    )}
+                  </s-table-body>
+                </s-table>
               </div>
+            ) : null}
+
+            {activeReportingTab === "details" ? (
+            <>
+            <div
+              style={{
+                display: "grid",
+                gap: "1rem",
+                gridTemplateColumns: "repeat(auto-fit, minmax(20rem, 1fr))",
+                alignItems: "start",
+              }}
+            >
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <SectionHeader
+                  title="Causes to pay"
+                  description={`${causePayables.length} cause${causePayables.length === 1 ? "" : "s"} outstanding · ${formatMoney(totalCauseOutstanding)} total`}
+                />
+                {overdueCauseCount > 0 ? (
+                  <s-banner tone="warning">
+                    <s-text>{overdueCauseCount} cause{overdueCauseCount === 1 ? "" : "s"} include prior-period balances.</s-text>
+                  </s-banner>
+                ) : null}
+                <div style={{ display: "grid", gap: "0.5rem", maxHeight: "24rem", overflowY: "auto", paddingRight: "0.15rem" }}>
+                  {causePayables.length === 0 ? (
+                    <div style={{ padding: "0.85rem", border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "0.5rem" }}>
+                      <s-text color="subdued">No causes need payment for this period.</s-text>
+                    </div>
+                  ) : (
+                    causePayables.map((payable) => (
+                      <div
+                        key={payable.causeId}
+                        style={{
+                          display: "grid",
+                          gap: "0.55rem",
+                          padding: "0.85rem",
+                          border: payable.overdue ? "1px solid #c26a00" : "1px solid var(--p-color-border, #d2d5d8)",
+                          borderRadius: "0.5rem",
+                          background: "var(--p-color-bg-surface, #fff)",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+                          <div style={{ display: "grid", gap: "0.2rem" }}>
+                            <strong>{payable.causeName}</strong>
+                            <s-text color="subdued">{payable.is501c3 ? "501(c)3" : "Not marked 501(c)3"} · {payable.overdue ? "Prior-period balance" : "Current period only"}</s-text>
+                          </div>
+                          <strong style={{ color: payable.overdue ? "#8a3f00" : "inherit" }}>{formatMoney(payable.totalOutstanding)}</strong>
+                        </div>
+                        <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                          <span>Current: {formatMoney(payable.currentOutstanding)}</span>
+                          <span>Prior: {formatMoney(payable.priorOutstanding)}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                          <s-text color="subdued">{payable.periods.length} reporting period{payable.periods.length === 1 ? "" : "s"}</s-text>
+                          <button
+                            type="button"
+                            style={dashboardActionStyle(selectedPeriod?.status === "CLOSED", selectedPeriod?.status !== "CLOSED")}
+                            disabled={selectedPeriod?.status !== "CLOSED"}
+                            onClick={() => selectCauseForPayment(payable.causeId)}
+                          >
+                            Pay cause
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <SectionHeader
+                  title="Artists to pay"
+                  description={`${artistPayables.length} artist${artistPayables.length === 1 ? "" : "s"} outstanding · ${formatMoney(totalArtistOutstanding)} total`}
+                />
+                {overdueArtistCount > 0 ? (
+                  <s-banner tone="warning">
+                    <s-text>{overdueArtistCount} artist{overdueArtistCount === 1 ? "" : "s"} include prior-period balances.</s-text>
+                  </s-banner>
+                ) : null}
+                <div style={{ display: "grid", gap: "0.5rem", maxHeight: "24rem", overflowY: "auto", paddingRight: "0.15rem" }}>
+                  {artistPayables.length === 0 ? (
+                    <div style={{ padding: "0.85rem", border: "1px solid var(--p-color-border, #d2d5d8)", borderRadius: "0.5rem" }}>
+                      <s-text color="subdued">No artists need payment for this period.</s-text>
+                    </div>
+                  ) : (
+                    artistPayables.map((payable) => (
+                      <div
+                        key={payable.artistId}
+                        style={{
+                          display: "grid",
+                          gap: "0.55rem",
+                          padding: "0.85rem",
+                          border: payable.overdue ? "1px solid #c26a00" : "1px solid var(--p-color-border, #d2d5d8)",
+                          borderRadius: "0.5rem",
+                          background: "var(--p-color-bg-surface, #fff)",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+                          <div style={{ display: "grid", gap: "0.2rem" }}>
+                            <strong>{payable.creditName}</strong>
+                            <s-text color="subdued">{payable.artistName} · {payable.overdue ? "Prior-period balance" : "Current period only"}</s-text>
+                          </div>
+                          <strong style={{ color: payable.overdue ? "#8a3f00" : "inherit" }}>{formatMoney(payable.totalOutstanding)}</strong>
+                        </div>
+                        <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                          <span>Current: {formatMoney(payable.currentOutstanding)}</span>
+                          <span>Prior: {formatMoney(payable.priorOutstanding)}</span>
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                          <s-text color="subdued">{payable.periods.length} reporting period{payable.periods.length === 1 ? "" : "s"}</s-text>
+                          <button
+                            type="button"
+                            style={dashboardActionStyle(selectedPeriod?.status === "CLOSED", selectedPeriod?.status !== "CLOSED")}
+                            disabled={selectedPeriod?.status !== "CLOSED"}
+                            onClick={() => selectArtistForPayment(payable.artistId)}
+                          >
+                            Pay artist
+                          </button>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+              <button
+                type="button"
+                style={dashboardActionStyle(false, selectedPeriod?.status !== "CLOSED")}
+                disabled={selectedPeriod?.status !== "CLOSED"}
+                onClick={() => setTaxTrueUpDialogOpen(true)}
+              >
+                Record tax true-up
+              </button>
+            </div>
+            </>
             ) : null}
           </div>
         </s-section>
 
-        {selectedPeriod?.status === "OPEN" ? (
-          <s-section>
-            <s-banner tone="info">
-              <s-text>This period is open. Closing will materialize cause allocations and lock the period.</s-text>
-            </s-banner>
-            <div style={{ marginTop: "0.75rem" }}>
-              <s-button
-                variant="primary"
-                onClick={() => setCloseDialogOpen(true)}
-                disabled={closeFetcher.state !== "idle"}
-              >
-                Close reporting period
-              </s-button>
-            </div>
-          </s-section>
-        ) : null}
+        <s-section>
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <SectionHeader
+              title="Reporting workspace"
+              description="Switch between payment workflows and supporting reporting details without relying on page jumps."
+            />
+            <WorkflowTabs
+              label="Reporting workspace"
+              tabs={REPORTING_TABS}
+              value={activeReportingTab}
+              onChange={setActiveReportingTab}
+            />
+          </div>
+        </s-section>
 
         <div style={{ display: "grid", gap: "1.5rem" }}>
-          <s-section heading="Track 1 — Donation pool">
-            <div style={{ display: "grid", gap: "0.75rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
-                <div>
-                  <strong>Total net contribution</strong>
-                  <s-text color="subdued">{formatMoney(summary.track1.totalNetContribution)}</s-text>
-                </div>
-                <div>
-                  <strong>Sales tax collected</strong>
-                  <s-text color="subdued">{formatMoney(summary.track1.salesTaxCollected ?? "0")}</s-text>
-                </div>
-                <div>
-                  <strong>Shopify charges</strong>
-                  <s-text color="subdued">{formatMoney(summary.track1.shopifyCharges)}</s-text>
-                </div>
-                <div>
-                  <strong>Artist payouts</strong>
-                  <s-text color="subdued">{formatMoney(summary.track1.artistPayoutTotal ?? "0")}</s-text>
-                </div>
-                <div>
-                  <strong>Donation pool (after carry-forward)</strong>
-                  <s-text color="subdued">{formatMoney(summary.track1.donationPool)}</s-text>
-                </div>
+          {activeReportingTab === "details" ? (
+            <>
+          <s-section heading="Donation pool math">
+            <div style={{ display: "grid", gap: "1rem" }}>
+              <SectionHeader
+                title="Available for cause allocation"
+                description="Track 1 starts with contribution dollars, subtracts operational obligations, applies prior tax true-ups, then produces the pool available for causes."
+              />
+              {donationPoolIsNegative ? (
+                <s-banner tone="warning">
+                  <s-text>
+                    This period&apos;s donation pool is negative because Shopify charges, artist payouts, or prior true-up shortfalls exceeded contribution dollars. Review the math below before closing or paying allocations.
+                  </s-text>
+                </s-banner>
+              ) : null}
+              <div
+                style={{
+                  display: "grid",
+                  gap: "0.75rem",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))",
+                }}
+              >
+                <MetricCard
+                  label="Net contribution"
+                  value={formatMoney(summary.track1.totalNetContribution)}
+                  detail="Contribution dollars after line-level donation math."
+                />
+                <MetricCard
+                  label="Shopify charges"
+                  value={shopifyChargesArePositive ? `-${formatMoney(summary.track1.shopifyCharges)}` : formatMoney(summary.track1.shopifyCharges)}
+                  tone={shopifyChargesArePositive ? "warning" : "subdued"}
+                  detail="Fees and charge adjustments reduce the pool."
+                />
+                <MetricCard
+                  label="Artist payouts"
+                  value={artistPayoutsArePositive ? `-${formatMoney(summary.track1.artistPayoutTotal ?? "0")}` : formatMoney(summary.track1.artistPayoutTotal ?? "0")}
+                  tone={artistPayoutsArePositive ? "warning" : "subdued"}
+                  detail="Artist obligations are paid before cause allocation."
+                />
+                <MetricCard
+                  label="Tax true-up carry-forward"
+                  value={`${formatMoney(summary.track1.taxTrueUpSurplusApplied)} / ${trueUpShortfallIsPositive ? `-${formatMoney(summary.track1.taxTrueUpShortfallApplied)}` : formatMoney(summary.track1.taxTrueUpShortfallApplied)}`}
+                  detail="Surplus adds to the pool; shortfall reduces it."
+                />
+                <MetricCard
+                  label="Donation pool available"
+                  value={formatMoney(summary.track1.donationPool)}
+                  tone={donationPoolIsNegative ? "critical" : "success"}
+                  detail="Final Track 1 amount available for cause allocations."
+                />
               </div>
-              <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
-                <div>
-                  <strong>Surplus added from prior true-ups</strong>
-                  <s-text color="subdued">{formatMoney(summary.track1.taxTrueUpSurplusApplied)}</s-text>
-                </div>
-                <div>
-                  <strong>Shortfall deducted from prior true-ups</strong>
-                  <s-text color="subdued">{formatMoney(summary.track1.taxTrueUpShortfallApplied)}</s-text>
+              <div style={{ display: "grid", gap: "0.45rem" }}>
+                <strong>Other reference amounts</strong>
+                <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
+                  <span>Sales tax collected: {formatMoney(summary.track1.salesTaxCollected ?? "0")}</span>
+                  <span>Surplus added: {formatMoney(summary.track1.taxTrueUpSurplusApplied)}</span>
+                  <span>Shortfall deducted: {formatMoney(summary.track1.taxTrueUpShortfallApplied)}</span>
                 </div>
               </div>
             </div>
@@ -1324,6 +1811,10 @@ export default function ReportingPage() {
             </div>
           </s-section>
 
+            </>
+          ) : null}
+
+          {activeReportingTab === "diagnostics" ? (
           <s-section heading="Analytical recalculation">
             <div style={{ display: "grid", gap: "0.75rem" }}>
               <s-banner tone="info">
@@ -1432,10 +1923,19 @@ export default function ReportingPage() {
               ) : null}
             </div>
           </s-section>
+          ) : null}
 
-          {selectedPeriod?.status === "CLOSED" ? (
+          {activeReportingTab === "cause-payments" && selectedPeriod?.status !== "CLOSED" ? (
+            <s-section heading="Cause payments">
+              <s-banner tone="info">
+                <s-text>Close this reporting period before logging cause disbursements.</s-text>
+              </s-banner>
+            </s-section>
+          ) : null}
+
+          {activeReportingTab === "cause-payments" && selectedPeriod?.status === "CLOSED" && disbursementCauseOptions.length === 0 ? (
             <>
-              <s-section heading="Log disbursement">
+              <s-section id="log-disbursement" heading="Log disbursement">
                 <div style={{ display: "grid", gap: "0.75rem" }}>
                   <s-text color="subdued">
                     Record funds paid out to a Cause for this closed period. Allocated amounts auto-apply to the oldest outstanding closed balances first.
@@ -1695,8 +2195,21 @@ export default function ReportingPage() {
                   </s-table-body>
                 </s-table>
               </s-section>
+            </>
+          ) : null}
 
-              <s-section heading="Log artist payment">
+          {activeReportingTab === "artist-payments" && selectedPeriod?.status !== "CLOSED" ? (
+            <s-section heading="Artist payments">
+              <s-banner tone="info">
+                <s-text>Close this reporting period before logging artist payments.</s-text>
+              </s-banner>
+            </s-section>
+          ) : null}
+
+          {activeReportingTab === "artist-payments" && selectedPeriod?.status === "CLOSED" ? (
+            <>
+
+              <s-section id="log-artist-payment" heading="Log artist payment">
                 <div style={{ display: "grid", gap: "0.75rem" }}>
                   <s-text color="subdued">
                     Record artist payouts for this closed period. Payments auto-apply to the oldest outstanding artist payable first.
@@ -1893,8 +2406,21 @@ export default function ReportingPage() {
                   </s-table-body>
                 </s-table>
               </s-section>
+            </>
+          ) : null}
 
-              <s-section heading="Tax true-up">
+          {activeReportingTab === "tax" && selectedPeriod?.status !== "CLOSED" ? (
+            <s-section heading="Tax true-up">
+              <s-banner tone="info">
+                <s-text>Close this reporting period before recording a tax true-up.</s-text>
+              </s-banner>
+            </s-section>
+          ) : null}
+
+          {activeReportingTab === "tax" && selectedPeriod?.status === "CLOSED" ? (
+            <>
+
+              <s-section id="tax-true-up" heading="Tax true-up">
                 <div style={{ display: "grid", gap: "0.75rem" }}>
                   <s-text color="subdued">
                     Record the actual tax paid for this closed period. Any surplus or shortfall is applied to the current open period.
@@ -2065,6 +2591,7 @@ export default function ReportingPage() {
             </>
           ) : null}
 
+          {activeReportingTab === "details" ? (
           <s-section heading="Shopify charges">
             <div style={{ display: "grid", gap: "0.5rem" }}>
               <s-text color="subdued">Charges deducted from the donation pool for this period.</s-text>
@@ -2094,7 +2621,9 @@ export default function ReportingPage() {
               </s-table>
             </div>
           </s-section>
+          ) : null}
 
+          {activeReportingTab === "tax" ? (
           <s-section heading="Track 2 — Tax estimation for selected period">
             <div style={{ display: "grid", gap: "0.75rem" }}>
               <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
@@ -2149,6 +2678,7 @@ export default function ReportingPage() {
               </div>
             </div>
           </s-section>
+          ) : null}
         </div>
       </s-page>
 
@@ -2204,6 +2734,364 @@ export default function ReportingPage() {
           </div>
         </div>
       </dialog>
+
+      {artistPaymentDialogOpen ? (
+        <dialog
+          ref={artistPaymentDialogRef}
+          onClose={() => setArtistPaymentDialogOpen(false)}
+          style={{
+            border: "none",
+            borderRadius: "1rem",
+            padding: 0,
+            maxWidth: "44rem",
+            width: "calc(100% - 2rem)",
+          }}
+        >
+          <div id="log-artist-payment" style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+              <div style={{ display: "grid", gap: "0.25rem" }}>
+                <h2 style={{ margin: 0, fontSize: "1rem" }}>Log artist payment</h2>
+                <s-text color="subdued">
+                  Record artist payouts from the selected payable without leaving the payables dashboard.
+                </s-text>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  aria-label="Close artist payment dialog"
+                  onClick={() => setArtistPaymentDialogOpen(false)}
+                  style={{ border: "none", background: "transparent", fontSize: "1.5rem", lineHeight: 1, cursor: "pointer" }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            {artistPaymentArtistOptions.length === 0 ? (
+              <s-banner tone="info">
+                <s-text>All closed-period artist payables through this reporting period have already been fully paid.</s-text>
+              </s-banner>
+            ) : (
+              <artistPaymentFetcher.Form
+                ref={artistPaymentFormRef}
+                method="post"
+                style={{ display: "grid", gap: "0.9rem" }}
+              >
+                <input type="hidden" name="intent" value="log-artist-payment" />
+                <input type="hidden" name="periodId" value={selectedPeriod.id} />
+                <div
+                  aria-live="polite"
+                  aria-atomic="true"
+                  style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
+                >
+                  {artistPaymentStatusMessage}
+                </div>
+
+                {artistPaymentFetcher.data && !artistPaymentFetcher.data.ok ? (
+                  <s-banner tone="critical">
+                    <s-text>{artistPaymentFetcher.data.message}</s-text>
+                  </s-banner>
+                ) : null}
+
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="artist-payment-artist">Artist</label>
+                  <select
+                    id="artist-payment-artist"
+                    name="artistId"
+                    value={selectedArtistPaymentArtistId}
+                    onChange={(event) => setSelectedArtistPaymentArtistId(event.currentTarget.value)}
+                    style={disbursementFieldStyle}
+                  >
+                    {artistPaymentOptions.map((option) => (
+                      <option key={option.artistId} value={option.artistId}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                  {selectedArtistPaymentOption ? (
+                    <div style={{ display: "grid", gap: "0.2rem" }}>
+                      <s-text color="subdued">
+                        Current period outstanding: {formatMoney(selectedArtistPaymentOption.currentOutstanding)}
+                      </s-text>
+                      <s-text color="subdued">
+                        Prior-period outstanding: {formatMoney(selectedArtistPaymentOption.priorOutstanding)}
+                      </s-text>
+                      <s-text color="subdued">
+                        Total outstanding eligible for auto-application: {formatMoney(selectedArtistPaymentOption.totalOutstanding)}
+                      </s-text>
+                    </div>
+                  ) : null}
+                  {artistPaymentFetcher.data?.fieldErrors?.artistId?.map((message) => (
+                    <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                  ))}
+                </div>
+
+                <div style={disbursementTwoColumnGridStyle}>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="artist-payment-amount">Amount</label>
+                    <input
+                      id="artist-payment-amount"
+                      name="amount"
+                      type="number"
+                      min="0"
+                      max={selectedArtistPaymentTotalOutstandingAmount}
+                      step="0.01"
+                      style={disbursementFieldStyle}
+                    />
+                    <s-text color="subdued" style={disbursementHelpTextStyle}>
+                      Max {formatMoney(selectedArtistPaymentTotalOutstandingAmount)}.
+                    </s-text>
+                    {artistPaymentFetcher.data?.fieldErrors?.amount?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="artist-payment-paid-at">Paid date</label>
+                    <input
+                      id="artist-payment-paid-at"
+                      name="paidAt"
+                      type="date"
+                      defaultValue={new Date().toISOString().slice(0, 10)}
+                      style={disbursementFieldStyle}
+                    />
+                    {artistPaymentFetcher.data?.fieldErrors?.paidAt?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={disbursementTwoColumnGridStyle}>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="artist-payment-method">Payment method</label>
+                    <input
+                      id="artist-payment-method"
+                      name="paymentMethod"
+                      type="text"
+                      placeholder="ACH, check, PayPal..."
+                      style={disbursementFieldStyle}
+                    />
+                    {artistPaymentFetcher.data?.fieldErrors?.paymentMethod?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="artist-payment-reference">Reference id</label>
+                    <input
+                      id="artist-payment-reference"
+                      name="referenceId"
+                      type="text"
+                      placeholder="Optional payout or check id"
+                      style={disbursementFieldStyle}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="artist-payment-notes">Notes</label>
+                  <textarea
+                    id="artist-payment-notes"
+                    name="notes"
+                    rows={2}
+                    style={{ ...disbursementFieldStyle, minHeight: "5rem", resize: "vertical" }}
+                  />
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    style={dashboardActionStyle(false, false)}
+                    onClick={() => setArtistPaymentDialogOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={artistPaymentFetcher.state !== "idle"}
+                    style={{
+                      ...disbursementSubmitStyle,
+                      cursor: artistPaymentFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                      opacity: artistPaymentFetcher.state !== "idle" ? 0.6 : 1,
+                    }}
+                  >
+                    Log artist payment
+                  </button>
+                </div>
+              </artistPaymentFetcher.Form>
+            )}
+          </div>
+        </dialog>
+      ) : null}
+
+      {taxTrueUpDialogOpen ? (
+        <dialog
+          ref={taxTrueUpDialogRef}
+          onClose={() => setTaxTrueUpDialogOpen(false)}
+          style={{
+            border: "none",
+            borderRadius: "1rem",
+            padding: 0,
+            maxWidth: "44rem",
+            width: "calc(100% - 2rem)",
+          }}
+        >
+          <div id="tax-true-up" style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+              <div style={{ display: "grid", gap: "0.25rem" }}>
+                <h2 style={{ margin: 0, fontSize: "1rem" }}>Tax true-up</h2>
+                <s-text color="subdued">
+                  Record actual tax paid from the payables dashboard without leaving the current worklist.
+                </s-text>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  aria-label="Close tax true-up dialog"
+                  onClick={() => setTaxTrueUpDialogOpen(false)}
+                  style={{ border: "none", background: "transparent", fontSize: "1.5rem", lineHeight: 1, cursor: "pointer" }}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            {taxTrueUps.length === 0 ? (
+              <trueUpFetcher.Form
+                ref={trueUpFormRef}
+                method="post"
+                style={{ display: "grid", gap: "0.9rem" }}
+              >
+                <input type="hidden" name="intent" value="record-tax-true-up" />
+                <input type="hidden" name="periodId" value={selectedPeriod.id} />
+                <div
+                  aria-live="polite"
+                  aria-atomic="true"
+                  style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
+                >
+                  {trueUpStatusMessage}
+                </div>
+
+                {trueUpFetcher.data && !trueUpFetcher.data.ok ? (
+                  <s-banner tone="critical">
+                    <s-text>{trueUpFetcher.data.message}</s-text>
+                  </s-banner>
+                ) : null}
+
+                <div style={{ display: "flex", gap: "2rem", flexWrap: "wrap" }}>
+                  <div>
+                    <strong>Estimated reserve</strong>
+                    <s-text color="subdued">{formatMoney(summary.track2.estimatedTaxReserve)}</s-text>
+                  </div>
+                  <div>
+                    <strong>Applied to active period</strong>
+                    <s-text color="subdued">
+                      {periods.some((period: PeriodRow) => period.status === "OPEN" && period.id !== selectedPeriod.id) ? "Yes" : "Only if exact match"}
+                    </s-text>
+                  </div>
+                </div>
+
+                <div style={disbursementTwoColumnGridStyle}>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="true-up-actual-tax">Actual tax paid</label>
+                    <input
+                      id="true-up-actual-tax"
+                      name="actualTax"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      style={disbursementFieldStyle}
+                    />
+                    {trueUpFetcher.data?.fieldErrors?.actualTax?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="true-up-filed-at">Filed date</label>
+                    <input
+                      id="true-up-filed-at"
+                      name="filedAt"
+                      type="date"
+                      defaultValue={new Date().toISOString().slice(0, 10)}
+                      style={disbursementFieldStyle}
+                    />
+                    {trueUpFetcher.data?.fieldErrors?.filedAt?.map((message) => (
+                      <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                    ))}
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="true-up-notes">Redistribution notes</label>
+                  <textarea
+                    id="true-up-notes"
+                    name="redistributionNotes"
+                    rows={3}
+                    placeholder="Optional notes for how any surplus should be handled."
+                    style={{ ...disbursementFieldStyle, minHeight: "7rem", resize: "vertical" }}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gap: "0.5rem" }}>
+                  <strong>Surplus redistribution</strong>
+                  <s-text color="subdued">
+                    If actual tax is lower than the estimate, enter how the surplus should be redistributed across causes. Leave blank otherwise.
+                  </s-text>
+                  {trueUpCauseOptions.map((cause: { causeId: string; causeName: string }) => (
+                    <div key={cause.causeId} style={disbursementTwoColumnGridStyle}>
+                      <div style={{ display: "grid", gap: "0.25rem" }}>
+                        <span>{cause.causeName}</span>
+                      </div>
+                      <div style={{ display: "grid", gap: "0.25rem" }}>
+                        <input
+                          name={`redistribution:${cause.causeId}`}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          style={disbursementFieldStyle}
+                        />
+                      </div>
+                    </div>
+                  ))}
+                  {trueUpFetcher.data?.fieldErrors?.redistributions?.map((message) => (
+                    <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                  ))}
+                </div>
+
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "start" }}>
+                  <input type="checkbox" name="confirmShortfall" />
+                  <span>Confirm any shortfall should be deducted from the current open period&apos;s donation pool.</span>
+                </label>
+                {trueUpFetcher.data?.fieldErrors?.confirmShortfall?.map((message) => (
+                  <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                ))}
+
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    style={dashboardActionStyle(false, false)}
+                    onClick={() => setTaxTrueUpDialogOpen(false)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={trueUpFetcher.state !== "idle"}
+                    style={{
+                      ...disbursementSubmitStyle,
+                      cursor: trueUpFetcher.state !== "idle" ? "not-allowed" : "pointer",
+                      opacity: trueUpFetcher.state !== "idle" ? 0.6 : 1,
+                    }}
+                  >
+                    Record tax true-up
+                  </button>
+                </div>
+              </trueUpFetcher.Form>
+            ) : (
+              <s-banner tone="success">
+                <s-text>A tax true-up has already been recorded for this reporting period.</s-text>
+              </s-banner>
+            )}
+          </div>
+        </dialog>
+      ) : null}
     </>
   );
 }

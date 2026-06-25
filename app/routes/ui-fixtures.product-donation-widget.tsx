@@ -62,6 +62,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           packaging: "0.50",
           pod: "0.00",
           mistakeBuffer: "0.50",
+          artistPayout: "2.00",
           shopifyFees: "2.03",
           taxReserve: "1.00",
           remainder: "0.00",
@@ -109,6 +110,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           packaging: "1.25",
           pod: "0.00",
           mistakeBuffer: "0.75",
+          artistPayout: "0.00",
           shopifyFees: "2.07",
           taxReserve: "2.00",
           remainder: "0.00",
@@ -172,9 +174,9 @@ export default function ProductDonationWidgetFixtureRoute() {
         <form action="/cart/add" method="post" style={{ display: "grid", gap: "0.75rem" }}>
           <label style={{ display: "grid", gap: "0.35rem" }}>
             <span>Variant</span>
-            <select name="id" defaultValue="101">
-              <option value="101">Sticker</option>
-              <option value="202">Canvas print</option>
+            <select name="id" defaultValue="gid://shopify/ProductVariant/101">
+              <option value="gid://shopify/ProductVariant/101">Sticker</option>
+              <option value="gid://shopify/ProductVariant/202">Canvas print</option>
             </select>
           </label>
           <label style={{ display: "grid", gap: "0.35rem" }}>

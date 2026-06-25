@@ -92,3 +92,20 @@ test("materials page separates production and shipping materials", async ({ page
   await expect(shippingSection).toContainText("Fixture Mailer");
   await expect(shippingSection).not.toContainText("Fixture Laminate");
 });
+
+test("materials are sorted by name inside each material type", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/library-pages-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.materialsUrl);
+
+  const productionSection = page.locator("s-section").filter({ has: page.getByText("Production Materials") });
+  const rowText = await productionSection.locator("s-table-row").allTextContents();
+  const alphaIndex = rowText.findIndex((text) => text.includes("Playwright Material UI Alpha"));
+  const zetaIndex = rowText.findIndex((text) => text.includes("Playwright Material UI Zeta"));
+
+  expect(alphaIndex).toBeGreaterThanOrEqual(0);
+  expect(zetaIndex).toBeGreaterThanOrEqual(0);
+  expect(alphaIndex).toBeLessThan(zetaIndex);
+});

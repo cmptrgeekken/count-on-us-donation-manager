@@ -4,6 +4,7 @@ import { Link, Outlet, useLoaderData, useLocation, useRouteError } from "@remix-
 import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 
+import { AdminShell, getAdminCompatibilityNavItems } from "../components/AdminShell";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { getLocaleFromRequest } from "../utils/localization.server";
@@ -38,29 +39,21 @@ export default function App() {
   const { apiKey } = useLoaderData<typeof loader>();
   const { search } = useLocation();
   const appHref = (path: string) => `${path}${search}`;
+  const compatibilityNavItems = getAdminCompatibilityNavItems();
 
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
-      {/* Navigation renders in the Shopify admin sidebar */}
+      {/* Shopify sidebar compatibility; primary navigation is rendered by AdminShell. */}
       <ui-nav-menu>
-        <Link to={appHref("/app/dashboard")} rel="home">Dashboard</Link>
-        <Link to={appHref("/app/settings")}>Settings</Link>
-        <Link to={appHref("/app/materials")}>Materials</Link>
-        <Link to={appHref("/app/packages")}>Shipping Packages</Link>
-        <Link to={appHref("/app/equipment")}>Equipment</Link>
-        <Link to={appHref("/app/templates")}>Cost Templates</Link>
-        <Link to={appHref("/app/variants")}>Variants</Link>
-        <Link to={appHref("/app/causes")}>Causes</Link>
-        <Link to={appHref("/app/artists")}>Artists</Link>
-        <Link to={appHref("/app/artist-submissions")}>Artist Submissions</Link>
-        <Link to={appHref("/app/products")}>Products</Link>
-        <Link to={appHref("/app/reporting")}>Reporting</Link>
-        <Link to={appHref("/app/expenses")}>Expenses</Link>
-        <Link to={appHref("/app/audit-log")}>Audit Log</Link>
-        <Link to={appHref("/app/provider-connections")}>Provider Connections</Link>
-        <Link to={appHref("/app/order-history")}>Order History</Link>
+        {compatibilityNavItems.map((item) => (
+          <Link key={item.path} to={appHref(item.path)} rel={item.path === "/app/dashboard" ? "home" : undefined}>
+            {item.label}
+          </Link>
+        ))}
       </ui-nav-menu>
-      <Outlet />
+      <AdminShell>
+        <Outlet />
+      </AdminShell>
     </AppProvider>
   );
 }

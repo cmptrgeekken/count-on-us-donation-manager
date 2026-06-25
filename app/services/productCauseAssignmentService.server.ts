@@ -28,6 +28,7 @@ type ProductCauseAssignmentMetafield = {
 
 type GraphqlUserError = {
   message: string;
+  code?: string;
 };
 
 async function parseGraphqlResponse<T>(response: Response): Promise<T> {
@@ -70,6 +71,8 @@ export async function syncProductCauseAssignmentsMetafield(
 
   const userErrors = json.data?.metafieldsSet?.userErrors ?? [];
   if (userErrors.length > 0) {
-    throw new Error(userErrors[0]?.message ?? "Unable to update product metafield.");
+    const firstError = userErrors[0];
+    const message = firstError?.message ?? "Unable to update product metafield.";
+    throw new Error(firstError?.code ? `${message} (${firstError.code})` : message);
   }
 }

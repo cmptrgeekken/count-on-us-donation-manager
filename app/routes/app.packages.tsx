@@ -85,11 +85,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const [packages, shippingMaterials, reviewItems] = await Promise.all([
     prisma.shippingPackage.findMany({
       where: { shopId },
-      orderBy: [{ status: "asc" }, { name: "asc" }],
+      orderBy: { name: "asc" },
       include: {
         materialLines: {
           include: { material: { select: { id: true, name: true, perUnitCost: true } } },
-          orderBy: { id: "asc" },
+          orderBy: { material: { name: "asc" } },
         },
       },
     }),

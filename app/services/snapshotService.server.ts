@@ -14,6 +14,8 @@ type SnapshotLineItemPayload = {
   product_id?: string | number | null;
   title?: string | null;
   variant_title?: string | null;
+  sku?: string | null;
+  importMappingKey?: string | null;
   quantity?: number | string | null;
   price?: string | number | null;
   total_discount?: string | number | null;
@@ -33,7 +35,7 @@ type SnapshotLineItemPayload = {
   } | null;
 };
 
-type ShopifyOrderPayload = {
+export type ShopifyOrderPayload = {
   admin_graphql_api_id?: string;
   name?: string | null;
   order_number?: string | number | null;
@@ -338,8 +340,9 @@ export async function createSnapshot(
   shopId: string,
   order: ShopifyOrderPayload,
   db: any = prisma,
-  origin: "webhook" | "reconciliation" = "webhook",
+  origin: "webhook" | "reconciliation" | "historical_import" = "webhook",
   fetchImpl: typeof fetch = fetch,
+  metadata: { importBatchId?: string | null; importedAt?: Date | null; periodId?: string | null } = {},
 ): Promise<{ created: boolean; snapshotId?: string }> {
   const shopifyOrderId = order.admin_graphql_api_id ?? null;
   if (!shopifyOrderId) {
@@ -505,7 +508,7 @@ export async function createSnapshot(
             };
 
       let allocations: SnapshotResolution["allocations"] = [];
-      let artistAllocations: SnapshotResolution["artistAllocations"] = [];
+      const artistAllocations: SnapshotResolution["artistAllocations"] = [];
       if (line.productGid) {
         const product = productByGid.get(line.productGid);
         const productId = product?.id ?? "__missing_product__";
@@ -611,6 +614,9 @@ export async function createSnapshot(
           shopifyOrderId,
           orderNumber: order.name ?? order.order_number?.toString() ?? null,
           origin,
+          periodId: metadata.periodId ?? null,
+          importBatchId: metadata.importBatchId ?? null,
+          importedAt: metadata.importedAt ?? null,
           salesTaxCollected: getOrderSalesTax(order),
           createdAt: getOrderCreatedAt(order),
         },
@@ -698,8 +704,12 @@ export async function createSnapshot(
               equipmentName: equipmentLine.name,
               hourlyRate: equipmentLine.hourlyRate,
               perUseCost: equipmentLine.perUseCost,
+              usageMode: equipmentLine.usageMode,
               minutes: scaleDecimal(equipmentLine.minutes, line.quantity),
               uses: scaleDecimal(equipmentLine.uses, line.quantity),
+              yieldDurationMinutes: equipmentLine.yieldDurationMinutes,
+              yieldUses: equipmentLine.yieldUses,
+              yieldQuantity: equipmentLine.yieldQuantity,
               lineCost: equipmentLine.lineCost.mul(line.quantity),
             })),
           });

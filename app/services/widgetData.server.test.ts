@@ -103,6 +103,9 @@ describe("buildWidgetProductPayload", () => {
           },
         ]),
       },
+      productArtistAssignment: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       shop: {
         findUnique: vi.fn().mockResolvedValue({
           currency: "USD",
@@ -158,7 +161,7 @@ describe("buildWidgetProductPayload", () => {
         quantityUnit: "pc",
         quantityParts: [{ value: "1", unit: "pc" }],
         rate: "$0.18/pc",
-        rateDetail: "20 pc/purchase unit @ $3.60/purchase unit",
+        rateDetail: "20 items per purchased unit @ $3.60/purchase unit",
         purchaseLink: "https://example.com/sticker-paper",
       },
     ]);
@@ -201,6 +204,7 @@ describe("buildWidgetProductPayload", () => {
         donationLink: "https://example.com/donate",
       },
     ]);
+    expect(result?.variants[0].reconciliation.artistPayout).toBe("0.00");
 
     const payloadJson = JSON.stringify(result);
     expect(payloadJson).not.toContain("netContribution");
@@ -261,6 +265,9 @@ describe("buildWidgetProductPayload", () => {
           },
         ]),
       },
+      productArtistAssignment: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       shop: {
         findUnique: vi.fn().mockResolvedValue({
           currency: "USD",
@@ -299,6 +306,9 @@ describe("buildWidgetProductPayload", () => {
         }),
       },
       productCauseAssignment: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      productArtistAssignment: {
         findMany: vi.fn().mockResolvedValue([]),
       },
       shop: {
@@ -367,6 +377,9 @@ describe("buildWidgetProductPayload", () => {
           },
         ]),
       },
+      productArtistAssignment: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       shop: {
         findUnique: vi.fn().mockResolvedValue({
           currency: "USD",
@@ -389,5 +402,89 @@ describe("buildWidgetProductPayload", () => {
       estimatedRate: "25.00",
       estimatedAmount: "0.00",
     });
+  });
+
+  it("returns visible payloads for artist-routed products and includes artist payout in reconciliation", async () => {
+    resolveCosts.mockResolvedValue({
+      laborCost: decimal("2"),
+      materialCost: decimal("1"),
+      packagingCost: decimal("0"),
+      equipmentCost: decimal("0"),
+      mistakeBufferAmount: decimal("0"),
+      podCost: decimal("0"),
+      totalCost: decimal("3"),
+      materialLines: [],
+      equipmentLines: [],
+    });
+
+    const db = {
+      product: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "prod-artist",
+          shopifyId: "gid://shopify/Product/Artist",
+          variants: [
+            {
+              id: "var-artist",
+              shopifyId: "gid://shopify/ProductVariant/Artist",
+              price: decimal("20.00"),
+              costConfig: { lineItemCount: 0 },
+            },
+          ],
+        }),
+      },
+      productCauseAssignment: {
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      productArtistAssignment: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            collaborationShare: decimal("100"),
+            payoutEnabledOverride: null,
+            payoutRateOverride: decimal("10"),
+            artist: {
+              paymentEnabled: true,
+              defaultPayoutRate: decimal("15"),
+              causeAssignments: [
+                {
+                  causeId: "cause-artist",
+                  percentage: decimal("100"),
+                  cause: {
+                    id: "cause-artist",
+                    name: "Artist Cause",
+                    is501c3: false,
+                    iconUrl: null,
+                    donationLink: null,
+                  },
+                },
+              ],
+            },
+          },
+        ]),
+      },
+      shop: {
+        findUnique: vi.fn().mockResolvedValue({
+          currency: "USD",
+          paymentRate: decimal("0.029"),
+          effectiveTaxRate: decimal("0.25"),
+          taxDeductionMode: "all_causes",
+        }),
+      },
+      taxOffsetCache: {
+        findUnique: vi.fn().mockResolvedValue({
+          widgetTaxSuppressed: true,
+        }),
+      },
+    };
+
+    const result = await buildWidgetProductPayload("shop-1", "gid://shopify/Product/Artist", db as never);
+
+    expect(result?.visible).toBe(true);
+    expect(result?.variants[0].reconciliation.artistPayout).toBe("2.00");
+    expect(result?.variants[0].causes).toEqual([
+      expect.objectContaining({
+        causeId: "cause-artist",
+        estimatedDonationAmount: "14.12",
+      }),
+    ]);
   });
 });

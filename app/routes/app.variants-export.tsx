@@ -21,6 +21,7 @@ function estimateTotalCost(estimate: VariantEstimatePayload) {
     estimate.reconciliation.equipment,
     estimate.reconciliation.pod,
     estimate.reconciliation.mistakeBuffer,
+    estimate.reconciliation.artistPayout,
     estimate.reconciliation.shopifyFees,
     estimate.reconciliation.taxReserve,
   ]
@@ -107,6 +108,41 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     },
   });
+  const artistAssignments = await prisma.productArtistAssignment.findMany({
+    where: {
+      shopId,
+      productId: { in: productIds },
+      status: "active",
+    },
+    orderBy: [{ attributionOrder: "asc" }, { createdAt: "asc" }],
+    select: {
+      productId: true,
+      collaborationShare: true,
+      payoutEnabledOverride: true,
+      payoutRateOverride: true,
+      artist: {
+        select: {
+          paymentEnabled: true,
+          defaultPayoutRate: true,
+          causeAssignments: {
+            select: {
+              causeId: true,
+              percentage: true,
+              cause: {
+                select: {
+                  id: true,
+                  name: true,
+                  is501c3: true,
+                  iconUrl: true,
+                  donationLink: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
   const causeAssignmentsByProductId = new Map<string, typeof causeAssignments>();
   let maxCauseCount = 0;
   for (const assignment of causeAssignments) {
@@ -115,6 +151,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     current.push(assignment);
     maxCauseCount = Math.max(maxCauseCount, current.length);
     causeAssignmentsByProductId.set(assignment.productId, current);
+  }
+  const artistAssignmentsByProductId = new Map<string, typeof artistAssignments>();
+  for (const assignment of artistAssignments) {
+    if (!assignment.productId) continue;
+    const current = artistAssignmentsByProductId.get(assignment.productId) ?? [];
+    current.push(assignment);
+    artistAssignmentsByProductId.set(assignment.productId, current);
   }
 
 
@@ -125,6 +168,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         shopId,
         variant,
         causeAssignments: causeAssignmentsByProductId.get(variant.productId) ?? [],
+        artistAssignments: artistAssignmentsByProductId.get(variant.productId) ?? [],
         shop,
         widgetTaxSuppressed,
         db: prisma,
@@ -148,6 +192,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         estimate.reconciliation.equipment,
         estimate.reconciliation.pod,
         estimate.reconciliation.mistakeBuffer,
+        estimate.reconciliation.artistPayout,
         estimate.reconciliation.shopifyFees,
         estimate.reconciliation.taxReserve,
         estimate.reconciliation.allocatedDonations,
@@ -183,6 +228,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     "Equipment / maintenance",
     "POD fulfillment",
     "Mistake buffer",
+    "Artist payout",
     "Approx. Shopify/payment fees",
     "Approx. tax buffer withheld",
     "Approx. assigned donations",

@@ -1,8 +1,8 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "60ad3956ca36744f7db0a22fc338b3b1"
-name = "Count On Us"
-application_url = "https://shopify.mnbecks.com/app"
+client_id = "2dde5654ca0a8aa8ad7423c6e55fcb7f"
+name = "Count On Us Dev"
+application_url = "https://shopify-dev.mnbecks.com/app"
 embedded = true
 
 [webhooks]
@@ -16,7 +16,7 @@ api_version = "2026-04"
   "orders/updated",
   "refunds/create"
 ]
-  uri = "https://shopify.mnbecks.com/webhooks"
+  uri = "https://shopify-dev.mnbecks.com/webhooks"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
@@ -24,8 +24,8 @@ scopes = "read_locales,read_metaobject_definitions,read_metaobjects,read_orders,
 
 [auth]
 redirect_urls = [
-  "https://shopify.mnbecks.com/auth/callback",
-  "https://shopify.mnbecks.com/auth/shopify/callback"
+  "https://shopify-dev.mnbecks.com/auth/callback",
+  "https://shopify-dev.mnbecks.com/auth/shopify/callback"
 ]
 
 [build]

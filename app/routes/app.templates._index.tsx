@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { z } from "zod";
+import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 
@@ -21,7 +22,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const templates = await prisma.costTemplate.findMany({
     where: { shopId },
-    orderBy: { createdAt: "asc" },
+    orderBy: { name: "asc" },
     include: {
       _count: {
         select: {
@@ -319,23 +320,11 @@ export default function TemplatesPage() {
         ) : (
           <s-section padding="none">
             <s-table>
-              <div
-                slot="filters"
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: "1rem",
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                  padding: "1rem",
-                }}
-              >
-                <div style={{ display: "grid", gap: "0.2rem" }}>
-                  <strong>Cost Templates</strong>
-                  <s-text color="subdued">Reusable cost structures for variant configuration.</s-text>
-                </div>
-                <s-button variant="primary" onClick={openCreateDialog}>New template</s-button>
-              </div>
+              <ResourceTableHeader
+                title="Cost Templates"
+                description="Reusable cost structures for variant configuration."
+                action={<s-button variant="primary" onClick={openCreateDialog}>New template</s-button>}
+              />
 
               <s-table-header-row>
                 <s-table-header listSlot="primary">Name</s-table-header>

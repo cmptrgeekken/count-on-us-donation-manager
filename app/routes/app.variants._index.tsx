@@ -2,10 +2,12 @@ import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
+import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
+import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -15,18 +17,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterProductId = url.searchParams.get("product") ?? "";
   const filterConfigured = url.searchParams.get("configured") ?? "";
 
-  const [variants, products, templates, shop, taxOffsetCache] = await Promise.all([
+  const [allVariants, products, templates, shop, taxOffsetCache] = await Promise.all([
     prisma.variant.findMany({
       where: {
         shopId,
         ...(filterProductId ? { productId: filterProductId } : {}),
-        ...(filterConfigured === "yes" ? { costConfig: { isNot: null } } : {}),
-        ...(filterConfigured === "no" ? { costConfig: { is: null } } : {}),
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {
         product: { select: { id: true, title: true } },
-        costConfig: { select: { id: true, productionTemplateId: true, productionTemplate: { select: { name: true } } } },
+        costConfig: {
+          select: {
+            productionTemplateId: true,
+            shippingTemplateId: true,
+            productionTemplate: { select: { name: true } },
+            _count: {
+              select: {
+                materialLines: true,
+                equipmentLines: true,
+              },
+            },
+          },
+        },
         providerMappings: {
           where: { status: "mapped" },
           orderBy: [{ lastCostSyncedAt: "desc" }, { updatedAt: "desc" }],
@@ -64,6 +76,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   ]);
 
+  const variants = allVariants.filter((variant) => {
+    if (filterConfigured === "yes") return isVariantCostConfigured(variant.costConfig);
+    if (filterConfigured === "no") return !isVariantCostConfigured(variant.costConfig);
+    return true;
+  });
+
   const productIds = [...new Set(variants.map((variant) => variant.productId))];
   const causeAssignments = await prisma.productCauseAssignment.findMany({
     where: {
@@ -89,12 +107,54 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     },
   });
+  const artistAssignments = await prisma.productArtistAssignment.findMany({
+    where: {
+      shopId,
+      productId: { in: productIds },
+      status: "active",
+    },
+    orderBy: [{ attributionOrder: "asc" }, { createdAt: "asc" }],
+    select: {
+      productId: true,
+      collaborationShare: true,
+      payoutEnabledOverride: true,
+      payoutRateOverride: true,
+      artist: {
+        select: {
+          paymentEnabled: true,
+          defaultPayoutRate: true,
+          causeAssignments: {
+            select: {
+              causeId: true,
+              percentage: true,
+              cause: {
+                select: {
+                  id: true,
+                  name: true,
+                  is501c3: true,
+                  iconUrl: true,
+                  donationLink: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
   const causeAssignmentsByProductId = new Map<string, typeof causeAssignments>();
   for (const assignment of causeAssignments) {
     if (!assignment.productId) continue;
     const current = causeAssignmentsByProductId.get(assignment.productId) ?? [];
     current.push(assignment);
     causeAssignmentsByProductId.set(assignment.productId, current);
+  }
+  const artistAssignmentsByProductId = new Map<string, typeof artistAssignments>();
+  for (const assignment of artistAssignments) {
+    if (!assignment.productId) continue;
+    const current = artistAssignmentsByProductId.get(assignment.productId) ?? [];
+    current.push(assignment);
+    artistAssignmentsByProductId.set(assignment.productId, current);
   }
   const widgetTaxSuppressed = taxOffsetCache?.widgetTaxSuppressed ?? true;
   const estimates = shop
@@ -104,6 +164,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             shopId,
             variant,
             causeAssignments: causeAssignmentsByProductId.get(variant.productId) ?? [],
+            artistAssignments: artistAssignmentsByProductId.get(variant.productId) ?? [],
             shop,
             widgetTaxSuppressed,
             db: prisma,
@@ -121,7 +182,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       title: v.title,
       sku: v.sku ?? "",
       price: v.price.toString(),
-      hasConfig: v.costConfig !== null,
+      hasConfig: isVariantCostConfigured(v.costConfig),
       templateName: v.costConfig?.productionTemplate?.name ?? null,
       mappedProviders: Array.from(new Set(v.providerMappings.map((mapping) => mapping.provider))),
       latestProviderSyncAt: v.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? null,
@@ -213,6 +274,7 @@ function estimateTotalCost(estimate: VariantEstimatePayload) {
     estimate.reconciliation.equipment,
     estimate.reconciliation.pod,
     estimate.reconciliation.mistakeBuffer,
+    estimate.reconciliation.artistPayout,
     estimate.reconciliation.shopifyFees,
     estimate.reconciliation.taxReserve,
   ]
@@ -545,22 +607,11 @@ export default function VariantsPage() {
 
             <s-section padding="none">
               <s-table>
-                <div
-                  slot="filters"
-                  style={{
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: "1rem",
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                    padding: "1rem",
-                  }}
-                >
-                  <div style={{ display: "grid", gap: "0.2rem" }}>
-                    <strong>Variants</strong>
-                    <s-text color="subdued">Filter, select, assign templates, and export detailed estimates.</s-text>
-                  </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                <ResourceTableHeader
+                  title="Variants"
+                  description="Filter, select, assign templates, and export detailed estimates."
+                  action={
+                    <>
                     <s-button variant="secondary" onClick={() => void exportEstimates()} disabled={exportingEstimates}>
                       {exportingEstimates ? "Exporting..." : "Export estimates CSV"}
                     </s-button>
@@ -572,8 +623,9 @@ export default function VariantsPage() {
                       />
                       <span>Select all visible</span>
                     </label>
-                  </div>
-                </div>
+                    </>
+                  }
+                />
 
                 <s-table-header-row>
                   <s-table-header>Select</s-table-header>

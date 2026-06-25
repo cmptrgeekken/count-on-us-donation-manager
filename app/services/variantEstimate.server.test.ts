@@ -98,6 +98,7 @@ describe("buildVariantEstimatePayload", () => {
       mistakeBuffer: "0.25",
       shopifyFees: "0.88",
       taxReserve: "1.82",
+      artistPayout: "0.00",
       allocatedDonations: "10.30",
     });
     expect(result.causes).toEqual([
@@ -113,7 +114,7 @@ describe("buildVariantEstimatePayload", () => {
     expect(result.materialLines[0]).toMatchObject({
       name: "Vinyl",
       lineCost: "2.00",
-      rateDetail: "10 sheet/purchase unit @ $20.00/purchase unit",
+      rateDetail: "10 items per purchased unit @ $20.00/purchase unit",
     });
   });
 
@@ -167,5 +168,77 @@ describe("buildVariantEstimatePayload", () => {
       estimatedAmount: "0.00",
     });
     expect(result.reconciliation.allocatedDonations).toBe("16.12");
+  });
+
+  it("subtracts artist payouts and routes remaining donations through artist causes", async () => {
+    resolveCosts.mockResolvedValue({
+      laborCost: decimal("2.00"),
+      materialCost: decimal("1.00"),
+      packagingCost: decimal("0.00"),
+      equipmentCost: decimal("0.00"),
+      mistakeBufferAmount: decimal("0.00"),
+      podCost: decimal("0.00"),
+      podCostEstimated: false,
+      podCostMissing: false,
+      totalCost: decimal("3.00"),
+      materialLines: [],
+      equipmentLines: [],
+    });
+
+    const result = await buildVariantEstimatePayload({
+      shopId: "shop-1",
+      variant: {
+        id: "variant-1",
+        shopifyId: "gid://shopify/ProductVariant/1",
+        price: decimal("20.00"),
+      },
+      causeAssignments: [],
+      artistAssignments: [
+        {
+          collaborationShare: decimal("100"),
+          payoutEnabledOverride: null,
+          payoutRateOverride: decimal("10"),
+          artist: {
+            paymentEnabled: true,
+            defaultPayoutRate: decimal("15"),
+            causeAssignments: [
+              {
+                causeId: "cause-artist",
+                percentage: decimal("100"),
+                cause: {
+                  id: "cause-artist",
+                  name: "Artist Cause",
+                  is501c3: false,
+                  iconUrl: null,
+                  donationLink: null,
+                },
+              },
+            ],
+          },
+        },
+      ],
+      shop: {
+        currency: "USD",
+        paymentRate: decimal("0.029"),
+        effectiveTaxRate: decimal("0.25"),
+        taxDeductionMode: "all_causes",
+      },
+      widgetTaxSuppressed: true,
+      db: {} as never,
+    });
+
+    expect(result.reconciliation).toMatchObject({
+      estimatedTotal: "20.00",
+      artistPayout: "2.00",
+      allocatedDonations: "14.12",
+      retainedByShop: "0.00",
+    });
+    expect(result.causes).toEqual([
+      expect.objectContaining({
+        causeId: "cause-artist",
+        donationPercentage: "100.00",
+        estimatedDonationAmount: "14.12",
+      }),
+    ]);
   });
 });

@@ -19,6 +19,27 @@ type VariantEstimateCauseAssignment = {
   };
 };
 
+type VariantEstimateArtistAssignment = {
+  collaborationShare: Prisma.Decimal;
+  payoutEnabledOverride: boolean | null;
+  payoutRateOverride: Prisma.Decimal | null;
+  artist: {
+    paymentEnabled: boolean;
+    defaultPayoutRate: Prisma.Decimal;
+    causeAssignments: Array<{
+      causeId: string;
+      percentage: Prisma.Decimal;
+      cause: {
+        id: string;
+        name: string;
+        is501c3: boolean;
+        iconUrl: string | null;
+        donationLink: string | null;
+      };
+    }>;
+  };
+};
+
 type VariantEstimateShop = {
   currency: string;
   paymentRate: Prisma.Decimal | null;
@@ -83,6 +104,7 @@ export type VariantEstimatePayload = {
     packaging: string;
     pod: string;
     mistakeBuffer: string;
+    artistPayout: string;
     shopifyFees: string;
     taxReserve: string;
     remainder: string;
@@ -105,6 +127,49 @@ function formatPercent(value: Prisma.Decimal | null | undefined) {
 
 function nonNegative(value: Prisma.Decimal) {
   return value.lessThan(ZERO) ? ZERO : value;
+}
+
+function addCauseEstimate(
+  estimates: Map<string, {
+    causeId: string;
+    name: string;
+    iconUrl: string | null;
+    donationPercentage: Prisma.Decimal;
+    estimatedDonationAmount: Prisma.Decimal;
+    donationCurrencyCode: string;
+    donationLink: string | null;
+    is501c3: boolean;
+  }>,
+  input: {
+    cause: {
+      id: string;
+      name: string;
+      is501c3: boolean;
+      iconUrl: string | null;
+      donationLink: string | null;
+    };
+    percentage: Prisma.Decimal;
+    amount: Prisma.Decimal;
+    currencyCode: string;
+  },
+) {
+  const current = estimates.get(input.cause.id);
+  if (current) {
+    current.donationPercentage = current.donationPercentage.add(input.percentage);
+    current.estimatedDonationAmount = current.estimatedDonationAmount.add(input.amount);
+    return;
+  }
+
+  estimates.set(input.cause.id, {
+    causeId: input.cause.id,
+    name: input.cause.name,
+    iconUrl: input.cause.iconUrl ?? null,
+    donationPercentage: input.percentage,
+    estimatedDonationAmount: input.amount,
+    donationCurrencyCode: input.currencyCode,
+    donationLink: input.cause.donationLink ?? null,
+    is501c3: input.cause.is501c3,
+  });
 }
 
 function displayUnit(unitDescription: string | null | undefined) {
@@ -132,12 +197,16 @@ function materialRateDetail(line: {
   if (!line.purchasePrice || !line.purchaseQty || line.purchaseQty.lte(ZERO)) return null;
 
   const unit = displayUnit(line.unitDescription);
+  if (line.costingModel === "counted") {
+    return `$${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/${unit}`;
+  }
+
   if (line.costingModel === "yield" && line.yield && line.yield.gt(ZERO)) {
-    return `${formatDecimal(line.yield)} ${unit}/purchase unit @ $${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
+    return `${formatDecimal(line.yield)} items per purchased unit @ $${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
   }
 
   if (line.costingModel === "uses" && line.totalUsesPerUnit && line.totalUsesPerUnit.gt(ZERO)) {
-    return `${formatDecimal(line.totalUsesPerUnit)} ${unit}/purchase unit @ $${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
+    return `${formatDecimal(line.totalUsesPerUnit)} portions per purchased unit @ $${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
   }
 
   return `$${formatEstimateMoney(line.purchasePrice.div(line.purchaseQty))}/purchase unit`;
@@ -217,6 +286,7 @@ export async function buildVariantEstimatePayload(input: {
     price: Prisma.Decimal;
   };
   causeAssignments: VariantEstimateCauseAssignment[];
+  artistAssignments?: VariantEstimateArtistAssignment[];
   shop: VariantEstimateShop;
   widgetTaxSuppressed: boolean;
   quantity?: number;
@@ -241,7 +311,7 @@ export async function buildVariantEstimatePayload(input: {
   const podCost = costs.podCost.mul(quantity);
   const mistakeBufferAmount = costs.mistakeBufferAmount.mul(quantity);
   const processingFee = estimatedTotal.mul(processingRate).add(PROCESSING_FLAT_FEE);
-  const preTaxContribution = nonNegative(
+  const preArtistContribution = nonNegative(
     estimatedTotal
       .sub(laborCost)
       .sub(materialCost)
@@ -251,12 +321,29 @@ export async function buildVariantEstimatePayload(input: {
       .sub(mistakeBufferAmount)
       .sub(processingFee),
   );
+  const artistAssignments = input.artistAssignments ?? [];
+  const artistPayoutTotal = artistAssignments.reduce((sum, assignment) => {
+    const payoutEnabled = assignment.payoutEnabledOverride ?? assignment.artist.paymentEnabled;
+    if (!payoutEnabled) return sum;
+
+    const payoutRate = assignment.payoutRateOverride ?? assignment.artist.defaultPayoutRate;
+    return sum.add(estimatedTotal.mul(assignment.collaborationShare).div(100).mul(payoutRate).div(100));
+  }, ZERO);
+  const preTaxContribution = nonNegative(preArtistContribution.sub(artistPayoutTotal));
 
   const normalizedTaxDeductionMode = normalizeTaxDeductionMode(input.shop.taxDeductionMode);
-  const allocations = input.causeAssignments.map((assignment) => ({
-    is501c3: assignment.cause.is501c3,
-    allocated: preTaxContribution.mul(assignment.percentage).div(100),
-  }));
+  const taxAllocationEstimates = artistAssignments.length > 0
+    ? artistAssignments.flatMap((assignment) => {
+        const artistDonationBase = preTaxContribution.mul(assignment.collaborationShare).div(100);
+        return assignment.artist.causeAssignments.map((causeAssignment) => ({
+          is501c3: causeAssignment.cause.is501c3,
+          allocated: artistDonationBase.mul(causeAssignment.percentage).div(100),
+        }));
+      })
+    : input.causeAssignments.map((assignment) => ({
+        is501c3: assignment.cause.is501c3,
+        allocated: preTaxContribution.mul(assignment.percentage).div(100),
+      }));
   const taxReserve = input.widgetTaxSuppressed
     ? {
         taxableBase: ZERO,
@@ -266,13 +353,53 @@ export async function buildVariantEstimatePayload(input: {
     : computeEstimatedTaxReserve({
         totalNetContribution: preTaxContribution,
         businessExpenseTotal: ZERO,
-        allocations,
+        allocations: taxAllocationEstimates,
         effectiveTaxRate: input.shop.effectiveTaxRate,
         taxDeductionMode: normalizedTaxDeductionMode,
       });
   const donationPool = nonNegative(preTaxContribution.sub(taxReserve.estimatedTaxReserve));
-  const assignedDonationTotal = input.causeAssignments.reduce(
-    (sum, assignment) => sum.add(donationPool.mul(assignment.percentage).div(100)),
+  const causeEstimateMap = new Map<string, {
+    causeId: string;
+    name: string;
+    iconUrl: string | null;
+    donationPercentage: Prisma.Decimal;
+    estimatedDonationAmount: Prisma.Decimal;
+    donationCurrencyCode: string;
+    donationLink: string | null;
+    is501c3: boolean;
+  }>();
+
+  if (artistAssignments.length > 0) {
+    for (const assignment of artistAssignments) {
+      const artistDonationBase = donationPool.mul(assignment.collaborationShare).div(100);
+      for (const causeAssignment of assignment.artist.causeAssignments) {
+        const percentage = assignment.collaborationShare.mul(causeAssignment.percentage).div(100);
+        addCauseEstimate(causeEstimateMap, {
+          cause: causeAssignment.cause,
+          percentage,
+          amount: artistDonationBase.mul(causeAssignment.percentage).div(100),
+          currencyCode: input.shop.currency,
+        });
+      }
+    }
+  } else {
+    for (const assignment of input.causeAssignments) {
+      addCauseEstimate(causeEstimateMap, {
+        cause: assignment.cause,
+        percentage: assignment.percentage,
+        amount: donationPool.mul(assignment.percentage).div(100),
+        currencyCode: input.shop.currency,
+      });
+    }
+  }
+
+  const causeEstimates = Array.from(causeEstimateMap.values()).sort(
+    (left, right) =>
+      right.estimatedDonationAmount.comparedTo(left.estimatedDonationAmount) ||
+      left.name.localeCompare(right.name),
+  );
+  const assignedDonationTotal = causeEstimates.reduce(
+    (sum, estimate) => sum.add(estimate.estimatedDonationAmount),
     ZERO,
   );
   const retainedByShop = nonNegative(donationPool.sub(assignedDonationTotal));
@@ -284,6 +411,7 @@ export async function buildVariantEstimatePayload(input: {
     .add(packagingCost)
     .add(podCost)
     .add(mistakeBufferAmount)
+    .add(artistPayoutTotal)
     .add(processingFee)
     .add(taxReserve.estimatedTaxReserve);
   const rawRemainder = estimatedTotal.sub(attributedTotal);
@@ -311,14 +439,14 @@ export async function buildVariantEstimatePayload(input: {
       managedMarketsRate: formatEstimateMoney(WIDGET_MANAGED_MARKETS_RATE),
       managedMarketsApplicable: false,
     },
-    causes: input.causeAssignments.map((assignment) => ({
-      causeId: assignment.cause.id,
-      name: assignment.cause.name,
-      iconUrl: assignment.cause.iconUrl ?? null,
-      donationPercentage: assignment.percentage.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2),
-      estimatedDonationAmount: formatEstimateMoney(donationPool.mul(assignment.percentage).div(100)),
-      donationCurrencyCode: input.shop.currency,
-      donationLink: assignment.cause.donationLink ?? null,
+    causes: causeEstimates.map((estimate) => ({
+      causeId: estimate.causeId,
+      name: estimate.name,
+      iconUrl: estimate.iconUrl,
+      donationPercentage: estimate.donationPercentage.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2),
+      estimatedDonationAmount: formatEstimateMoney(estimate.estimatedDonationAmount),
+      donationCurrencyCode: estimate.donationCurrencyCode,
+      donationLink: estimate.donationLink,
     })),
     taxReserve: {
       suppressed: input.widgetTaxSuppressed,
@@ -335,6 +463,7 @@ export async function buildVariantEstimatePayload(input: {
       packaging: formatEstimateMoney(packagingCost),
       pod: formatEstimateMoney(podCost),
       mistakeBuffer: formatEstimateMoney(mistakeBufferAmount),
+      artistPayout: formatEstimateMoney(artistPayoutTotal),
       shopifyFees: formatEstimateMoney(processingFee),
       taxReserve: input.widgetTaxSuppressed ? "0.00" : formatEstimateMoney(taxReserve.estimatedTaxReserve),
       remainder: formatEstimateMoney(remainder),
@@ -399,11 +528,46 @@ export async function buildAdminVariantEstimate(
       },
     },
   });
+  const artistAssignments = await db.productArtistAssignment.findMany({
+    where: {
+      shopId,
+      productId: variant.productId,
+      status: "active",
+    },
+    orderBy: [{ attributionOrder: "asc" }, { createdAt: "asc" }],
+    select: {
+      collaborationShare: true,
+      payoutEnabledOverride: true,
+      payoutRateOverride: true,
+      artist: {
+        select: {
+          paymentEnabled: true,
+          defaultPayoutRate: true,
+          causeAssignments: {
+            select: {
+              causeId: true,
+              percentage: true,
+              cause: {
+                select: {
+                  id: true,
+                  name: true,
+                  is501c3: true,
+                  iconUrl: true,
+                  donationLink: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
 
   return buildVariantEstimatePayload({
     shopId,
     variant,
     causeAssignments,
+    artistAssignments,
     shop,
     widgetTaxSuppressed: taxOffsetCache?.widgetTaxSuppressed ?? true,
     db,

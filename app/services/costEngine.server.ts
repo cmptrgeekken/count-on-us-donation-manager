@@ -33,8 +33,12 @@ export type ResolvedMaterialLine = {
 export type ResolvedEquipmentLine = {
   equipmentId: string;
   name: string;
+  usageMode: string;
   minutes: Prisma.Decimal | null;
   uses: Prisma.Decimal | null;
+  yieldDurationMinutes: Prisma.Decimal | null;
+  yieldUses: Prisma.Decimal | null;
+  yieldQuantity: Prisma.Decimal | null;
   lineCost: Prisma.Decimal;
   purchaseLink?: string | null;
   hourlyRate?: Prisma.Decimal | null;
@@ -79,8 +83,9 @@ function decimalOrZero(value: Prisma.Decimal | null | undefined): Prisma.Decimal
 
 /**
  * Compute material line cost.
- * Yield-based:  (purchasePrice / purchaseQty / yield) * quantity
- * Uses-based:   (purchasePrice / purchaseQty / totalUsesPerUnit) * usesPerVariant
+ * Counted parts: perUnitCost * quantity
+ * Variable yield: (purchasePrice / purchaseQty / yield) * quantity
+ * Portioned use:  (purchasePrice / purchaseQty / totalUsesPerUnit) * usesPerVariant
  * Legacy flat shipping: perUnitCost * quantity
  */
 function computeMaterialLineCost(params: {
@@ -96,6 +101,10 @@ function computeMaterialLineCost(params: {
   const { costingModel, purchasePrice, purchaseQty, totalUsesPerUnit, yield_, quantity, usesPerVariant } = params;
   const perUnit = purchasePrice.div(purchaseQty);
 
+  if (costingModel === "counted") {
+    return perUnit.mul(quantity);
+  }
+
   if (costingModel === "yield" && yield_ && yield_.gt(ZERO)) {
     return perUnit.div(yield_).mul(quantity);
   }
@@ -110,16 +119,36 @@ function computeMaterialLineCost(params: {
 
 /**
  * Compute equipment line cost.
- * (hourlyRate * minutes / 60) + (perUseCost * uses)
+ * Direct: (hourlyRate * minutes / 60) + (perUseCost * uses)
+ * Duration yield: (hourlyRate * yieldDurationMinutes / 60) / yieldQuantity
+ * Use yield: (perUseCost * yieldUses) / yieldQuantity
  */
 function computeEquipmentLineCost(params: {
   hourlyRate: Prisma.Decimal | null;
   perUseCost: Prisma.Decimal | null;
+  usageMode: string | null;
   minutes: Prisma.Decimal | null;
   uses: Prisma.Decimal | null;
+  yieldDurationMinutes: Prisma.Decimal | null;
+  yieldUses: Prisma.Decimal | null;
+  yieldQuantity: Prisma.Decimal | null;
 }): Prisma.Decimal {
-  const { hourlyRate, perUseCost, minutes, uses } = params;
+  const { hourlyRate, perUseCost, usageMode, minutes, uses, yieldDurationMinutes, yieldUses, yieldQuantity } = params;
   let cost = ZERO;
+
+  if (usageMode === "duration_yield") {
+    if (hourlyRate && yieldDurationMinutes && yieldQuantity && yieldQuantity.gt(ZERO)) {
+      return hourlyRate.mul(yieldDurationMinutes).div(60).div(yieldQuantity);
+    }
+    return ZERO;
+  }
+
+  if (usageMode === "use_yield") {
+    if (perUseCost && yieldUses && yieldQuantity && yieldQuantity.gt(ZERO)) {
+      return perUseCost.mul(yieldUses).div(yieldQuantity);
+    }
+    return ZERO;
+  }
 
   if (hourlyRate && minutes) {
     cost = cost.add(hourlyRate.mul(minutes).div(60));
@@ -411,8 +440,12 @@ export async function resolveCosts(
   const allEquipmentLines: Array<{
     equipmentId: string;
     equipment: (typeof config.equipmentLines)[0]["equipment"];
+    usageMode: string;
     minutes: Prisma.Decimal | null;
     uses: Prisma.Decimal | null;
+    yieldDurationMinutes: Prisma.Decimal | null;
+    yieldUses: Prisma.Decimal | null;
+    yieldQuantity: Prisma.Decimal | null;
   }> = [];
 
   for (const tl of templateEquipmentLines) {
@@ -422,8 +455,12 @@ export async function resolveCosts(
     allEquipmentLines.push({
       equipmentId: tl.equipmentId,
       equipment: override?.equipment ?? tl.equipment,
+      usageMode: override?.usageMode ?? tl.usageMode,
       minutes: override?.minutes ?? tl.minutes,
       uses: override?.uses ?? tl.uses,
+      yieldDurationMinutes: override?.yieldDurationMinutes ?? tl.yieldDurationMinutes,
+      yieldUses: override?.yieldUses ?? tl.yieldUses,
+      yieldQuantity: override?.yieldQuantity ?? tl.yieldQuantity,
     });
     if (override) consumedVariantEquipmentLineIds.add(override.id);
   }
@@ -433,8 +470,12 @@ export async function resolveCosts(
       allEquipmentLines.push({
         equipmentId: vl.equipmentId,
         equipment: vl.equipment,
+        usageMode: vl.usageMode,
         minutes: vl.minutes,
         uses: vl.uses,
+        yieldDurationMinutes: vl.yieldDurationMinutes,
+        yieldUses: vl.yieldUses,
+        yieldQuantity: vl.yieldQuantity,
       });
     }
   }
@@ -443,15 +484,23 @@ export async function resolveCosts(
     const lineCost = computeEquipmentLineCost({
       hourlyRate: l.equipment.hourlyRate,
       perUseCost: l.equipment.perUseCost,
+      usageMode: l.usageMode,
       minutes: l.minutes,
       uses: l.uses,
+      yieldDurationMinutes: l.yieldDurationMinutes,
+      yieldUses: l.yieldUses,
+      yieldQuantity: l.yieldQuantity,
     });
 
     const line: ResolvedEquipmentLine = {
       equipmentId: l.equipmentId,
       name: l.equipment.name,
+      usageMode: l.usageMode,
       minutes: l.minutes,
       uses: l.uses,
+      yieldDurationMinutes: l.yieldDurationMinutes,
+      yieldUses: l.yieldUses,
+      yieldQuantity: l.yieldQuantity,
       lineCost,
       purchaseLink: l.equipment.purchaseLink ?? null,
     };

@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   parseOptionalNonNegativeNumber,
   parseOptionalNonNegativeWholeNumber,
+  parseOptionalPositiveNumber,
+  parseOptionalPositiveWholeNumber,
   parseOptionalPercent,
   parseRequiredNonNegativeWholeNumber,
 } from "./number-parsing";
@@ -35,6 +37,24 @@ describe("number parsing", () => {
     await expectResponseError(
       () => parseOptionalNonNegativeWholeNumber("1.5", "Material yield"),
       "Material yield must be a non-negative whole number.",
+    );
+  });
+
+  it("parses optional positive decimals", async () => {
+    expect(parseOptionalPositiveNumber("", "Equipment yield duration")).toBeNull();
+    expect(parseOptionalPositiveNumber("1.5", "Equipment yield duration")).toBe(1.5);
+    await expectResponseError(
+      () => parseOptionalPositiveNumber("0", "Equipment yield duration"),
+      "Equipment yield duration must be greater than 0.",
+    );
+  });
+
+  it("parses optional positive whole numbers", async () => {
+    expect(parseOptionalPositiveWholeNumber("", "Products yielded")).toBeNull();
+    expect(parseOptionalPositiveWholeNumber("3", "Products yielded")).toBe(3);
+    await expectResponseError(
+      () => parseOptionalPositiveWholeNumber("0", "Products yielded"),
+      "Products yielded must be a positive whole number.",
     );
   });
 

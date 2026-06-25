@@ -2,6 +2,8 @@
 
 This worksheet is the working artifact for Issue `#59`. It separates repo-backed evidence from the manual verification still required before submission.
 
+Last repo/GitHub review: June 8, 2026.
+
 Status legend:
 
 - `Ready for manual verification` — implementation evidence exists in the repo, but a human still needs to verify the live behavior
@@ -14,7 +16,8 @@ Status legend:
 | --- | --- | --- | --- |
 | Built for Shopify / embedded admin posture | Ready for manual verification | Embedded app shell and Shopify App Bridge wrapper live in `app/routes/app.tsx` | Run an end-to-end embedded admin pass and verify current BFS expectations |
 | GDPR webhook route exists | Ready for manual verification | `app/routes/webhooks.compliance.tsx` enqueues async handling and returns `200` immediately | Send all three compliance topics end to end from a dev store |
-| GDPR compliance topics configured in app config | **Blocked** | `shopify.app.toml` and `shopify.app.phase3.toml` currently do **not** declare `compliance_topics` | Add config entries and verify Shopify accepts them |
+| GDPR compliance topics configured in app config | **Blocked** | `shopify.app.toml` and `shopify.app.dev.toml` currently do **not** declare `compliance_topics`; tracked by `#87` and `#101` | Add config entries and verify Shopify accepts them |
+| Customer data request/redact handling | **Blocked** | `#101` identifies that `customers/data_request` and `customers/redact` still need meaningful handling and data-inventory decisions | Implement handlers, document customer-linked data surfaces, and test all three compliance topics |
 | shop/redact deletion flow | Ready for manual verification | `app/jobs/processors.server.ts` handles `shop/redact` through the compliance worker and deletion job | Trigger the webhook from Shopify and verify 48-hour deletion scheduling works |
 | Security headers on admin shell | Ready for manual verification | `app/routes/app.tsx` sets HSTS, `X-Content-Type-Options`, and `Referrer-Policy`; embedded CSP headers still come from Shopify/Remix boundary headers | Inspect live responses in browser dev tools and a security-header scanner |
 | Public receipt/file safety headers | Ready for manual verification | `app/routes/dev.receipt-file.tsx` sends `X-Content-Type-Options: nosniff` and inline disposition | Verify behavior for uploaded files in a live environment |
@@ -23,16 +26,19 @@ Status legend:
 | Error boundaries on major pages | Ready for manual verification | Error boundaries exist on Dashboard, Settings, Materials, Equipment, Templates, Variants, Causes, Products, Reporting, Expenses, Order History, and Audit Log routes | Trigger representative failures and confirm recoverable UI behavior |
 | Theme compatibility testing | Pending | Theme app extension and cart app block are implemented | Test Dawn plus two additional OS2.0 themes and capture notes/screenshots |
 | Checkout extensibility disclosure | Ready for manual verification | Listing draft includes OS2.0 and Checkout Extensibility disclosures in `docs/app-store-listing-draft.md` | Confirm final listing copy preserves the disclosure |
-| Privacy policy URL | **Blocked** | No final URL is recorded yet | Publish/finalize the privacy policy URL |
-| DPA availability | **Blocked** | No public request path is recorded yet | Define how merchants request or receive the DPA |
+| Privacy policy URL | **Blocked** | No final URL is recorded yet; tracked by `#87` | Publish/finalize the privacy policy URL |
+| DPA availability | **Blocked** | No public request path is recorded yet; tracked by `#87` | Define how merchants request or receive the DPA |
 | OAuth scope minimization | Ready for manual verification | Active scopes are listed in `shopify.app.toml`; recent work moved post-purchase email to `contact_email` to avoid `read_customers` | Review final scope list against submission needs and justify each scope |
 | GraphQL-only admin API posture | Ready for manual verification | Repo uses `admin.graphql(...)`; no known REST Admin usage remains | Spot-check remaining Shopify API touchpoints before submission |
+| Customer email minimization | **Blocked** | `app/services/postPurchaseEmail.server.ts` currently logs raw recipient email in `AuditLog.payload` for `POST_PURCHASE_EMAIL_SENT`; tracked by `#101` | Remove or justify raw customer email storage and update compliance inventory |
 
 ## Immediate Blockers Found During Repo Audit
 
-1. `compliance_topics` are not configured in the app TOML files even though the webhook route exists.
-2. Privacy policy URL is not yet recorded in submission-facing docs.
-3. DPA request path is not yet recorded in submission-facing docs.
+1. `compliance_topics` are not configured in the app TOML files even though the webhook route exists (`#87`, `#101`).
+2. `customers/data_request` and `customers/redact` still need meaningful implementation and evidence (`#101`).
+3. Post-purchase email audit logging currently stores raw recipient email and should be minimized or explicitly justified (`#101`).
+4. Privacy policy URL is not yet recorded in submission-facing docs (`#87`).
+5. DPA request path is not yet recorded in submission-facing docs (`#87`).
 
 ## Evidence Links
 

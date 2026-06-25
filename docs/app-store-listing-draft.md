@@ -42,8 +42,8 @@ Count On Us is designed for merchants who want charitable giving workflows that 
 Current scope note for internal review:
 
 - storefront donation transparency is implemented today
-- Provider Connections exists as a real admin foundation page
-- full Printify sync, mapping, and POD-backed cost resolution are still being completed and should not be overstated in listing copy until the provider tranche lands
+- Provider Connections exists as a real Printify-first admin foundation with credential validation, sync/cache, mapping, and POD cost-resolution foundations
+- provider wording should still stay conservative until `#85` is closed and `#98` decides whether Printful remains v1 scope
 
 ## Platform Requirements / Disclosures
 
@@ -51,6 +51,7 @@ Current scope note for internal review:
 - Checkout Extensibility is required for the Thank You / Order Status donation extension.
 - Shopify Payments is required for the current reporting and charge-sync experience.
 - Public donation receipts are served through an app proxy surface.
+- Post-purchase donation summary emails are opt-in for new shops.
 
 ## Screenshot Plan
 
@@ -86,3 +87,4 @@ Recommended additional screenshots:
   - app embeds where the product currently ships theme app blocks
   - fully automated POD review readiness unless provider review is explicitly in scope
 - Re-check this draft after any remaining Phase 6 hardening work lands.
+- Do not submit until the compliance/privacy blockers tracked by `#87` and `#101` are resolved or explicitly accepted as deferred non-submission scope.

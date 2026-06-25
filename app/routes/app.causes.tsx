@@ -4,6 +4,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { z } from "zod";
 import { HelpText } from "../components/HelpText";
+import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import {
   createCauseMetaobject,
@@ -735,23 +736,11 @@ export default function CausesPage() {
         ) : (
           <s-section padding="none">
             <s-table>
-              <div
-                slot="filters"
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  gap: "1rem",
-                  alignItems: "center",
-                  flexWrap: "wrap",
-                  padding: "1rem",
-                }}
-              >
-                <div style={{ display: "grid", gap: "0.2rem" }}>
-                  <strong>Cause Library</strong>
-                  <HelpText>Nonprofit and impact recipients used for product-level donation assignment and later order-level allocations.</HelpText>
-                </div>
-                <s-button variant="primary" onClick={openCreate}>New cause</s-button>
-              </div>
+              <ResourceTableHeader
+                title="Cause Library"
+                description="Nonprofit and impact recipients used for product-level donation assignment and later order-level allocations."
+                action={<s-button variant="primary" onClick={openCreate}>New cause</s-button>}
+              />
 
               <s-table-header-row>
                 <s-table-header listSlot="primary">Name</s-table-header>

@@ -4,6 +4,8 @@ This folder is organized by purpose rather than by a global numbering scheme.
 
 ## Start Here
 
+- [Work Tracking Policy](work-tracking.md)
+  Source-of-truth rules for GitHub Issues vs repo docs.
 - [Project Instructions](project-instructions.md)
   Collaboration rules, transparency tenet, persona model, and the main reference list.
 - [Current Implementation Status](current-implementation-status.md)
@@ -25,16 +27,10 @@ This folder is organized by purpose rather than by a global numbering scheme.
   Phase-by-phase delivery plan and dependencies.
 - [Internal API Contract](internal-api-contract.md)
   Intended API surface and response conventions.
-- [Implementation Backlog](implementation-backlog.md)
-  Proposed updates, amendments, and follow-up work identified during development.
 
-## Phase Plans
+## Active Work
 
-- [Phase 1 Foundation Spec](plans/phase-1-foundation-spec.md)
-- [Phase 2 Implementation Plan](plans/phase-2-implementation-plan.md)
-- [Phase 3 Implementation Plan](plans/phase-3-implementation-plan.md)
-
-Use these when planning or validating work within a specific phase.
+GitHub Issues are authoritative for outstanding work, blockers, deferred scope, and open questions. Local planning/backlog docs that previously duplicated GitHub now live in [Archive](archive/README.md).
 
 ## Standards
 
@@ -50,10 +46,15 @@ These are implementation rules, not optional guidance.
 
 ADRs keep their numbering because they are stable architectural records. Outside the ADRs, descriptive filenames are preferred over a repository-wide numeric scheme.
 
+## Archive
+
+- [Documentation Archive](archive/README.md)
+  Historical plans, audits, and backlog documents retained for context.
+
 ## Naming Notes
 
 - ADRs remain numbered: `ADR-001`, `ADR-002`, and so on.
-- Phase-specific execution docs live in `docs/plans/`.
+- Historical phase-specific execution docs live in `docs/archive/plans/`.
 - Standards live in `docs/standards/`.
 - Top-level docs are reserved for the most important cross-cutting references.
 
@@ -67,9 +68,10 @@ ADRs keep their numbering because they are stable architectural records. Outside
 
 When multiple docs touch the same topic, use this order of precedence:
 
-1. ADRs for architectural decisions that explicitly change or constrain prior assumptions.
-2. PRD for product behavior, financial rules, and release scope.
-3. Build plan for sequencing, dependencies, and phase exit criteria.
-4. Phase plans/specs for execution detail within a specific phase.
-5. Current implementation status for repo reality today.
-6. Implementation backlog for follow-up ideas that are not yet canonical.
+1. GitHub Issues for open work, blockers, deferred scope, and unresolved questions.
+2. ADRs for architectural decisions that explicitly change or constrain prior assumptions.
+3. Standards for security, testing, accessibility, and operating rules.
+4. PRD for product behavior, financial rules, and release scope.
+5. Build plan for sequencing, dependencies, and phase exit criteria.
+6. Current implementation status for repo reality today.
+7. Archived docs for historical context only.

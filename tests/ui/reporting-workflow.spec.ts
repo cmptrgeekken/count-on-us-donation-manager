@@ -9,8 +9,13 @@ test("reporting dashboard shows track summaries and charges", async ({ page, req
   const bootstrap = await bootstrapResponse.json();
   await page.goto(bootstrap.reportingUrl);
 
+  await expect(page.getByRole("heading", { name: "What needs attention" })).toBeVisible();
+  await expect(page.getByText("Open reporting period")).toBeVisible();
+  await expect(page.getByText("Causes to pay")).toBeVisible();
+  await expect(page.getByText("Artists to pay")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Pay cause" }).first()).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Pay artist" }).first()).toBeDisabled();
   await expect(page.getByRole("heading", { name: /Donation pool/ })).toBeVisible();
-  await expect(page.getByRole("heading", { name: /Tax estimation/ })).toBeVisible();
 
   const chargesRow = page.locator("s-table-row").filter({ hasText: "Shopify charge A" });
   await expect(chargesRow).toBeVisible();
@@ -20,9 +25,9 @@ test("reporting dashboard shows track summaries and charges", async ({ page, req
   await expect(allocationRow).toBeVisible();
   await expect(allocationRow).toContainText("$54.00");
 
-  await expect(page.getByText("Donation pool (after carry-forward)")).toBeVisible();
+  await expect(page.getByText("Donation pool available")).toBeVisible();
   const donationPoolSection = page.locator("s-section").filter({ hasText: "Donation pool" });
-  await expect(donationPoolSection.getByText("$78.00")).toBeVisible();
+  await expect(donationPoolSection.getByText("$78.00").first()).toBeVisible();
 });
 
 test("reporting dashboard can close an open period", async ({ page, request }) => {
@@ -50,6 +55,9 @@ test("reporting dashboard can log a disbursement with a receipt", async ({ page,
   await page.getByRole("button", { name: "Close period" }).click();
   await expect(page.locator("s-banner").getByText("Reporting period closed.")).toBeVisible();
 
+  await page.getByRole("button", { name: "Pay cause" }).first().click();
+  await expect(page.getByRole("heading", { name: "Log disbursement" })).toBeVisible();
+  await expect(page.locator("#disbursement-cause")).toBeVisible();
   await page.locator("#disbursement-allocated-amount").fill("20");
   await page.locator("#disbursement-extra-contribution").fill("5");
   await page.locator("#disbursement-fees-covered").fill("2");
@@ -61,7 +69,7 @@ test("reporting dashboard can log a disbursement with a receipt", async ({ page,
     mimeType: "application/pdf",
     buffer: Buffer.from("fixture receipt"),
   });
-  await page.getByRole("button", { name: "Log disbursement" }).click();
+  await page.locator("#log-disbursement").getByRole("button", { name: "Log disbursement" }).click();
 
   await expect(page.locator("s-banner").getByText("Disbursement logged.")).toBeVisible();
   const disbursementRow = page
@@ -76,6 +84,7 @@ test("reporting dashboard can log a disbursement with a receipt", async ({ page,
   await expect(disbursementRow).toContainText("$27.00");
   await expect(disbursementRow.getByRole("link", { name: "View receipt" })).toBeVisible();
 
+  await page.getByRole("tab", { name: "Details" }).click();
   const allocationRow = page.locator("s-table-row").filter({ hasText: "Playwright Cause" }).first();
   await expect(allocationRow).toContainText("$0.00");
   await expect(allocationRow).toContainText("$54.00");
@@ -93,20 +102,65 @@ test("reporting dashboard can record a surplus tax true-up", async ({ page, requ
   const bootstrap = await bootstrapResponse.json();
   await page.goto(bootstrap.closedReportingUrl);
 
+  await page.getByRole("tab", { name: "Tax" }).click();
   const trueUpSection = page.locator("s-section").filter({ hasText: "Tax true-up" });
   await expect(page.getByRole("heading", { name: "Tax true-up" })).toBeVisible();
-  await expect(trueUpSection.getByText("$10.00")).toBeVisible();
+  await expect(trueUpSection.getByText("$10.00").first()).toBeVisible();
 
   await page.getByLabel("Actual tax paid").fill("8");
   await expect(page.getByLabel("Actual tax paid")).toHaveValue("8");
   await page.getByLabel("Filed date").fill("2026-04-08");
   await page.locator('input[name^="redistribution:"]').first().fill("2");
-  await page.getByRole("button", { name: "Record tax true-up" }).click();
+  await page.locator("#tax-true-up").getByRole("button", { name: "Record tax true-up" }).click();
 
   await expect(page.locator("s-banner").getByText("Tax true-up recorded.")).toBeVisible();
   const trueUpRow = page.locator("s-table-row").filter({ hasText: "2026" }).filter({ hasText: "$10.00" });
   await expect(trueUpRow).toContainText("$8.00");
   await expect(trueUpRow).toContainText("$2.00");
+});
+
+test("reporting dashboard opens tax true-up from the payables action area", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/reporting-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.closedReportingUrl);
+
+  await page.getByRole("button", { name: "Record tax true-up" }).click();
+  const trueUpDialog = page.locator("dialog").filter({ hasText: "Tax true-up" });
+  await expect(trueUpDialog).toBeVisible();
+  await expect(trueUpDialog.getByLabel("Actual tax paid")).toBeVisible();
+  await expect(trueUpDialog.getByRole("button", { name: "Record tax true-up" })).toBeVisible();
+});
+
+test("reporting dashboard can log an artist payment", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/reporting-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.closedReportingUrl);
+
+  await expect(page.getByRole("heading", { name: "What needs attention" })).toBeVisible();
+  await expect(page.getByText("Payables dashboard")).toBeVisible();
+  await expect(page.getByText("Artists to pay")).toBeVisible();
+  const artistPaymentShortcut = page.getByRole("button", { name: "Pay artist" }).first();
+  await expect(artistPaymentShortcut).toBeEnabled();
+
+  await artistPaymentShortcut.click();
+  await expect(page.getByRole("heading", { name: "Log artist payment" })).toBeVisible();
+  await page.locator("#artist-payment-amount").fill("15");
+  await page.locator("#artist-payment-paid-at").fill("2026-04-09");
+  await page.locator("#artist-payment-method").fill("ACH");
+  await page.locator("#artist-payment-reference").fill("artist-ach-001");
+  await page.locator("#artist-payment-notes").fill("Fixture artist payout");
+  await page.locator("#log-artist-payment").getByRole("button", { name: "Log artist payment" }).click();
+
+  await expect(page.locator("s-banner").getByText("Artist payment logged.")).toBeVisible();
+  const paymentRow = page
+    .locator("s-table-row")
+    .filter({ hasText: "Playwright Artist" })
+    .filter({ hasText: "ACH" });
+  await expect(paymentRow).toContainText("$15.00");
 });
 
 test("reporting dashboard export routes return csv and pdf downloads", async ({ request }) => {
@@ -135,6 +189,7 @@ test("reporting dashboard shows analytical recalculation deltas as read-only ana
   const bootstrap = await bootstrapResponse.json();
   await page.goto(bootstrap.closedReportingUrl);
 
+  await page.getByRole("tab", { name: "Diagnostics" }).click();
   const analysisSection = page.locator("s-section").filter({ hasText: "Analytical recalculation" });
   await expect(page.getByRole("heading", { name: "Analytical recalculation" })).toBeVisible();
   await expect(analysisSection.getByText("Analytical only.")).toBeVisible();

@@ -1,5 +1,7 @@
 # Implementation Backlog
 
+Archived June 2026. GitHub Issues are now authoritative for outstanding work. This backlog is retained for historical context and should not be treated as the active queue.
+
 Use this document for post-spec amendments, follow-up improvements, and design or implementation issues discovered during development.
 
 This is not the source of record for shipped scope. Items here become authoritative only when they are folded into the PRD, build plan, ADRs, or a phase implementation plan.

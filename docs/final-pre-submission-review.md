@@ -2,6 +2,8 @@
 
 This document is the working review template for Issue `#63`. It is meant to be filled in after the technical audit, QA pass, demo-store prep, and listing draft are all reviewed.
 
+Last repo/GitHub review before execution: June 8, 2026.
+
 ## Review Metadata
 
 - Review date:
@@ -13,19 +15,21 @@ This document is the working review template for Issue `#63`. It is meant to be 
 ## Inputs Reviewed
 
 - Technical audit: `docs/app-store-technical-audit.md`
-- QA workbook: `TODO`
+- QA workbook: `docs/prd-qa-workbook.md`
 - Demo store prep: `docs/demo-store-review-prep.md`
 - Listing draft: `docs/app-store-listing-draft.md`
 - Current implementation snapshot: `docs/current-implementation-status.md`
-- Pending open questions: `docs/plans/pending-questions.md`
+- Open questions and outstanding work: GitHub Issues
 
 ## Submission Blockers
 
-List every blocker that must be closed before submission:
+List every blocker that must be closed before submission. Current known blockers from the June 8, 2026 repo/GitHub review:
 
-1.
-2.
-3.
+1. `#101` Compliance webhook handling and customer-data minimization: implement `customers/data_request`, `customers/redact`, compliance topic configuration, and customer email minimization.
+2. `#87` App Review blockers: privacy policy URL, DPA request path, app config compliance topics, extension deployment/config review, and canonical URL cleanup.
+3. `#60` Full PRD QA workbook execution: every checklist item needs pass/fail/deferred evidence.
+4. `#61` Demo store preparation: reviewer store, storefront blocks, extension deployment, receipts, and reviewer instructions need final evidence.
+5. `#63` This final review must record the actual go/no-go decision after the above inputs are complete.
 
 ## Review Areas
 

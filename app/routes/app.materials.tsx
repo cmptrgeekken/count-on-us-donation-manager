@@ -4,6 +4,7 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { EmptyTableRow, ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
@@ -20,7 +21,7 @@ const materialIdSchema = z.object({
 const materialFormSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   type: z.enum(["production", "shipping"]),
-  costingModel: z.enum(["yield", "uses"]),
+  costingModel: z.enum(["counted", "yield", "uses"]),
   purchaseLink: z.union([z.literal(""), z.url({ message: "Purchase link must be a valid URL." })]),
 });
 
@@ -30,7 +31,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const materials = await prisma.materialLibraryItem.findMany({
     where: { shopId },
-    orderBy: { createdAt: "asc" },
+    orderBy: { name: "asc" },
     include: {
       _count: { select: { templateLines: true, variantLines: true } },
     },
@@ -96,7 +97,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         costingModel === "uses"
           ? parseRequiredPositiveDecimal(
               formData.get("totalUsesPerUnit")?.toString(),
-              "Total uses per unit",
+              "Portions per purchased unit",
             )
           : null;
       weightGrams = parseOptionalPositiveDecimal(
@@ -244,7 +245,7 @@ const EMPTY_FORM = {
   id: "",
   name: "",
   type: "production",
-  costingModel: "yield",
+  costingModel: "counted",
   purchasePrice: "",
   purchaseQty: "",
   totalUsesPerUnit: "",
@@ -385,11 +386,13 @@ export default function MaterialsPage() {
         <s-table-cell>{material.name}</s-table-cell>
         <s-table-cell>{material.type === "production" ? "Production" : "Shipping"}</s-table-cell>
         <s-table-cell>
-          {material.costingModel === "yield"
-            ? "Yield-based"
-            : material.costingModel === "uses"
-              ? "Uses-based"
-              : "Flat per unit"}
+          {material.costingModel === "counted"
+            ? "Counted parts"
+            : material.costingModel === "yield"
+              ? "Variable yield"
+              : material.costingModel === "uses"
+                ? "Portioned use"
+                : "Flat per unit"}
         </s-table-cell>
         <s-table-cell>{formatMoney(material.perUnitCost)}</s-table-cell>
         <s-table-cell>{material.weightGrams ? `${material.weightGrams} g` : "—"}</s-table-cell>
@@ -451,20 +454,16 @@ export default function MaterialsPage() {
     return (
       <s-section padding="none">
         <s-table>
-          <div slot="filters" style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap", padding: "1rem" }}>
-            <div style={{ display: "grid", gap: "0.2rem" }}>
-              <strong>{heading}</strong>
-              <s-text color="subdued">{description}</s-text>
-            </div>
-            <s-button variant="primary" onClick={openCreate}>
-              New material
-            </s-button>
-          </div>
+          <ResourceTableHeader
+            title={heading}
+            description={description}
+            action={<s-button variant="primary" onClick={openCreate}>New material</s-button>}
+          />
 
           <s-table-header-row>
             <s-table-header listSlot="primary">Name</s-table-header>
             <s-table-header listSlot="inline">Type</s-table-header>
-            <s-table-header listSlot="labeled">Costing model</s-table-header>
+            <s-table-header listSlot="labeled">Cost method</s-table-header>
             <s-table-header listSlot="labeled" format="currency">Per-unit cost</s-table-header>
             <s-table-header listSlot="labeled">Weight</s-table-header>
             <s-table-header listSlot="labeled">Purchase link</s-table-header>
@@ -477,17 +476,7 @@ export default function MaterialsPage() {
             {rows.length > 0 ? (
               renderMaterialRows(rows)
             ) : (
-              <s-table-row>
-                <s-table-cell>{emptyText}</s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-                <s-table-cell></s-table-cell>
-              </s-table-row>
+              <EmptyTableRow colSpan={9}>{emptyText}</EmptyTableRow>
             )}
           </s-table-body>
         </s-table>
@@ -609,7 +598,7 @@ export default function MaterialsPage() {
           </div>
 
           <div style={{ display: "grid", gap: "0.35rem" }}>
-            <label htmlFor="material-costing-model">Costing model</label>
+            <label htmlFor="material-costing-model">Cost method</label>
             <select
               id="material-costing-model"
               value={form.costingModel}
@@ -622,9 +611,17 @@ export default function MaterialsPage() {
                 font: "inherit",
               }}
             >
-              <option value="yield">Yield-based (e.g. fabric by the metre)</option>
-              <option value="uses">Uses-based (e.g. screen with 50 uses)</option>
+              <option value="counted">Counted parts</option>
+              <option value="yield">Variable yield</option>
+              <option value="uses">Portioned use</option>
             </select>
+            <s-text color="subdued">
+              {form.costingModel === "counted"
+                ? "Use for discrete pieces purchased in a batch, such as jump rings or earring backs."
+                : form.costingModel === "yield"
+                  ? "Use when one purchased unit makes a product-specific number of finished items, such as acrylic sheets."
+                  : "Use when a container or supply is spread across approximate portions, such as glue dollops."}
+            </s-text>
           </div>
 
           <div
@@ -664,7 +661,7 @@ export default function MaterialsPage() {
           {form.costingModel === "uses" && (
             <>
               <s-text-field
-                label="Total uses per unit"
+                label="Portions per purchased unit"
                 type="number"
                 min={0}
                 step={1}
@@ -673,7 +670,7 @@ export default function MaterialsPage() {
                   updateForm("totalUsesPerUnit", (event.target as HTMLInputElement | null)?.value ?? "")
                 }
               />
-              {perUsePreview && <s-text color="subdued">Per-use cost: {formatMoney(perUsePreview)}</s-text>}
+              {perUsePreview && <s-text color="subdued">Per-portion cost: {formatMoney(perUsePreview)}</s-text>}
             </>
           )}
 

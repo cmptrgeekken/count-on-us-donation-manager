@@ -22,7 +22,7 @@ What the preset gives you:
   - logged Disbursements
   - Shopify charge rows
   - Tax true-up history
-- post-purchase email enabled
+- representative data for post-purchase/email review, but post-purchase donation emails are opt-in for new shops and should be manually enabled in Settings if reviewers need to exercise that path
 
 ## Manual finish checklist
 
@@ -32,7 +32,8 @@ The seed preset gets the store close to review-ready, but a few items still requ
 2. Confirm the cart donation summary theme app block is enabled if you want reviewers to exercise it.
 3. Confirm the post-purchase / order-status extension is deployed to the intended review surface.
 4. Add or verify at least one representative disbursement receipt upload for the public receipts page.
-5. Decide whether POD provider review is in scope:
+5. Enable **Send post-purchase donation summary emails** in Settings if the reviewer path includes customer email delivery.
+6. Decide whether POD provider review is in scope:
    - if yes, connect and verify the currently supported provider path
    - if no, note that POD review is intentionally excluded from reviewer instructions
 

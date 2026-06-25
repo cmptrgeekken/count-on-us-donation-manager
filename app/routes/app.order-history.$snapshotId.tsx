@@ -265,6 +265,12 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
   );
 }
 
+function formatOrigin(origin: string) {
+  if (origin === "webhook") return "Webhook";
+  if (origin === "historical_import") return "Historical import";
+  return "Reconciliation";
+}
+
 export default function OrderSnapshotDetailPage() {
   const { snapshot } = useLoaderData<typeof loader>();
   const adjustmentFetcher = useFetcher<{ ok: boolean; message: string }>();
@@ -298,7 +304,7 @@ export default function OrderSnapshotDetailPage() {
                 gap: "1rem",
               }}
             >
-              <SummaryTile label="Origin" value={snapshot.origin === "webhook" ? "Webhook" : "Reconciliation"} />
+              <SummaryTile label="Origin" value={formatOrigin(snapshot.origin)} />
               <SummaryTile label="Created" value={new Date(snapshot.createdAt).toLocaleString()} />
               <SummaryTile label="Line count" value={snapshot.lines.length.toString()} />
               <SummaryTile

@@ -30,7 +30,7 @@ test("variant details save and discard work on the real route", async ({ page, r
   await expect(minutesField).toHaveValue("12");
 });
 
-test("variant details default new yield-based material lines to 1", async ({ page, request }) => {
+test("variant details default new variable-yield material lines to 1", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/variant-details-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
 
@@ -45,7 +45,7 @@ test("variant details default new yield-based material lines to 1", async ({ pag
   await searchInput.fill("Playwright Yield Material");
   await page.getByRole("button", { name: "Playwright Yield Material" }).click();
 
-  await expect(page.getByLabel("Yield per piece")).toHaveValue("1");
+  await expect(page.getByLabel("Items made from one purchased unit")).toHaveValue("1");
 });
 
 test("variant details groups additional shipping material lines separately", async ({ page, request }) => {
@@ -137,4 +137,44 @@ test("variant details persist production and shipping template assignments", asy
   await expect(page.locator("p").filter({ hasText: "Playwright Production Template" })).toBeVisible();
   await expect(page.getByText("Explicit override")).toBeVisible();
   await expect(page.locator("p").filter({ hasText: "Playwright Shipping Override Template" })).toBeVisible();
+});
+
+test("variant details can copy configuration from another variant", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/variant-details-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.variantUrl);
+
+  await page.getByRole("button", { name: "Copy from variant" }).click();
+  const copyDialog = page.getByRole("dialog").filter({ hasText: "Copy variant configuration" });
+  await expect(copyDialog).toBeVisible();
+  await expect(copyDialog.getByRole("button", { name: "Copy configuration" })).toBeDisabled();
+
+  await copyDialog.getByPlaceholder("Search configured variants").fill("Source");
+  await copyDialog.getByRole("button", { name: /Playwright Test Product - Playwright Source Variant/ }).click();
+  await expect(copyDialog.getByText("Production template: Playwright Production Template")).toBeVisible();
+  await copyDialog.getByRole("button", { name: "Copy configuration" }).click();
+
+  await expect(page.getByText("Variant configuration copied.")).toBeVisible();
+  await expect(page.locator("p").filter({ hasText: "Playwright Production Template" })).toBeVisible();
+  await expect(page.getByText("Explicit override")).toBeVisible();
+  await expect(page.locator("p").filter({ hasText: "Playwright Shipping Template" })).toBeVisible();
+  await expect(page.getByLabel("Preferred package")).toHaveValue(/.+/);
+  await expect(page.getByLabel("Packed length")).toHaveValue("10");
+  await expect(page.getByLabel("Packed width")).toHaveValue("8");
+  await expect(page.getByLabel("Packed height")).toHaveValue("3");
+  await expect(page.getByLabel("Packed weight (g)")).toHaveValue("250");
+  await expect(page.getByLabel("Can share a package with other items")).not.toBeChecked();
+  await expect(page.getByLabel("Minutes per variant")).toHaveValue("17");
+  await expect(page.getByLabel("Hourly rate ($)")).toHaveValue("18.5");
+  await expect(page.getByLabel("Mistake buffer (%)")).toHaveValue("7.50");
+  await expect(page.getByRole("paragraph").filter({ hasText: "Playwright Yield Material" })).toBeVisible();
+  await expect(page.getByRole("paragraph").filter({ hasText: "Playwright Heat Press" })).toBeVisible();
+
+  await page.reload();
+
+  await expect(page.getByLabel("Minutes per variant")).toHaveValue("17");
+  await expect(page.getByLabel("Packed length")).toHaveValue("10");
+  await expect(page.getByRole("paragraph").filter({ hasText: "Playwright Heat Press" })).toBeVisible();
 });
