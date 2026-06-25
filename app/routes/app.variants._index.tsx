@@ -9,6 +9,25 @@ import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
+type DecimalLike = { toString(): string };
+
+type BulkAssignmentMismatch = {
+  variantId: string;
+  productTitle: string;
+  variantTitle: string;
+  materialNames: string[];
+  equipmentNames: string[];
+};
+
+function nullableDecimalEqual(left: DecimalLike | null, right: DecimalLike | null) {
+  if (left === null || right === null) return left === right;
+  return left.toString() === right.toString();
+}
+
+function pushUnique(values: string[], value: string) {
+  if (!values.includes(value)) values.push(value);
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -204,7 +223,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "bulk-assign-template") {
     const templateId = formData.get("templateId")?.toString() ?? "";
-    const variantIds = formData.getAll("variantId").map(String);
+    const variantIds = [...new Set(formData.getAll("variantId").map(String))];
+    const cleanupExactDuplicates = formData.get("cleanupExactDuplicates")?.toString() === "true";
 
     if (!templateId) {
       return jsonResponse({ ok: false, message: "No template selected." }, { status: 400 });
@@ -215,33 +235,217 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const template = await prisma.costTemplate.findFirst({
       where: { id: templateId, shopId },
-      select: { shopId: true },
+      select: {
+        shopId: true,
+        materialLines: {
+          select: {
+            id: true,
+            materialId: true,
+            quantity: true,
+            yield: true,
+            usesPerVariant: true,
+            material: { select: { name: true } },
+          },
+        },
+        equipmentLines: {
+          select: {
+            id: true,
+            equipmentId: true,
+            usageMode: true,
+            minutes: true,
+            uses: true,
+            yieldDurationMinutes: true,
+            yieldUses: true,
+            yieldQuantity: true,
+            equipment: { select: { name: true } },
+          },
+        },
+      },
     });
 
     if (!template) {
       return jsonResponse({ ok: false, message: "Template not found." }, { status: 404 });
     }
 
-    for (const variantId of variantIds) {
-      const existing = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId } });
-      if (existing) {
-        await prisma.variantCostConfig.updateMany({ where: { id: existing.id, shopId }, data: { productionTemplateId: templateId } });
-      } else {
-        await prisma.variantCostConfig.create({ data: { shopId, variantId, productionTemplateId: templateId } });
-      }
-    }
-
-    await prisma.auditLog.create({
-      data: {
-        shopId,
-        entity: "VariantCostConfig",
-        action: "BULK_TEMPLATE_ASSIGNED",
-        actor: "merchant",
-        payload: { templateId, variantCount: variantIds.length },
+    const variantsToAssign = await prisma.variant.findMany({
+      where: { id: { in: variantIds }, shopId },
+      select: {
+        id: true,
+        title: true,
+        product: { select: { title: true } },
+        costConfig: {
+          include: {
+            materialLines: {
+              where: { templateLineId: null },
+              include: { material: { select: { name: true } } },
+            },
+            equipmentLines: {
+              where: { templateLineId: null },
+              include: { equipment: { select: { name: true } } },
+            },
+          },
+        },
       },
     });
 
-    return jsonResponse({ ok: true, message: `Template assigned to ${variantIds.length} variant(s).` });
+    if (variantsToAssign.length !== variantIds.length) {
+      return jsonResponse({ ok: false, message: "One or more selected variants could not be found." }, { status: 404 });
+    }
+
+    const templateMaterialLinesByMaterialId = new Map<string, typeof template.materialLines>();
+    for (const line of template.materialLines) {
+      templateMaterialLinesByMaterialId.set(line.materialId, [
+        ...(templateMaterialLinesByMaterialId.get(line.materialId) ?? []),
+        line,
+      ]);
+    }
+
+    const templateEquipmentLinesByEquipmentId = new Map<string, typeof template.equipmentLines>();
+    for (const line of template.equipmentLines) {
+      templateEquipmentLinesByEquipmentId.set(line.equipmentId, [
+        ...(templateEquipmentLinesByEquipmentId.get(line.equipmentId) ?? []),
+        line,
+      ]);
+    }
+
+    const exactDuplicateMaterialLineIds: string[] = [];
+    const exactDuplicateEquipmentLineIds: string[] = [];
+    const mismatches: BulkAssignmentMismatch[] = [];
+
+    for (const variant of variantsToAssign) {
+      if (!variant.costConfig) continue;
+
+      const mismatch: BulkAssignmentMismatch = {
+        variantId: variant.id,
+        productTitle: variant.product.title,
+        variantTitle: variant.title,
+        materialNames: [],
+        equipmentNames: [],
+      };
+
+      for (const variantLine of variant.costConfig.materialLines) {
+        const matchingTemplateLines = templateMaterialLinesByMaterialId.get(variantLine.materialId) ?? [];
+        if (matchingTemplateLines.length !== 1) continue;
+
+        const templateLine = matchingTemplateLines[0];
+        const isExactDuplicate =
+          nullableDecimalEqual(variantLine.quantity, templateLine.quantity) &&
+          nullableDecimalEqual(variantLine.yield, templateLine.yield) &&
+          nullableDecimalEqual(variantLine.usesPerVariant, templateLine.usesPerVariant);
+
+        if (isExactDuplicate) {
+          exactDuplicateMaterialLineIds.push(variantLine.id);
+        } else {
+          pushUnique(mismatch.materialNames, variantLine.material.name);
+        }
+      }
+
+      for (const variantLine of variant.costConfig.equipmentLines) {
+        const matchingTemplateLines = templateEquipmentLinesByEquipmentId.get(variantLine.equipmentId) ?? [];
+        if (matchingTemplateLines.length !== 1) continue;
+
+        const templateLine = matchingTemplateLines[0];
+        const isExactDuplicate =
+          variantLine.usageMode === templateLine.usageMode &&
+          nullableDecimalEqual(variantLine.minutes, templateLine.minutes) &&
+          nullableDecimalEqual(variantLine.uses, templateLine.uses) &&
+          nullableDecimalEqual(variantLine.yieldDurationMinutes, templateLine.yieldDurationMinutes) &&
+          nullableDecimalEqual(variantLine.yieldUses, templateLine.yieldUses) &&
+          nullableDecimalEqual(variantLine.yieldQuantity, templateLine.yieldQuantity);
+
+        if (isExactDuplicate) {
+          exactDuplicateEquipmentLineIds.push(variantLine.id);
+        } else {
+          pushUnique(mismatch.equipmentNames, variantLine.equipment.name);
+        }
+      }
+
+      if (mismatch.materialNames.length > 0 || mismatch.equipmentNames.length > 0) {
+        mismatches.push(mismatch);
+      }
+    }
+
+    await prisma.$transaction(async (tx) => {
+      for (const variant of variantsToAssign) {
+        if (variant.costConfig) {
+          await tx.variantCostConfig.updateMany({
+            where: { id: variant.costConfig.id, shopId },
+            data: { productionTemplateId: templateId },
+          });
+        } else {
+          await tx.variantCostConfig.create({ data: { shopId, variantId: variant.id, productionTemplateId: templateId } });
+        }
+      }
+
+      if (cleanupExactDuplicates && exactDuplicateMaterialLineIds.length > 0) {
+        await tx.variantMaterialLine.deleteMany({
+          where: { id: { in: exactDuplicateMaterialLineIds }, shopId },
+        });
+      }
+
+      if (cleanupExactDuplicates && exactDuplicateEquipmentLineIds.length > 0) {
+        await tx.variantEquipmentLine.deleteMany({
+          where: { id: { in: exactDuplicateEquipmentLineIds }, shopId },
+        });
+      }
+
+      if (cleanupExactDuplicates) {
+        const deletedLineCountByConfigId = new Map<string, number>();
+        for (const variant of variantsToAssign) {
+          const config = variant.costConfig;
+          if (!config) continue;
+
+          const deletedMaterialCount = config.materialLines.filter((line) =>
+            exactDuplicateMaterialLineIds.includes(line.id),
+          ).length;
+          const deletedEquipmentCount = config.equipmentLines.filter((line) =>
+            exactDuplicateEquipmentLineIds.includes(line.id),
+          ).length;
+          const deletedCount = deletedMaterialCount + deletedEquipmentCount;
+
+          if (deletedCount > 0) {
+            deletedLineCountByConfigId.set(config.id, deletedCount);
+          }
+        }
+
+        for (const [configId, deletedCount] of deletedLineCountByConfigId) {
+          await tx.variantCostConfig.updateMany({
+            where: { id: configId, shopId },
+            data: { lineItemCount: { decrement: deletedCount } },
+          });
+        }
+      }
+
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "VariantCostConfig",
+          action: "BULK_TEMPLATE_ASSIGNED",
+          actor: "merchant",
+          payload: {
+            templateId,
+            variantCount: variantIds.length,
+            cleanupExactDuplicates,
+            cleanedMaterialLineCount: cleanupExactDuplicates ? exactDuplicateMaterialLineIds.length : 0,
+            cleanedEquipmentLineCount: cleanupExactDuplicates ? exactDuplicateEquipmentLineIds.length : 0,
+            mismatchVariantCount: mismatches.length,
+          },
+        },
+      });
+    });
+
+    const cleanedLineCount = cleanupExactDuplicates
+      ? exactDuplicateMaterialLineIds.length + exactDuplicateEquipmentLineIds.length
+      : 0;
+
+    return jsonResponse({
+      ok: true,
+      message: cleanupExactDuplicates
+        ? `Template assigned to ${variantIds.length} variant(s). Removed ${cleanedLineCount} exact duplicate line item(s).`
+        : `Template assigned to ${variantIds.length} variant(s).`,
+      cleanedLineCount,
+      mismatches,
+    });
   }
 
   return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
@@ -284,7 +488,12 @@ function estimateTotalCost(estimate: VariantEstimatePayload) {
 
 export default function VariantsPage() {
   const { variants, products, templates, filterProductId, filterConfigured } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const fetcher = useFetcher<{
+    ok: boolean;
+    message: string;
+    cleanedLineCount?: number;
+    mismatches?: BulkAssignmentMismatch[];
+  }>();
   const { formatMoney } = useAppLocalization();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -297,6 +506,7 @@ export default function VariantsPage() {
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [pendingAssign, setPendingAssign] = useState<string[]>([]);
   const [overwriteCount, setOverwriteCount] = useState(0);
+  const [cleanupExactDuplicates, setCleanupExactDuplicates] = useState(false);
   const [exportingEstimates, setExportingEstimates] = useState(false);
   const [exportError, setExportError] = useState("");
 
@@ -328,6 +538,7 @@ export default function VariantsPage() {
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
+  const assignmentMismatches = fetcher.data?.ok ? (fetcher.data.mismatches ?? []) : [];
   const allSelected = variants.length > 0 && selectedVariantIds.length === variants.length;
 
   const selectedConfiguredCount = useMemo(
@@ -368,6 +579,7 @@ export default function VariantsPage() {
     const fd = new FormData();
     fd.append("intent", "bulk-assign-template");
     fd.append("templateId", selectedTemplateId);
+    if (cleanupExactDuplicates) fd.append("cleanupExactDuplicates", "true");
     ids.forEach((id) => fd.append("variantId", id));
     fetcher.submit(fd, { method: "post" });
     clearSelection();
@@ -483,6 +695,26 @@ export default function VariantsPage() {
         {fetcher.data?.ok && fetcher.data.message && (
           <s-banner tone="success">
             <s-text>{fetcher.data.message}</s-text>
+          </s-banner>
+        )}
+        {assignmentMismatches.length > 0 && (
+          <s-banner tone="warning">
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <s-text>
+                Review {assignmentMismatches.length} variant{assignmentMismatches.length === 1 ? "" : "s"} with matching template items but different line settings.
+              </s-text>
+              <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
+                {assignmentMismatches.map((mismatch) => (
+                  <li key={mismatch.variantId}>
+                    <Link to={`/app/variants/${mismatch.variantId}`}>
+                      {mismatch.productTitle} / {mismatch.variantTitle}
+                    </Link>
+                    {mismatch.materialNames.length > 0 ? ` - Materials: ${mismatch.materialNames.join(", ")}` : ""}
+                    {mismatch.equipmentNames.length > 0 ? `${mismatch.materialNames.length > 0 ? "; " : " - "}Equipment: ${mismatch.equipmentNames.join(", ")}` : ""}
+                  </li>
+                ))}
+              </ul>
+            </div>
           </s-banner>
         )}
         {exportError ? (
@@ -761,11 +993,21 @@ export default function VariantsPage() {
                   color: "var(--p-color-text, #303030)",
                   font: "inherit",
                 }}
-              >
-                {templates.map((template: { id: string; name: string }) => (
-                  <option key={template.id} value={template.id}>{template.name}</option>
-                ))}
-              </select>
+	              >
+	                {templates.map((template: { id: string; name: string }) => (
+	                  <option key={template.id} value={template.id}>{template.name}</option>
+	                ))}
+	              </select>
+              <label style={{ display: "flex", gap: "0.5rem", alignItems: "start" }}>
+                <input
+                  type="checkbox"
+                  checked={cleanupExactDuplicates}
+                  onChange={(event) => setCleanupExactDuplicates(event.currentTarget.checked)}
+                />
+                <span>
+                  Remove exact duplicate variant lines already included in this template.
+                </span>
+              </label>
             </div>
           )}
 
@@ -815,11 +1057,16 @@ export default function VariantsPage() {
             </button>
           </div>
 
-          <s-text>
-            {overwriteCount} of the selected variant(s) already have a cost configuration. Assigning this template will replace their current template assignment. Per-variant line overrides and labor settings will be preserved.
-          </s-text>
+	          <s-text>
+	            {overwriteCount} of the selected variant(s) already have a cost configuration. Assigning this template will replace their current template assignment. Per-variant line overrides and labor settings will be preserved.
+	          </s-text>
+          {cleanupExactDuplicates ? (
+            <s-text>
+              Exact duplicate variant material/equipment lines included in the template will be removed. Lines with different quantities, yields, uses, or equipment settings will be kept and shown for review after assignment.
+            </s-text>
+          ) : null}
 
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+	          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
             <s-button variant="secondary" onClick={closeConfirmDialog}>Cancel</s-button>
             <s-button
               variant="primary"
