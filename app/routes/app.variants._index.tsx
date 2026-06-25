@@ -107,12 +107,54 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     },
   });
+  const artistAssignments = await prisma.productArtistAssignment.findMany({
+    where: {
+      shopId,
+      productId: { in: productIds },
+      status: "active",
+    },
+    orderBy: [{ attributionOrder: "asc" }, { createdAt: "asc" }],
+    select: {
+      productId: true,
+      collaborationShare: true,
+      payoutEnabledOverride: true,
+      payoutRateOverride: true,
+      artist: {
+        select: {
+          paymentEnabled: true,
+          defaultPayoutRate: true,
+          causeAssignments: {
+            select: {
+              causeId: true,
+              percentage: true,
+              cause: {
+                select: {
+                  id: true,
+                  name: true,
+                  is501c3: true,
+                  iconUrl: true,
+                  donationLink: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  });
   const causeAssignmentsByProductId = new Map<string, typeof causeAssignments>();
   for (const assignment of causeAssignments) {
     if (!assignment.productId) continue;
     const current = causeAssignmentsByProductId.get(assignment.productId) ?? [];
     current.push(assignment);
     causeAssignmentsByProductId.set(assignment.productId, current);
+  }
+  const artistAssignmentsByProductId = new Map<string, typeof artistAssignments>();
+  for (const assignment of artistAssignments) {
+    if (!assignment.productId) continue;
+    const current = artistAssignmentsByProductId.get(assignment.productId) ?? [];
+    current.push(assignment);
+    artistAssignmentsByProductId.set(assignment.productId, current);
   }
   const widgetTaxSuppressed = taxOffsetCache?.widgetTaxSuppressed ?? true;
   const estimates = shop
@@ -122,6 +164,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             shopId,
             variant,
             causeAssignments: causeAssignmentsByProductId.get(variant.productId) ?? [],
+            artistAssignments: artistAssignmentsByProductId.get(variant.productId) ?? [],
             shop,
             widgetTaxSuppressed,
             db: prisma,

@@ -86,6 +86,7 @@ function estimateTotalCost(estimate: VariantEstimatePayload) {
     estimate.reconciliation.equipment,
     estimate.reconciliation.pod,
     estimate.reconciliation.mistakeBuffer,
+    estimate.reconciliation.artistPayout,
     estimate.reconciliation.shopifyFees,
     estimate.reconciliation.taxReserve,
   ]
@@ -145,7 +146,13 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
                   causeId: true,
                   percentage: true,
                   cause: {
-                    select: { name: true },
+                    select: {
+                      id: true,
+                      name: true,
+                      is501c3: true,
+                      iconUrl: true,
+                      donationLink: true,
+                    },
                   },
                 },
               },
@@ -247,6 +254,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
             shopId,
             variant,
             causeAssignments: product.causeAssignments,
+            artistAssignments: product.artistAssignments,
             shop,
             widgetTaxSuppressed,
             db: prisma,

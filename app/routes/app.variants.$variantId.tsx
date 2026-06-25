@@ -257,6 +257,10 @@ const variantDraftSchema = z.object({
   })),
 });
 
+const copyVariantConfigSchema = z.object({
+  sourceVariantId: z.string().min(1),
+});
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -303,7 +307,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const [templates, materials, equipment, packages] = await Promise.all([
+  const [templates, materials, equipment, packages, copySourceVariants] = await Promise.all([
     prisma.costTemplate.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
@@ -326,6 +330,26 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
       select: { id: true, name: true, length: true, width: true, height: true },
+    }),
+    prisma.variant.findMany({
+      where: {
+        shopId,
+        id: { not: variant.id },
+        costConfig: { isNot: null },
+      },
+      orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
+      select: {
+        id: true,
+        title: true,
+        sku: true,
+        product: { select: { title: true } },
+        costConfig: {
+          select: {
+            lineItemCount: true,
+            productionTemplate: { select: { name: true } },
+          },
+        },
+      },
     }),
   ]);
 
@@ -550,6 +574,14 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       id: pkg.id,
       name: pkg.name,
       dimensions: `${pkg.length} x ${pkg.width} x ${pkg.height}`,
+    })),
+    copySourceVariants: copySourceVariants.map((sourceVariant) => ({
+      id: sourceVariant.id,
+      title: sourceVariant.title,
+      sku: sourceVariant.sku ?? "",
+      productTitle: sourceVariant.product.title,
+      templateName: sourceVariant.costConfig?.productionTemplate?.name ?? null,
+      lineItemCount: sourceVariant.costConfig?.lineItemCount ?? 0,
     })),
   });
 };
@@ -990,6 +1022,130 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return jsonResponse({
       ok: true,
       message: "Variant configuration saved.",
+      savedAt: new Date().toISOString(),
+    });
+  }
+
+  if (intent === "copy-variant-config") {
+    const parsed = copyVariantConfigSchema.safeParse({
+      sourceVariantId: formData.get("sourceVariantId")?.toString() ?? "",
+    });
+
+    if (!parsed.success) {
+      return jsonResponse({ ok: false, message: "Select a source variant." }, { status: 400 });
+    }
+
+    const { sourceVariantId } = parsed.data;
+    if (sourceVariantId === variantId) {
+      return jsonResponse({ ok: false, message: "Choose a different source variant." }, { status: 400 });
+    }
+
+    const sourceConfig = await prisma.variantCostConfig.findFirst({
+      where: {
+        shopId,
+        variant: { id: sourceVariantId, shopId },
+      },
+      include: {
+        materialLines: true,
+        equipmentLines: true,
+      },
+    });
+
+    if (!sourceConfig) {
+      return jsonResponse({ ok: false, message: "Source variant configuration not found." }, { status: 404 });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      const copiedConfigData = {
+        productionTemplateId: sourceConfig.productionTemplateId,
+        shippingTemplateId: sourceConfig.shippingTemplateId,
+        preferredPackageId: sourceConfig.preferredPackageId,
+        packedLength: sourceConfig.packedLength,
+        packedWidth: sourceConfig.packedWidth,
+        packedHeight: sourceConfig.packedHeight,
+        packedWeightGrams: sourceConfig.packedWeightGrams,
+        canSharePackage: sourceConfig.canSharePackage,
+        laborMinutes: sourceConfig.laborMinutes,
+        laborRate: sourceConfig.laborRate,
+        mistakeBuffer: sourceConfig.mistakeBuffer,
+        lineItemCount: sourceConfig.materialLines.length + sourceConfig.equipmentLines.length,
+      };
+
+      const existingTargetConfig = await tx.variantCostConfig.findFirst({
+        where: { variantId, shopId },
+        select: { id: true },
+      });
+
+      const targetConfig = existingTargetConfig
+        ? existingTargetConfig
+        : await tx.variantCostConfig.create({
+            data: {
+              shopId,
+              variantId,
+              ...copiedConfigData,
+            },
+          });
+
+      if (existingTargetConfig) {
+        await tx.variantCostConfig.updateMany({
+          where: { id: existingTargetConfig.id, shopId },
+          data: copiedConfigData,
+        });
+      }
+
+      await tx.variantMaterialLine.deleteMany({ where: { configId: targetConfig.id, shopId } });
+      await tx.variantEquipmentLine.deleteMany({ where: { configId: targetConfig.id, shopId } });
+
+      if (sourceConfig.materialLines.length > 0) {
+        await tx.variantMaterialLine.createMany({
+          data: sourceConfig.materialLines.map((line) => ({
+            shopId,
+            configId: targetConfig.id,
+            materialId: line.materialId,
+            templateLineId: line.templateLineId,
+            quantity: line.quantity,
+            yield: line.yield,
+            usesPerVariant: line.usesPerVariant,
+          })),
+        });
+      }
+
+      if (sourceConfig.equipmentLines.length > 0) {
+        await tx.variantEquipmentLine.createMany({
+          data: sourceConfig.equipmentLines.map((line) => ({
+            shopId,
+            configId: targetConfig.id,
+            equipmentId: line.equipmentId,
+            templateLineId: line.templateLineId,
+            usageMode: line.usageMode,
+            minutes: line.minutes,
+            uses: line.uses,
+            yieldDurationMinutes: line.yieldDurationMinutes,
+            yieldUses: line.yieldUses,
+            yieldQuantity: line.yieldQuantity,
+          })),
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "VariantCostConfig",
+          entityId: targetConfig.id,
+          action: "VARIANT_CONFIG_COPIED",
+          actor: "merchant",
+          payload: {
+            sourceVariantId,
+            materialLineCount: sourceConfig.materialLines.length,
+            equipmentLineCount: sourceConfig.equipmentLines.length,
+          },
+        },
+      });
+    });
+
+    return jsonResponse({
+      ok: true,
+      message: "Variant configuration copied.",
       savedAt: new Date().toISOString(),
     });
   }
@@ -1455,6 +1611,15 @@ type AvailablePackage = {
   dimensions: string;
 };
 
+type CopySourceVariant = {
+  id: string;
+  title: string;
+  sku: string;
+  productTitle: string;
+  templateName: string | null;
+  lineItemCount: number;
+};
+
 function describeMaterialLine(line: {
   costingModel: string | null;
   quantity: string | null;
@@ -1532,9 +1697,10 @@ function serializeVariantDraftState(draft: VariantDraft) {
 }
 
 export default function VariantDetailPage() {
-  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment, packages } =
+  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment, packages, copySourceVariants } =
     useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
+  const copyFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
   const previewFetcher = useFetcher<{
     ok: boolean;
     message: string;
@@ -1587,11 +1753,18 @@ export default function VariantDetailPage() {
   const [overrideEqYieldUses, setOverrideEqYieldUses] = useState("");
   const [overrideEqYieldQuantity, setOverrideEqYieldQuantity] = useState("");
 
+  const [copyDialogOpen, setCopyDialogOpen] = useState(false);
+  const [selectedCopySourceId, setSelectedCopySourceId] = useState("");
+  const [copySourceSearchValue, setCopySourceSearchValue] = useState("");
+
   const [baseDraft, setBaseDraft] = useState(() => buildVariantDraft(config));
   const [draft, setDraft] = useState(() => buildVariantDraft(config));
   const handledSaveRef = useRef<string | null>(null);
+  const handledCopyRef = useRef<string | null>(null);
+  const preCopyDraftStateRef = useRef<string | null>(null);
 
   const isSaving = saveFetcher.state !== "idle";
+  const isCopying = copyFetcher.state !== "idle";
   const productionTemplates = templates.filter((template: TemplateCatalogEntry) => template.type !== "shipping");
   const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
   const packageOptions = [
@@ -1627,6 +1800,23 @@ export default function VariantDetailPage() {
       equipment.name.toLowerCase().includes(equipmentSearchValue.trim().toLowerCase()),
     )
     .map((equipment: AvailableEquipment) => ({ label: equipment.name, value: equipment.id }));
+  const filteredCopySourceOptions = copySourceVariants
+    .filter((sourceVariant: CopySourceVariant) => {
+      const query = copySourceSearchValue.trim().toLowerCase();
+      if (!query) return true;
+      return [
+        sourceVariant.productTitle,
+        sourceVariant.title,
+        sourceVariant.sku,
+        sourceVariant.templateName ?? "",
+      ].some((value) => value.toLowerCase().includes(query));
+    })
+    .map((sourceVariant: CopySourceVariant) => ({
+      value: sourceVariant.id,
+      label: `${sourceVariant.productTitle} - ${sourceVariant.title}${
+        sourceVariant.sku ? ` (${sourceVariant.sku})` : ""
+      }`,
+    }));
   const additionalProductionMaterialLines = draft.materialLines.filter(
     (line: SerializedMaterialLine) => line.materialType === "production",
   );
@@ -1648,6 +1838,9 @@ export default function VariantDetailPage() {
   const laborRateHelpText = shopDefaultLaborRate
     ? `Leave blank to use the shop default of ${formatMoney(shopDefaultLaborRate)}/hr.`
     : "Leave blank to avoid a variant override. Set a shop default in Settings to make variants inherit one.";
+  const loadedVariantDraftState = serializeVariantDraftState(buildVariantDraft(config));
+  const selectedCopySource =
+    copySourceVariants.find((sourceVariant: CopySourceVariant) => sourceVariant.id === selectedCopySourceId) ?? null;
 
   useEffect(() => {
     if (!saveFetcher.data?.ok || !saveFetcher.data.savedAt || saveFetcher.data.savedAt === handledSaveRef.current) return;
@@ -1657,6 +1850,24 @@ export default function VariantDetailPage() {
     setDraft(committedDraft);
     revalidator.revalidate();
   }, [draft, revalidator, saveFetcher.data]);
+
+  useEffect(() => {
+    if (!copyFetcher.data?.ok || !copyFetcher.data.savedAt || copyFetcher.data.savedAt === handledCopyRef.current) return;
+    handledCopyRef.current = copyFetcher.data.savedAt;
+    preCopyDraftStateRef.current = loadedVariantDraftState;
+    setCopyDialogOpen(false);
+    setSelectedCopySourceId("");
+    setCopySourceSearchValue("");
+    revalidator.revalidate();
+  }, [copyFetcher.data, loadedVariantDraftState, revalidator]);
+
+  useEffect(() => {
+    if (!preCopyDraftStateRef.current || preCopyDraftStateRef.current === loadedVariantDraftState) return;
+    preCopyDraftStateRef.current = null;
+    const loadedDraft = buildVariantDraft(config);
+    setBaseDraft(loadedDraft);
+    setDraft(cloneDraft(loadedDraft));
+  }, [config, loadedVariantDraftState]);
 
   function resetAdditionalMaterialModal() {
     setSelectedMaterialId("");
@@ -1715,6 +1926,9 @@ export default function VariantDetailPage() {
     setDraft(cloneDraft(baseDraft));
     setAssignTemplateOpen(false);
     setAssignShippingTemplateOpen(false);
+    setCopyDialogOpen(false);
+    setSelectedCopySourceId("");
+    setCopySourceSearchValue("");
     setMaterialOverrideTargetId(null);
     setEquipmentOverrideTargetId(null);
     setAddMaterialOpen(false);
@@ -1730,6 +1944,14 @@ export default function VariantDetailPage() {
     formData.append("intent", "save-variant-draft");
     formData.append("draft", JSON.stringify(normalizeVariantDraft(draft)));
     saveFetcher.submit(formData, { method: "post" });
+  }
+
+  function copySelectedVariantConfig() {
+    if (!selectedCopySourceId || isDirty) return;
+    const formData = new FormData();
+    formData.append("intent", "copy-variant-config");
+    formData.append("sourceVariantId", selectedCopySourceId);
+    copyFetcher.submit(formData, { method: "post" });
   }
 
   function applySelectedTemplate() {
@@ -1914,7 +2136,7 @@ export default function VariantDetailPage() {
         aria-atomic="true"
         style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
       >
-        {saveFetcher.data?.message ?? previewFetcher.data?.message ?? ""}
+        {saveFetcher.data?.message ?? copyFetcher.data?.message ?? previewFetcher.data?.message ?? ""}
       </div>
 
       <BlockStack gap="600">
@@ -1924,6 +2146,39 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">SKU: {variant.sku || "-"}</Text>
               <Text as="p" variant="bodyMd" tone="subdued">Price: {formatMoney(variant.price)}</Text>
             </InlineStack>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between" blockAlign="center">
+              <BlockStack gap="100">
+                <Text as="h2" variant="headingMd">Copy configuration</Text>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Overwrite this variant with settings from another configured variant.
+                </Text>
+              </BlockStack>
+              <Button
+                onClick={() => {
+                  setSelectedCopySourceId("");
+                  setCopySourceSearchValue("");
+                  setCopyDialogOpen(true);
+                }}
+                disabled={copySourceVariants.length === 0 || isDirty}
+              >
+                Copy from variant
+              </Button>
+            </InlineStack>
+            {isDirty ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Save or discard your staged changes before copying another variant configuration.
+              </Text>
+            ) : null}
+            {copySourceVariants.length === 0 ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                No other configured variants are available to copy from.
+              </Text>
+            ) : null}
           </BlockStack>
         </Card>
 
@@ -2592,6 +2847,73 @@ export default function VariantDetailPage() {
           </BlockStack>
         </Card>
       </BlockStack>
+
+      <Modal
+        open={copyDialogOpen}
+        onClose={() => setCopyDialogOpen(false)}
+        title="Copy variant configuration"
+        primaryAction={{
+          content: "Copy configuration",
+          loading: isCopying,
+          disabled: !selectedCopySourceId || isDirty,
+          onAction: copySelectedVariantConfig,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setCopyDialogOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            <Text as="p" variant="bodyMd" tone="subdued">
+              This will overwrite the production template, shipping override, package settings, labor, mistake buffer,
+              material lines, and equipment lines on this variant.
+            </Text>
+            <Autocomplete
+              options={filteredCopySourceOptions}
+              selected={selectedCopySourceId ? [selectedCopySourceId] : []}
+              onSelect={(selected) => {
+                const nextId = selected[0] ?? "";
+                const nextSource = copySourceVariants.find((sourceVariant: CopySourceVariant) => sourceVariant.id === nextId);
+                setSelectedCopySourceId(nextId);
+                setCopySourceSearchValue(
+                  nextSource
+                    ? `${nextSource.productTitle} - ${nextSource.title}${nextSource.sku ? ` (${nextSource.sku})` : ""}`
+                    : "",
+                );
+              }}
+              textField={
+                <Autocomplete.TextField
+                  label="Source variant"
+                  value={copySourceSearchValue}
+                  onChange={(value) => {
+                    setCopySourceSearchValue(value);
+                    if (selectedCopySourceId) setSelectedCopySourceId("");
+                  }}
+                  autoComplete="off"
+                  placeholder="Search configured variants"
+                />
+              }
+              emptyState={
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  No matching configured variants found.
+                </Text>
+              }
+            />
+            {selectedCopySource ? (
+              <BlockStack gap="100">
+                <Text as="p" variant="bodyMd" fontWeight="semibold">
+                  {selectedCopySource.productTitle} - {selectedCopySource.title}
+                </Text>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  {selectedCopySource.templateName
+                    ? `Production template: ${selectedCopySource.templateName}`
+                    : "No production template assigned"}
+                  {" · "}
+                  {selectedCopySource.lineItemCount} saved line item{selectedCopySource.lineItemCount === 1 ? "" : "s"}
+                </Text>
+              </BlockStack>
+            ) : null}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
 
       <Modal
         open={assignTemplateOpen}
