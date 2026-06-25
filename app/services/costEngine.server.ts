@@ -543,12 +543,13 @@ export async function resolveCosts(
   const mistakeBufferPct = decimalOrZero(config.mistakeBuffer ?? shop?.mistakeBuffer);
   const mistakeBufferAmount = materialCost.mul(mistakeBufferPct);
 
-  const laborRate = config.laborRate ?? shop?.defaultLaborRate;
+  const laborMinutes = config.laborMinutes ?? productionTemplate?.defaultLaborMinutes;
+  const laborRate = config.laborRate ?? productionTemplate?.defaultLaborRate ?? shop?.defaultLaborRate;
 
   // Labor cost
   const laborCost =
-    config.laborMinutes && laborRate
-      ? laborRate.mul(config.laborMinutes).div(60)
+    laborMinutes && laborRate
+      ? laborRate.mul(laborMinutes).div(60)
       : ZERO;
 
   // Step 7: Return materialised cost structure

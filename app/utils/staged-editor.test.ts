@@ -15,6 +15,8 @@ import {
 const catalogEntry: TemplateCatalogEntry = {
   id: "template-1",
   name: "Starter",
+  defaultLaborMinutes: "12",
+  defaultLaborRate: "30.00",
   materialLines: [
     {
       templateLineId: "mat-line-1",
@@ -32,8 +34,12 @@ const catalogEntry: TemplateCatalogEntry = {
       templateLineId: "eq-line-1",
       equipmentId: "eq-1",
       equipmentName: "Press",
+      usageMode: "direct",
       minutes: "12",
       uses: null,
+      yieldDurationMinutes: null,
+      yieldUses: null,
+      yieldQuantity: null,
     },
   ],
 };
@@ -44,6 +50,8 @@ describe("staged editor helpers", () => {
       name: " Example ",
       description: " Test ",
       defaultShippingTemplateId: "ship-1",
+      defaultLaborMinutes: " 12 ",
+      defaultLaborRate: "30.00",
       materialLines: [
         {
           id: "line-1",
@@ -64,6 +72,8 @@ describe("staged editor helpers", () => {
       name: "Example",
       description: "Test",
       defaultShippingTemplateId: "ship-1",
+      defaultLaborMinutes: "12",
+      defaultLaborRate: "30.00",
       materialLines: [
         {
           id: "line-1",

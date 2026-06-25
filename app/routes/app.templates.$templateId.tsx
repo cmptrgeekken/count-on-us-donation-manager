@@ -2,6 +2,7 @@ import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
+import { Prisma } from "@prisma/client";
 import {
   Autocomplete,
   Badge,
@@ -30,6 +31,8 @@ import {
   parseOptionalPositiveWholeNumber,
   parseRequiredNonNegativeWholeNumber,
 } from "../utils/number-parsing";
+import { parseOptionalNonNegativeMoney } from "../utils/money-parsing";
+import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import {
@@ -45,6 +48,8 @@ const templateDraftSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   description: z.string(),
   defaultShippingTemplateId: z.string().nullable().optional(),
+  defaultLaborMinutes: z.string(),
+  defaultLaborRate: z.string(),
   materialLines: z.array(z.object({
     id: z.string(),
     materialId: z.string().min(1),
@@ -69,6 +74,8 @@ function serializeTemplate(template: {
   name: string;
   type: string;
   defaultShippingTemplateId: string | null;
+  defaultLaborMinutes: { toString(): string } | null;
+  defaultLaborRate: { toString(): string } | null;
   description: string | null;
   status: string;
   materialLines: Array<{
@@ -96,6 +103,8 @@ function serializeTemplate(template: {
     name: template.name,
     type: template.type,
     defaultShippingTemplateId: template.defaultShippingTemplateId,
+    defaultLaborMinutes: template.defaultLaborMinutes?.toString() ?? "",
+    defaultLaborRate: template.defaultLaborRate?.toString() ?? "",
     description: template.description ?? "",
     status: template.status,
     materialLines: template.materialLines.map((line) => ({
@@ -130,6 +139,8 @@ function buildTemplateDraft(template: ReturnType<typeof serializeTemplate>): Tem
     name: template.name,
     description: template.description,
     defaultShippingTemplateId: template.defaultShippingTemplateId,
+    defaultLaborMinutes: template.defaultLaborMinutes,
+    defaultLaborRate: template.defaultLaborRate,
     materialLines: cloneDraft(template.materialLines),
     equipmentLines: cloneDraft(template.equipmentLines),
   };
@@ -242,6 +253,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const draft = parsedDraft.data;
   const normalizedDefaultShippingTemplateId = draft.defaultShippingTemplateId?.trim() || null;
+  let defaultLaborMinutes: number | null;
+  let defaultLaborRate: Prisma.Decimal | null;
+
+  try {
+    defaultLaborMinutes = template.type === "production"
+      ? parseOptionalNonNegativeNumber(draft.defaultLaborMinutes, "Default labor minutes")
+      : null;
+    defaultLaborRate = template.type === "production"
+      ? parseOptionalNonNegativeMoney(draft.defaultLaborRate, "Default labor rate")
+      : null;
+  } catch (error) {
+    if (error instanceof Response) {
+      return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
+    }
+    throw error;
+  }
+
   const existingMaterialLines = new Map(template.materialLines.map((line) => [line.id, line]));
   const existingEquipmentLines = new Map(template.equipmentLines.map((line) => [line.id, line]));
 
@@ -315,6 +343,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         name: draft.name.trim(),
         description: draft.description.trim() || null,
         defaultShippingTemplateId: template.type === "production" ? normalizedDefaultShippingTemplateId : null,
+        defaultLaborMinutes,
+        defaultLaborRate,
       },
     });
     
@@ -470,7 +500,7 @@ export default function TemplateDetailPage() {
   const { template, availableMaterials, availableEquipment, availableShippingTemplates } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
   const revalidator = useRevalidator();
-  const { formatMoney } = useAppLocalization();
+  const { formatMoney, getCurrencySymbol } = useAppLocalization();
 
   const [baseDraft, setBaseDraft] = useState(() => buildTemplateDraft(template));
   const [draft, setDraft] = useState(() => buildTemplateDraft(template));
@@ -810,6 +840,47 @@ export default function TemplateDetailPage() {
             )}
           </BlockStack>
         </Card>
+
+        {template.type === "production" && (
+          <Card>
+            <BlockStack gap="400">
+              <Text as="h2" variant="headingMd">Default labor</Text>
+              <Divider />
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Minutes per variant"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={draft.defaultLaborMinutes}
+                    onChange={(value) => setDraft((current) => ({ ...current, defaultLaborMinutes: value }))}
+                    autoComplete="off"
+                    helpText="Variants using this template inherit these minutes unless they set a labor override."
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label={`Hourly rate (${getCurrencySymbol()})`}
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={draft.defaultLaborRate}
+                    onChange={(value) => setDraft((current) => ({ ...current, defaultLaborRate: value }))}
+                    onBlur={() =>
+                      setDraft((current) => ({
+                        ...current,
+                        defaultLaborRate: normalizeFixedDecimalInput(current.defaultLaborRate),
+                      }))
+                    }
+                    autoComplete="off"
+                    helpText="Leave blank to use the shop default labor rate when one is configured."
+                  />
+                </div>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        )}
 
         <Card>
           <BlockStack gap="400">

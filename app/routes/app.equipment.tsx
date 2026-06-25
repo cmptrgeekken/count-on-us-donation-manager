@@ -1,5 +1,5 @@
 import { jsonResponse } from "~/utils/json-response.server";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
@@ -220,6 +220,8 @@ const EMPTY_FORM = {
   notes: "",
 };
 
+type EquipmentActionIntent = "create" | "update" | "deactivate" | "delete" | "reactivate";
+
 export default function EquipmentPage() {
   const { equipment } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
@@ -235,6 +237,7 @@ export default function EquipmentPage() {
   const [equipmentDialogOpen, setEquipmentDialogOpen] = useState(false);
   const [deactivateDialogOpen, setDeactivateDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [lastSubmittedIntent, setLastSubmittedIntent] = useState<EquipmentActionIntent | null>(null);
 
   useEffect(() => {
     const dialog = equipmentDialogRef.current;
@@ -274,8 +277,25 @@ export default function EquipmentPage() {
       setDeleteSubmitPending(false);
       setDeleteDialogOpen(false);
       setDeleteTarget(null);
+      setLastSubmittedIntent(null);
     }
   }, [deleteDialogOpen, deleteSubmitPending, fetcher.state, fetcher.data]);
+
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data?.ok) return;
+
+    if (lastSubmittedIntent === "create" || lastSubmittedIntent === "update") {
+      setEquipmentDialogOpen(false);
+      setForm(EMPTY_FORM);
+      setLastSubmittedIntent(null);
+    }
+
+    if (lastSubmittedIntent === "deactivate") {
+      setDeactivateDialogOpen(false);
+      setDeactivateTarget(null);
+      setLastSubmittedIntent(null);
+    }
+  }, [fetcher.state, fetcher.data, lastSubmittedIntent]);
 
   function updateForm<K extends keyof typeof EMPTY_FORM>(key: K, value: (typeof EMPTY_FORM)[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -310,24 +330,40 @@ export default function EquipmentPage() {
     setDeleteDialogOpen(true);
   }
 
-  function closeEquipmentDialog() {
+  const closeEquipmentDialog = useCallback(() => {
     setEquipmentDialogOpen(false);
     setForm(EMPTY_FORM);
-  }
+    if (lastSubmittedIntent === "create" || lastSubmittedIntent === "update") {
+      setLastSubmittedIntent(null);
+    }
+  }, [lastSubmittedIntent]);
 
-  function closeDeactivateDialog() {
+  const closeDeactivateDialog = useCallback(() => {
     setDeactivateDialogOpen(false);
     setDeactivateTarget(null);
-  }
+    if (lastSubmittedIntent === "deactivate") {
+      setLastSubmittedIntent(null);
+    }
+  }, [lastSubmittedIntent]);
 
   function closeDeleteDialog() {
     setDeleteSubmitPending(false);
     setDeleteDialogOpen(false);
     setDeleteTarget(null);
+    if (lastSubmittedIntent === "delete") {
+      setLastSubmittedIntent(null);
+    }
   }
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
+  const showPageError = fetcher.data && !fetcher.data.ok && !(
+    lastSubmittedIntent === "create" ||
+    lastSubmittedIntent === "update" ||
+    lastSubmittedIntent === "deactivate" ||
+    lastSubmittedIntent === "delete"
+  );
+  const pageErrorMessage = showPageError ? fetcher.data?.message : null;
 
   return (
     <>
@@ -351,9 +387,9 @@ export default function EquipmentPage() {
       </div>
 
       <s-page>
-        {fetcher.data && !fetcher.data.ok && !deleteDialogOpen && (
+        {pageErrorMessage && (
           <s-banner tone="critical">
-            <s-text>{fetcher.data.message}</s-text>
+            <s-text>{pageErrorMessage}</s-text>
           </s-banner>
         )}
 
@@ -472,6 +508,12 @@ export default function EquipmentPage() {
             </button>
           </div>
 
+          {fetcher.data && !fetcher.data.ok && (lastSubmittedIntent === "create" || lastSubmittedIntent === "update") ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
+
           <s-text-field
             label="Name"
             value={form.name}
@@ -588,8 +630,8 @@ export default function EquipmentPage() {
                 fd.append("purchaseLink", form.purchaseLink);
                 if (form.equipmentCost) fd.append("equipmentCost", form.equipmentCost);
                 fd.append("notes", form.notes);
+                setLastSubmittedIntent(form.id ? "update" : "create");
                 fetcher.submit(fd, { method: "post" });
-                closeEquipmentDialog();
               }}
             >
               {form.id ? "Save" : "Create"}
@@ -631,6 +673,12 @@ export default function EquipmentPage() {
             </button>
           </div>
 
+          {fetcher.data && !fetcher.data.ok && lastSubmittedIntent === "deactivate" ? (
+            <s-banner tone="critical">
+              <s-text>{fetcher.data.message}</s-text>
+            </s-banner>
+          ) : null}
+
           <s-text>
             {deactivateTarget
               ? `Deactivating ${deactivateTarget.name} will hide it from new configurations.`
@@ -656,8 +704,8 @@ export default function EquipmentPage() {
                 const fd = new FormData();
                 fd.append("intent", "deactivate");
                 fd.append("id", deactivateTarget.id);
+                setLastSubmittedIntent("deactivate");
                 fetcher.submit(fd, { method: "post" });
-                closeDeactivateDialog();
               }}
             >
               Deactivate
@@ -731,6 +779,7 @@ export default function EquipmentPage() {
                 fd.append("intent", "delete");
                 fd.append("id", deleteTarget.id);
                 setDeleteSubmitPending(true);
+                setLastSubmittedIntent("delete");
                 fetcher.submit(fd, { method: "post" });
               }}
             >

@@ -534,6 +534,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       name: template.name,
       type: template.type,
       defaultShippingTemplateId: template.defaultShippingTemplateId,
+      defaultLaborMinutes: template.defaultLaborMinutes?.toString() ?? null,
+      defaultLaborRate: template.defaultLaborRate?.toString() ?? null,
       materialLines: template.materialLines.map((line) => ({
         templateLineId: line.id,
         materialId: line.materialId,
@@ -1830,14 +1832,25 @@ export default function VariantDetailPage() {
   const isDirty = serializeVariantDraftState(draft) !== serializeVariantDraftState(baseDraft);
   const { confirmThenNavigate } = useUnsavedChangesGuard(isDirty);
   const shopDefaultLaborRate = shopDefaults.defaultLaborRate;
+  const selectedProductionTemplate =
+    templates.find((template: TemplateCatalogEntry) => template.id === draft.productionTemplateId) ?? null;
+  const templateDefaultLaborMinutes = selectedProductionTemplate?.defaultLaborMinutes ?? "";
+  const templateDefaultLaborRate = selectedProductionTemplate?.defaultLaborRate ?? "";
   const effectiveLaborRateLabel = draft.laborRate
     ? `${formatMoney(draft.laborRate)}/hr (Variant override)`
-    : shopDefaultLaborRate
-      ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
-      : "No labor rate set";
+    : templateDefaultLaborRate
+      ? `${formatMoney(templateDefaultLaborRate)}/hr (Template default)`
+      : shopDefaultLaborRate
+        ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
+        : "No labor rate set";
   const laborRateHelpText = shopDefaultLaborRate
-    ? `Leave blank to use the shop default of ${formatMoney(shopDefaultLaborRate)}/hr.`
-    : "Leave blank to avoid a variant override. Set a shop default in Settings to make variants inherit one.";
+    ? `Leave blank to use the template default rate, or the shop default of ${formatMoney(shopDefaultLaborRate)}/hr.`
+    : "Leave blank to use the template default rate when one is configured.";
+  const effectiveLaborMinutesLabel = draft.laborMinutes
+    ? `${draft.laborMinutes} min (Variant override)`
+    : templateDefaultLaborMinutes
+      ? `${templateDefaultLaborMinutes} min (Template default)`
+      : "No labor minutes set";
   const loadedVariantDraftState = serializeVariantDraftState(buildVariantDraft(config));
   const selectedCopySource =
     copySourceVariants.find((sourceVariant: CopySourceVariant) => sourceVariant.id === selectedCopySourceId) ?? null;
@@ -2464,6 +2477,7 @@ export default function VariantDetailPage() {
                     value={draft.laborMinutes}
                     onChange={(value) => setDraft((current) => ({ ...current, laborMinutes: value }))}
                     autoComplete="off"
+                    helpText="Leave blank to use the template default minutes when one is configured."
                   />
                 </div>
                 <div style={{ flex: 1 }}>
@@ -2486,7 +2500,7 @@ export default function VariantDetailPage() {
                 </div>
               </InlineStack>
               <Text as="p" variant="bodyMd" tone="subdued">
-                Current effective rate: {effectiveLaborRateLabel}
+                Current effective labor: {effectiveLaborMinutesLabel}; {effectiveLaborRateLabel}
               </Text>
             </BlockStack>
           </BlockStack>

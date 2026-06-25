@@ -59,6 +59,62 @@ function createDb(
 }
 
 describe("resolveCosts", () => {
+  it("uses production template labor defaults when the variant has no labor override", async () => {
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: {
+        defaultLaborMinutes: decimal("15"),
+        defaultLaborRate: decimal("40"),
+        materialLines: [],
+        equipmentLines: [],
+      },
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config, { defaultLaborRate: decimal("25") }),
+    );
+
+    expect(result.laborCost.toString()).toBe("10");
+    expect(result.totalCost.toString()).toBe("10");
+  });
+
+  it("lets variant labor values override production template defaults", async () => {
+    const config = {
+      laborMinutes: decimal("6"),
+      laborRate: decimal("60"),
+      mistakeBuffer: null,
+      productionTemplate: {
+        defaultLaborMinutes: decimal("15"),
+        defaultLaborRate: decimal("40"),
+        materialLines: [],
+        equipmentLines: [],
+      },
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config, { defaultLaborRate: decimal("25") }),
+    );
+
+    expect(result.laborCost.toString()).toBe("6");
+    expect(result.totalCost.toString()).toBe("6");
+  });
+
   it("applies explicit template-line material overrides when template lines share the same material", async () => {
     const sharedMaterial = createMaterial({ id: "mat-shared" });
     const config = {
