@@ -244,15 +244,50 @@ export async function materializeCauseAllocationsForPeriod(
     allocated: allocation.allocated,
   }));
 
-  await db.causeAllocation.deleteMany({
+  const existingAllocations = await db.causeAllocation.findMany({
     where: {
       shopId,
       periodId: period.id,
     },
+    select: {
+      id: true,
+      causeId: true,
+      _count: {
+        select: { applications: true },
+      },
+    },
   });
 
-  if (rows.length > 0) {
-    await db.causeAllocation.createMany({ data: rows });
+  const existingByCauseId = new Map(existingAllocations.map((allocation) => [allocation.causeId, allocation]));
+  const rowCauseIds = new Set(rows.map((row) => row.causeId));
+
+  for (const row of rows) {
+    const existing = existingByCauseId.get(row.causeId);
+    if (existing) {
+      await db.causeAllocation.updateMany({
+        where: { id: existing.id, shopId },
+        data: {
+          causeName: row.causeName,
+          is501c3: row.is501c3,
+          allocated: row.allocated,
+        },
+      });
+    } else {
+      await db.causeAllocation.create({ data: row });
+    }
+  }
+
+  const staleUnpaidAllocationIds = existingAllocations
+    .filter((allocation) => !rowCauseIds.has(allocation.causeId) && allocation._count.applications === 0)
+    .map((allocation) => allocation.id);
+
+  if (staleUnpaidAllocationIds.length > 0) {
+    await db.causeAllocation.deleteMany({
+      where: {
+        shopId,
+        id: { in: staleUnpaidAllocationIds },
+      },
+    });
   }
 
   return rows;
@@ -308,15 +343,50 @@ export async function materializeArtistAllocationsForPeriod(
     allocated: allocation.allocated,
   }));
 
-  await db.artistAllocation.deleteMany({
+  const existingAllocations = await db.artistAllocation.findMany({
     where: {
       shopId,
       periodId: period.id,
     },
+    select: {
+      id: true,
+      artistId: true,
+      _count: {
+        select: { applications: true },
+      },
+    },
   });
 
-  if (rows.length > 0) {
-    await db.artistAllocation.createMany({ data: rows });
+  const existingByArtistId = new Map(existingAllocations.map((allocation) => [allocation.artistId, allocation]));
+  const rowArtistIds = new Set(rows.map((row) => row.artistId));
+
+  for (const row of rows) {
+    const existing = existingByArtistId.get(row.artistId);
+    if (existing) {
+      await db.artistAllocation.updateMany({
+        where: { id: existing.id, shopId },
+        data: {
+          artistName: row.artistName,
+          creditName: row.creditName,
+          allocated: row.allocated,
+        },
+      });
+    } else {
+      await db.artistAllocation.create({ data: row });
+    }
+  }
+
+  const staleUnpaidAllocationIds = existingAllocations
+    .filter((allocation) => !rowArtistIds.has(allocation.artistId) && allocation._count.applications === 0)
+    .map((allocation) => allocation.id);
+
+  if (staleUnpaidAllocationIds.length > 0) {
+    await db.artistAllocation.deleteMany({
+      where: {
+        shopId,
+        id: { in: staleUnpaidAllocationIds },
+      },
+    });
   }
 
   return rows;

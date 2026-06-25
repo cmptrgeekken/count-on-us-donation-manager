@@ -1,11 +1,17 @@
+import { Prisma } from "@prisma/client";
 import { describe, expect, it, vi } from "vitest";
 import {
   importHistoricalOrders,
   importHistoricalPayouts,
   persistHistoricalLineItemMappings,
   parseHistoricalImportRows,
+  rebuildAllReporting,
   rebuildReportingPeriod,
 } from "./historicalBackfill.server";
+
+function decimal(value: string | number) {
+  return new Prisma.Decimal(value);
+}
 
 describe("historical backfill imports", () => {
   it("requires stable payout ids for first-version payout imports", async () => {
@@ -370,28 +376,199 @@ describe("historical backfill imports", () => {
 });
 
 describe("historical backfill rebuild", () => {
-  it("refuses to rebuild periods with payment applications", async () => {
-    const db = {
-      reportingPeriod: {
-        findFirst: vi.fn().mockResolvedValue({
-          id: "period-1",
-          startDate: new Date("2026-01-01T00:00:00.000Z"),
-          endDate: new Date("2026-01-15T00:00:00.000Z"),
-        }),
+  function createRebuildDb(periods = [
+    {
+      id: "period-1",
+      startDate: new Date("2026-01-01T00:00:00.000Z"),
+      endDate: new Date("2026-01-15T00:00:00.000Z"),
+    },
+  ]) {
+    const causeAllocationRows = [
+      {
+        id: "existing-cause-allocation",
+        causeId: "cause-1",
+        allocated: decimal("25"),
+        _count: { applications: 1 },
       },
-      disbursementApplication: {
-        count: vi.fn().mockResolvedValue(1),
+    ];
+    const artistAllocationRows = [
+      {
+        id: "existing-artist-allocation",
+        artistId: "artist-1",
+        allocated: decimal("5"),
+        _count: { applications: 1 },
       },
-      artistPaymentApplication: {
-        count: vi.fn().mockResolvedValue(0),
+    ];
+    const tx = {
+      orderSnapshot: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
-      $transaction: vi.fn(),
+      shopifyChargeTransaction: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      analyticalRecalculationRun: {
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
     };
 
-    await expect(
-      rebuildReportingPeriod({ shopId: "shop-1", periodId: "period-1", db: db as any }),
-    ).rejects.toThrow("This period has payment applications.");
+    const db = {
+      reportingPeriod: {
+        findFirst: vi.fn().mockResolvedValue(periods[0]),
+        findMany: vi.fn().mockResolvedValue(periods),
+      },
+      orderSnapshotLine: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            subtotal: decimal("150"),
+            totalCost: decimal("50"),
+            netContribution: decimal("100"),
+            adjustments: [],
+            causeAllocations: [
+              {
+                causeId: "cause-1",
+                causeName: "Cause One",
+                is501c3: true,
+                amount: decimal("100"),
+              },
+            ],
+          },
+        ]),
+      },
+      shopifyChargeTransaction: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("10") } }),
+      },
+      causeAllocation: {
+        findMany: vi.fn().mockImplementation(({ select }) => {
+          if ("allocated" in select) {
+            return Promise.resolve(causeAllocationRows.map((allocation) => ({
+              allocated: allocation.allocated,
+            })));
+          }
+          return Promise.resolve(causeAllocationRows.map((allocation) => ({
+            id: allocation.id,
+            causeId: allocation.causeId,
+            _count: allocation._count,
+          })));
+        }),
+        updateMany: vi.fn().mockImplementation(({ where, data }) => {
+          const allocation = causeAllocationRows.find((row) => row.id === where.id);
+          if (allocation) allocation.allocated = data.allocated;
+          return Promise.resolve({ count: allocation ? 1 : 0 });
+        }),
+        create: vi.fn().mockImplementation(({ data }) => {
+          causeAllocationRows.push({
+            id: `created-${data.causeId}`,
+            causeId: data.causeId,
+            allocated: data.allocated,
+            _count: { applications: 0 },
+          });
+          return Promise.resolve({});
+        }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      lineArtistAllocation: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            artistId: "artist-1",
+            artistName: "Artist One",
+            creditName: "A. One",
+            payoutAmount: decimal("15"),
+          },
+        ]),
+      },
+      artistAllocation: {
+        findMany: vi.fn().mockImplementation(({ select }) => {
+          if ("allocated" in select) {
+            return Promise.resolve(artistAllocationRows.map((allocation) => ({
+              allocated: allocation.allocated,
+            })));
+          }
+          return Promise.resolve(artistAllocationRows.map((allocation) => ({
+            id: allocation.id,
+            artistId: allocation.artistId,
+            _count: allocation._count,
+          })));
+        }),
+        updateMany: vi.fn().mockImplementation(({ where, data }) => {
+          const allocation = artistAllocationRows.find((row) => row.id === where.id);
+          if (allocation) allocation.allocated = data.allocated;
+          return Promise.resolve({ count: allocation ? 1 : 0 });
+        }),
+        create: vi.fn().mockImplementation(({ data }) => {
+          artistAllocationRows.push({
+            id: `created-${data.artistId}`,
+            artistId: data.artistId,
+            allocated: data.allocated,
+            _count: { applications: 0 },
+          });
+          return Promise.resolve({});
+        }),
+        deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
+    };
 
-    expect(db.$transaction).not.toHaveBeenCalled();
+    return { db, tx };
+  }
+
+  it("rebuilds a period without deleting allocation buckets that have payment applications", async () => {
+    const { db } = createRebuildDb();
+
+    const result = await rebuildReportingPeriod({ shopId: "shop-1", periodId: "period-1", db: db as any });
+
+    expect(result).toEqual({
+      periodId: "period-1",
+      periodStartDate: "2026-01-01T00:00:00.000Z",
+      periodEndDate: "2026-01-15T00:00:00.000Z",
+      before: expect.objectContaining({
+        causeAllocationTotal: "25",
+        artistPayoutTotal: "5",
+        donationPool: "90",
+      }),
+      after: expect.objectContaining({
+        causeAllocationTotal: "100",
+        artistPayoutTotal: "15",
+        donationPool: "90",
+      }),
+      delta: expect.objectContaining({
+        causeAllocationTotal: "75",
+        artistPayoutTotal: "10",
+        donationPool: "0",
+      }),
+    });
+    expect(db.causeAllocation.updateMany).toHaveBeenCalledWith({
+      where: { id: "existing-cause-allocation", shopId: "shop-1" },
+      data: expect.objectContaining({
+        allocated: expect.any(Prisma.Decimal),
+      }),
+    });
+    expect(db.artistAllocation.updateMany).toHaveBeenCalledWith({
+      where: { id: "existing-artist-allocation", shopId: "shop-1" },
+      data: expect.objectContaining({
+        allocated: expect.any(Prisma.Decimal),
+      }),
+    });
+    expect(db.causeAllocation.deleteMany).not.toHaveBeenCalled();
+    expect(db.artistAllocation.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it("rebuilds all periods without requiring payment applications to be dropped first", async () => {
+    const { db } = createRebuildDb([
+      {
+        id: "period-1",
+        startDate: new Date("2026-01-01T00:00:00.000Z"),
+        endDate: new Date("2026-01-15T00:00:00.000Z"),
+      },
+      {
+        id: "period-2",
+        startDate: new Date("2026-01-15T00:00:00.000Z"),
+        endDate: new Date("2026-02-01T00:00:00.000Z"),
+      },
+    ]);
+
+    const result = await rebuildAllReporting({ shopId: "shop-1", db: db as any });
+
+    expect(result).toHaveLength(2);
+    expect(db.$transaction).toHaveBeenCalledTimes(2);
   });
 });

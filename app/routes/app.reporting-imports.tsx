@@ -1,4 +1,5 @@
 import { jsonResponse } from "~/utils/json-response.server";
+import { useRef } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useNavigation, useRouteError } from "@remix-run/react";
 import { prisma } from "../db.server";
@@ -11,10 +12,12 @@ import {
   rebuildReportingPeriod,
 } from "../services/historicalBackfill.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { useAppLocalization } from "../utils/use-app-localization";
 
 type ActionData = {
   ok: boolean;
   message: string;
+  actionKind?: "import" | "rebuild";
   summary?: unknown;
   importPayload?: string;
   importKind?: string | null;
@@ -40,6 +43,67 @@ type VariantOption = {
   label: string;
 };
 
+type PeriodOption = {
+  id: string;
+  label: string;
+  startDate: string;
+  endDate: string;
+  status: string;
+  source: string;
+  shopifyPayoutId: string | null;
+};
+
+type ImportBatchRow = {
+  id: string;
+  kind: string;
+  status: string;
+  sourceName: string | null;
+  sourceType: string | null;
+  summary: unknown;
+  createdAt: string;
+  completedAt: string | null;
+};
+
+type LoaderData = {
+  periods: PeriodOption[];
+  batches: ImportBatchRow[];
+  variants: VariantOption[];
+};
+
+type RebuildMetricSnapshot = {
+  orderLineCount: number;
+  grossSales: string;
+  totalCost: string;
+  totalNetContribution: string;
+  shopifyCharges: string;
+  donationPool: string;
+  causeAllocationTotal: string;
+  artistPayoutTotal: string;
+  causeAllocationCount: number;
+  artistAllocationCount: number;
+};
+
+type RebuildMetricDelta = RebuildMetricSnapshot;
+
+type RebuildPeriodResult = {
+  periodId: string;
+  periodStartDate: string;
+  periodEndDate: string;
+  before: RebuildMetricSnapshot;
+  after: RebuildMetricSnapshot;
+  delta: RebuildMetricDelta;
+};
+
+function actionJson(data: ActionData, init?: ResponseInit) {
+  return jsonResponse(data, init);
+}
+
+function actionKindForIntent(intent: string | undefined): ActionData["actionKind"] {
+  if (intent === "dry-run-import" || intent === "apply-import") return "import";
+  if (intent === "rebuild-period" || intent === "rebuild-all") return "rebuild";
+  return undefined;
+}
+
 function formatDate(value: string | null) {
   if (!value) return "No date";
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(new Date(value));
@@ -47,6 +111,24 @@ function formatDate(value: string | null) {
 
 function stringifySummary(summary: unknown) {
   return JSON.stringify(summary, null, 2);
+}
+
+function isRebuildPeriodResult(value: unknown): value is RebuildPeriodResult {
+  return Boolean(
+    value &&
+    typeof value === "object" &&
+    "periodStartDate" in value &&
+    "periodEndDate" in value &&
+    "before" in value &&
+    "after" in value &&
+    "delta" in value,
+  );
+}
+
+function rebuildPeriodResults(summary: unknown): RebuildPeriodResult[] {
+  if (isRebuildPeriodResult(summary)) return [summary];
+  if (!Array.isArray(summary)) return [];
+  return summary.filter(isRebuildPeriodResult);
 }
 
 function lineMappingRequests(summary: unknown): LineMappingRequest[] {
@@ -83,7 +165,7 @@ async function readImportPayload(formData: FormData) {
   };
 }
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = async ({ request }: LoaderFunctionArgs): Promise<Response> => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
 
@@ -129,7 +211,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   ]);
 
-  return jsonResponse({
+  const data = {
     periods: periods.map((period) => ({
       id: period.id,
       label: `${formatDate(period.startDate.toISOString())} - ${formatDate(period.endDate.toISOString())}${period.shopifyPayoutId ? ` (${period.shopifyPayoutId})` : ""}`,
@@ -153,7 +235,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       shopifyId: variant.shopifyId,
       label: `${variant.product.title} - ${variant.title}${variant.sku ? ` (${variant.sku})` : ""}`,
     })),
-  });
+  } satisfies LoaderData;
+
+  return jsonResponse(data);
 };
 
 function parseVariantMappings(formData: FormData) {
@@ -167,7 +251,7 @@ function parseVariantMappings(formData: FormData) {
   return mappings;
 }
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = async ({ request }: ActionFunctionArgs): Promise<Response> => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
   const formData = await request.formData();
@@ -184,50 +268,59 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
       if (kind === "payouts") {
         const summary = await importHistoricalPayouts({ shopId, rows, dryRun, sourceName });
-        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Payout dry run complete." : "Payout import complete.", summary, importPayload: payload, importKind: kind, sourceName });
+        return actionJson({ ok: summary.errors.length === 0, message: dryRun ? "Payout dry run complete." : "Payout import complete.", actionKind: "import", summary, importPayload: payload, importKind: kind, sourceName });
       }
 
       if (kind === "charges") {
         const summary = await importHistoricalCharges({ shopId, rows, dryRun, sourceName });
-        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Charge dry run complete." : "Charge import complete.", summary, importPayload: payload, importKind: kind, sourceName });
+        return actionJson({ ok: summary.errors.length === 0, message: dryRun ? "Charge dry run complete." : "Charge import complete.", actionKind: "import", summary, importPayload: payload, importKind: kind, sourceName });
       }
 
       if (kind === "orders") {
         const summary = await importHistoricalOrders({ shopId, rows, dryRun, sourceName, mappingOverrides });
-        return jsonResponse<ActionData>({ ok: summary.errors.length === 0, message: dryRun ? "Order dry run complete." : "Order import complete.", summary, importPayload: payload, importKind: kind, sourceName, mappingOverrides });
+        return actionJson({ ok: summary.errors.length === 0, message: dryRun ? "Order dry run complete." : "Order import complete.", actionKind: "import", summary, importPayload: payload, importKind: kind, sourceName, mappingOverrides });
       }
 
-      return jsonResponse<ActionData>({ ok: false, message: "Choose an import type." }, { status: 400 });
+      return actionJson({ ok: false, message: "Choose an import type.", actionKind: "import" }, { status: 400 });
     }
 
     if (intent === "rebuild-period") {
       const periodId = formData.get("periodId")?.toString() ?? "";
       if (!periodId) {
-        return jsonResponse<ActionData>({ ok: false, message: "Choose a period to rebuild." }, { status: 400 });
+        return actionJson({ ok: false, message: "Choose a period to rebuild.", actionKind: "rebuild" }, { status: 400 });
       }
       const result = await rebuildReportingPeriod({ shopId, periodId });
-      return jsonResponse<ActionData>({ ok: true, message: "Reporting period rebuilt.", summary: result });
+      return actionJson({ ok: true, message: "Reporting period rebuilt. Results are shown below.", actionKind: "rebuild", summary: result });
     }
 
     if (intent === "rebuild-all") {
       const result = await rebuildAllReporting({ shopId });
-      return jsonResponse<ActionData>({ ok: true, message: "Reporting history rebuilt.", summary: result });
+      return actionJson({ ok: true, message: "Reporting history rebuilt. Results are shown below.", actionKind: "rebuild", summary: result });
     }
 
-    return jsonResponse<ActionData>({ ok: false, message: "Unknown action." }, { status: 400 });
+    return actionJson({ ok: false, message: "Unknown action." }, { status: 400 });
   } catch (error) {
-    return jsonResponse<ActionData>(
-      { ok: false, message: error instanceof Error ? error.message : "Import or rebuild failed." },
+    return actionJson(
+      { ok: false, message: error instanceof Error ? error.message : "Import or rebuild failed.", actionKind: actionKindForIntent(intent) },
       { status: 400 },
     );
   }
 };
 
 export default function ReportingImportsPage() {
-  const { periods, batches, variants } = useLoaderData<typeof loader>();
-  const actionData = useActionData<typeof action>();
+  const { periods, batches, variants } = useLoaderData() as LoaderData;
+  const actionData = useActionData() as ActionData | undefined;
   const navigation = useNavigation();
+  const { formatMoney, locale } = useAppLocalization();
+  const importIntentRef = useRef<HTMLInputElement>(null);
+  const mappingIntentRef = useRef<HTMLInputElement>(null);
   const busy = navigation.state !== "idle";
+  const submittingIntent = navigation.formData?.get("intent")?.toString();
+  const isRebuildSubmitting = submittingIntent === "rebuild-period" || submittingIntent === "rebuild-all";
+  const importActionData = actionData?.actionKind === "import" ? actionData : null;
+  const rebuildActionData = actionData?.actionKind === "rebuild" ? actionData : null;
+  const rebuildResults = rebuildPeriodResults(rebuildActionData?.summary);
+  const statusMessage = isRebuildSubmitting ? "Rebuild in progress." : actionData?.message ?? "";
   const mappingRequests = lineMappingRequests(actionData?.summary);
   const mappingOverrides = actionData?.mappingOverrides ?? {};
   const hasReviewedMappings = actionData?.importKind === "orders" &&
@@ -239,24 +332,51 @@ export default function ReportingImportsPage() {
   return (
     <>
       <ui-title-bar title="Imports & rebuild" />
+      <style>
+        {`
+          @keyframes reporting-imports-spin {
+            to { transform: rotate(360deg); }
+          }
+        `}
+      </style>
+      <div
+        aria-live="polite"
+        aria-atomic="true"
+        style={{
+          position: "absolute",
+          width: 1,
+          height: 1,
+          overflow: "hidden",
+          clip: "rect(0,0,0,0)",
+          whiteSpace: "nowrap",
+        }}
+      >
+        {statusMessage}
+      </div>
       <s-page>
-        {actionData ? (
+        {actionData && !actionData.actionKind ? (
           <s-banner tone={actionData.ok ? "success" : "critical"}>
             <s-text>{actionData.message}</s-text>
-            {actionData.summary ? (
-              <pre style={{ overflowX: "auto", whiteSpace: "pre-wrap", margin: "0.75rem 0 0" }}>
-                {stringifySummary(actionData.summary)}
-              </pre>
-            ) : null}
           </s-banner>
         ) : null}
 
         <s-section heading="Historical import">
           <div style={{ display: "grid", gap: "1rem" }}>
+            {importActionData ? (
+              <s-banner tone={importActionData.ok ? "success" : "critical"}>
+                <s-text>{importActionData.message}</s-text>
+                {importActionData.summary ? (
+                  <pre style={{ overflowX: "auto", whiteSpace: "pre-wrap", margin: "0.75rem 0 0" }}>
+                    {stringifySummary(importActionData.summary)}
+                  </pre>
+                ) : null}
+              </s-banner>
+            ) : null}
             <s-text>
               Import Shopify CSV exports or JSON arrays for payouts, Shopify charges, and orders. Historical order snapshots use the current Count On Us configuration at import time.
             </s-text>
             <Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: "1rem" }}>
+              <input ref={importIntentRef} type="hidden" name="intent" defaultValue="dry-run-import" />
               <div style={{ display: "grid", gap: "0.4rem" }}>
                 <label htmlFor="kind">Import type</label>
                 <select id="kind" name="kind" style={{ maxWidth: "24rem", padding: "0.65rem", font: "inherit" }}>
@@ -293,10 +413,14 @@ export default function ReportingImportsPage() {
               </div>
 
               <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <s-button type="submit" name="intent" value="dry-run-import" variant="secondary" disabled={busy}>
+                <s-button type="submit" variant="secondary" disabled={busy} onClick={() => {
+                  if (importIntentRef.current) importIntentRef.current.value = "dry-run-import";
+                }}>
                   Dry run
                 </s-button>
-                <s-button type="submit" name="intent" value="apply-import" variant="primary" disabled={busy}>
+                <s-button type="submit" variant="primary" disabled={busy} onClick={() => {
+                  if (importIntentRef.current) importIntentRef.current.value = "apply-import";
+                }}>
                   Import
                 </s-button>
               </div>
@@ -304,6 +428,7 @@ export default function ReportingImportsPage() {
 
             {actionData?.importKind === "orders" && actionData.importPayload && mappingRequests.length > 0 ? (
               <Form method="post" style={{ display: "grid", gap: "1rem" }}>
+                <input ref={mappingIntentRef} type="hidden" name="intent" defaultValue="dry-run-import" />
                 <input type="hidden" name="kind" value="orders" />
                 <input type="hidden" name="sourceName" value={actionData.sourceName ?? ""} />
                 <textarea name="payload" value={actionData.importPayload} readOnly hidden />
@@ -330,10 +455,14 @@ export default function ReportingImportsPage() {
                   })}
                 </div>
                 <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                  <s-button type="submit" name="intent" value="dry-run-import" variant="secondary" disabled={busy}>
+                  <s-button type="submit" variant="secondary" disabled={busy} onClick={() => {
+                    if (mappingIntentRef.current) mappingIntentRef.current.value = "dry-run-import";
+                  }}>
                     Dry run with mappings
                   </s-button>
-                  <s-button type="submit" name="intent" value="apply-import" variant="primary" disabled={busy}>
+                  <s-button type="submit" variant="primary" disabled={busy} onClick={() => {
+                    if (mappingIntentRef.current) mappingIntentRef.current.value = "apply-import";
+                  }}>
                     Import with mappings
                   </s-button>
                 </div>
@@ -342,6 +471,7 @@ export default function ReportingImportsPage() {
 
             {hasReviewedMappings ? (
               <Form method="post" style={{ display: "grid", gap: "1rem" }}>
+                <input type="hidden" name="intent" value="apply-import" />
                 <input type="hidden" name="kind" value="orders" />
                 <input type="hidden" name="sourceName" value={actionData?.sourceName ?? ""} />
                 <textarea name="payload" value={actionData?.importPayload ?? ""} readOnly hidden />
@@ -352,7 +482,7 @@ export default function ReportingImportsPage() {
                   <s-text>Mappings look ready. Import will save these choices for future historical imports.</s-text>
                 </s-banner>
                 <div>
-                  <s-button type="submit" name="intent" value="apply-import" variant="primary" disabled={busy}>
+                  <s-button type="submit" variant="primary" disabled={busy}>
                     Import with reviewed mappings
                   </s-button>
                 </div>
@@ -365,26 +495,138 @@ export default function ReportingImportsPage() {
           <div style={{ display: "grid", gap: "1rem" }}>
             <s-banner tone="warning">
               <s-text>
-                Rebuild deletes and recreates derived allocations. Periods with payment applications are refused to preserve payment evidence.
+                Rebuild refreshes reporting allocations while preserving cause disbursements and artist payments that have already been registered.
               </s-text>
             </s-banner>
-            <Form method="post" style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
-              <div style={{ display: "grid", gap: "0.4rem", minWidth: "min(32rem, 100%)" }}>
-                <label htmlFor="periodId">Period</label>
-                <select id="periodId" name="periodId" style={{ padding: "0.65rem", font: "inherit" }}>
-                  <option value="">Choose a period</option>
-                  {periods.map((period) => (
-                    <option key={period.id} value={period.id}>{period.label}</option>
-                  ))}
-                </select>
-              </div>
-              <s-button type="submit" name="intent" value="rebuild-period" variant="secondary" disabled={busy}>
-                Rebuild period
-              </s-button>
-              <s-button type="submit" name="intent" value="rebuild-all" tone="critical" variant="secondary" disabled={busy}>
-                Rebuild all
-              </s-button>
-            </Form>
+            {isRebuildSubmitting ? (
+              <s-banner tone="info">
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: "1rem",
+                      height: "1rem",
+                      border: "2px solid currentColor",
+                      borderTopColor: "transparent",
+                      borderRadius: "999px",
+                      animation: "reporting-imports-spin 0.8s linear infinite",
+                      flex: "0 0 auto",
+                    }}
+                  />
+                  <s-text>Rebuild in progress. This may take a moment.</s-text>
+                </div>
+              </s-banner>
+            ) : null}
+            {rebuildActionData ? (
+              <s-banner tone={rebuildActionData.ok ? "success" : "critical"}>
+                <s-text>{rebuildActionData.message}</s-text>
+                {rebuildResults.length > 0 ? (
+                  <div style={{ margin: "0.75rem 0 0", overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", minWidth: "56rem" }}>
+                      <thead>
+                        <tr>
+                          {["Period", "Metric", "Before", "After", "Delta"].map((heading) => (
+                            <th
+                              key={heading}
+                              scope="col"
+                              style={{
+                                textAlign: "left",
+                                padding: "0.45rem 0.5rem",
+                                borderBottom: "1px solid var(--p-color-border, #d2d5d8)",
+                              }}
+                            >
+                              {heading}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rebuildResults.flatMap((result) => {
+                          const periodLabel = `${new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(result.periodStartDate))} - ${new Intl.DateTimeFormat(locale, { dateStyle: "medium" }).format(new Date(result.periodEndDate))}`;
+                          const rows = [
+                            {
+                              label: "Donation pool",
+                              before: formatMoney(result.before.donationPool),
+                              after: formatMoney(result.after.donationPool),
+                              delta: formatMoney(result.delta.donationPool),
+                            },
+                            {
+                              label: "Cause allocations",
+                              before: formatMoney(result.before.causeAllocationTotal),
+                              after: formatMoney(result.after.causeAllocationTotal),
+                              delta: formatMoney(result.delta.causeAllocationTotal),
+                            },
+                            {
+                              label: "Artist payouts",
+                              before: formatMoney(result.before.artistPayoutTotal),
+                              after: formatMoney(result.after.artistPayoutTotal),
+                              delta: formatMoney(result.delta.artistPayoutTotal),
+                            },
+                            {
+                              label: "Total cost",
+                              before: formatMoney(result.before.totalCost),
+                              after: formatMoney(result.after.totalCost),
+                              delta: formatMoney(result.delta.totalCost),
+                            },
+                            {
+                              label: "Net contribution",
+                              before: formatMoney(result.before.totalNetContribution),
+                              after: formatMoney(result.after.totalNetContribution),
+                              delta: formatMoney(result.delta.totalNetContribution),
+                            },
+                            {
+                              label: "Order lines",
+                              before: result.before.orderLineCount.toLocaleString(locale),
+                              after: result.after.orderLineCount.toLocaleString(locale),
+                              delta: result.delta.orderLineCount.toLocaleString(locale),
+                            },
+                          ];
+
+                          return rows.map((row, index) => (
+                            <tr key={`${result.periodId}:${row.label}`}>
+                              <td style={{ padding: "0.45rem 0.5rem", borderBottom: "1px solid var(--p-color-border, #d2d5d8)" }}>
+                                {index === 0 ? periodLabel : ""}
+                              </td>
+                              <td style={{ padding: "0.45rem 0.5rem", borderBottom: "1px solid var(--p-color-border, #d2d5d8)" }}>{row.label}</td>
+                              <td style={{ padding: "0.45rem 0.5rem", borderBottom: "1px solid var(--p-color-border, #d2d5d8)" }}>{row.before}</td>
+                              <td style={{ padding: "0.45rem 0.5rem", borderBottom: "1px solid var(--p-color-border, #d2d5d8)" }}>{row.after}</td>
+                              <td style={{ padding: "0.45rem 0.5rem", borderBottom: "1px solid var(--p-color-border, #d2d5d8)" }}>{row.delta}</td>
+                            </tr>
+                          ));
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : rebuildActionData.summary ? (
+                  <pre style={{ overflowX: "auto", whiteSpace: "pre-wrap", margin: "0.75rem 0 0" }}>
+                    {stringifySummary(rebuildActionData.summary)}
+                  </pre>
+                ) : null}
+              </s-banner>
+            ) : null}
+            <div style={{ display: "grid", gap: "1rem" }}>
+              <Form method="post" style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "end" }}>
+                <input type="hidden" name="intent" value="rebuild-period" />
+                <div style={{ display: "grid", gap: "0.4rem", minWidth: "min(32rem, 100%)" }}>
+                  <label htmlFor="periodId">Period</label>
+                  <select id="periodId" name="periodId" required style={{ padding: "0.65rem", font: "inherit" }}>
+                    <option value="">Choose a period</option>
+                    {periods.map((period) => (
+                      <option key={period.id} value={period.id}>{period.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <s-button type="submit" variant="secondary" disabled={busy}>
+                  Rebuild period
+                </s-button>
+              </Form>
+              <Form method="post">
+                <input type="hidden" name="intent" value="rebuild-all" />
+                <s-button type="submit" tone="critical" variant="secondary" disabled={busy}>
+                  Rebuild all
+                </s-button>
+              </Form>
+            </div>
           </div>
         </s-section>
 
@@ -400,7 +642,11 @@ export default function ReportingImportsPage() {
             <s-table-body>
               {batches.length === 0 ? (
                 <s-table-row>
-                  <s-table-cell colSpan={5}>No historical import batches yet.</s-table-cell>
+                  <s-table-cell>No historical import batches yet.</s-table-cell>
+                  <s-table-cell />
+                  <s-table-cell />
+                  <s-table-cell />
+                  <s-table-cell />
                 </s-table-row>
               ) : (
                 batches.map((batch) => (

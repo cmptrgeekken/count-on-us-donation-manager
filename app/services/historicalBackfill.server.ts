@@ -923,18 +923,101 @@ export async function rebuildReportingPeriod(input: {
   });
   if (!period) throw new Error("Reporting period not found.");
 
-  const [disbursementApplications, artistPaymentApplications] = await Promise.all([
-    db.disbursementApplication.count({
-      where: { shopId: input.shopId, causeAllocation: { periodId: period.id } },
+  return rebuildPaymentSafeReportingPeriod({ shopId: input.shopId, period, db });
+}
+
+function sumDecimals(values: Prisma.Decimal[]) {
+  return values.reduce((sum, value) => sum.add(value), new Prisma.Decimal(0));
+}
+
+async function summarizeRebuildPeriodState(input: {
+  shopId: string;
+  period: { id: string; startDate: Date; endDate: Date };
+  db: DbClient;
+}) {
+  const { db, period } = input;
+  const [snapshotLines, chargesSummary, causeAllocations, artistAllocations] = await Promise.all([
+    db.orderSnapshotLine.findMany({
+      where: {
+        shopId: input.shopId,
+        snapshot: {
+          createdAt: {
+            gte: period.startDate,
+            lt: period.endDate,
+          },
+        },
+      },
+      select: {
+        subtotal: true,
+        totalCost: true,
+        netContribution: true,
+        adjustments: {
+          select: { netContribAdj: true },
+        },
+      },
     }),
-    db.artistPaymentApplication.count({
-      where: { shopId: input.shopId, artistAllocation: { periodId: period.id } },
+    db.shopifyChargeTransaction.aggregate({
+      where: {
+        shopId: input.shopId,
+        processedAt: {
+          gte: period.startDate,
+          lt: period.endDate,
+        },
+      },
+      _sum: { amount: true },
+    }),
+    db.causeAllocation.findMany({
+      where: {
+        shopId: input.shopId,
+        periodId: period.id,
+      },
+      select: { allocated: true },
+    }),
+    db.artistAllocation.findMany({
+      where: {
+        shopId: input.shopId,
+        periodId: period.id,
+      },
+      select: { allocated: true },
     }),
   ]);
 
-  if (disbursementApplications > 0 || artistPaymentApplications > 0) {
-    throw new Error("This period has payment applications. Reverse payments before rebuilding reporting allocations.");
-  }
+  const grossSales = sumDecimals(snapshotLines.map((line) => line.subtotal));
+  const totalCost = sumDecimals(snapshotLines.map((line) => line.totalCost));
+  const totalNetContribution = snapshotLines.reduce((sum, line) => {
+    const adjustmentTotal = sumDecimals(line.adjustments.map((adjustment) => adjustment.netContribAdj));
+    return sum.add(line.netContribution).add(adjustmentTotal);
+  }, new Prisma.Decimal(0));
+  const shopifyCharges = chargesSummary._sum.amount ?? new Prisma.Decimal(0);
+  const donationPool = totalNetContribution.sub(shopifyCharges);
+  const causeAllocationTotal = sumDecimals(causeAllocations.map((allocation) => allocation.allocated));
+  const artistPayoutTotal = sumDecimals(artistAllocations.map((allocation) => allocation.allocated));
+
+  return {
+    orderLineCount: snapshotLines.length,
+    grossSales,
+    totalCost,
+    totalNetContribution,
+    shopifyCharges,
+    donationPool,
+    causeAllocationTotal,
+    artistPayoutTotal,
+    causeAllocationCount: causeAllocations.length,
+    artistAllocationCount: artistAllocations.length,
+  };
+}
+
+function decimalDelta(after: Prisma.Decimal, before: Prisma.Decimal) {
+  return after.sub(before);
+}
+
+async function rebuildPaymentSafeReportingPeriod(input: {
+  shopId: string;
+  period: { id: string; startDate: Date; endDate: Date };
+  db: DbClient;
+}) {
+  const { db, period } = input;
+  const before = await summarizeRebuildPeriodState(input);
 
   await db.$transaction(async (tx) => {
     await tx.orderSnapshot.updateMany({
@@ -965,15 +1048,53 @@ export async function rebuildReportingPeriod(input: {
     await tx.analyticalRecalculationRun.deleteMany({ where: { shopId: input.shopId, periodId: period.id } });
   });
 
-  const [causeAllocations, artistAllocations] = await Promise.all([
+  await Promise.all([
     materializeCauseAllocationsForPeriod(input.shopId, period, db),
     materializeArtistAllocationsForPeriod(input.shopId, period, db),
   ]);
 
+  const after = await summarizeRebuildPeriodState(input);
+
   return {
     periodId: period.id,
-    causeAllocationCount: causeAllocations.length,
-    artistAllocationCount: artistAllocations.length,
+    periodStartDate: period.startDate.toISOString(),
+    periodEndDate: period.endDate.toISOString(),
+    before: {
+      orderLineCount: before.orderLineCount,
+      grossSales: before.grossSales.toString(),
+      totalCost: before.totalCost.toString(),
+      totalNetContribution: before.totalNetContribution.toString(),
+      shopifyCharges: before.shopifyCharges.toString(),
+      donationPool: before.donationPool.toString(),
+      causeAllocationTotal: before.causeAllocationTotal.toString(),
+      artistPayoutTotal: before.artistPayoutTotal.toString(),
+      causeAllocationCount: before.causeAllocationCount,
+      artistAllocationCount: before.artistAllocationCount,
+    },
+    after: {
+      orderLineCount: after.orderLineCount,
+      grossSales: after.grossSales.toString(),
+      totalCost: after.totalCost.toString(),
+      totalNetContribution: after.totalNetContribution.toString(),
+      shopifyCharges: after.shopifyCharges.toString(),
+      donationPool: after.donationPool.toString(),
+      causeAllocationTotal: after.causeAllocationTotal.toString(),
+      artistPayoutTotal: after.artistPayoutTotal.toString(),
+      causeAllocationCount: after.causeAllocationCount,
+      artistAllocationCount: after.artistAllocationCount,
+    },
+    delta: {
+      orderLineCount: after.orderLineCount - before.orderLineCount,
+      grossSales: decimalDelta(after.grossSales, before.grossSales).toString(),
+      totalCost: decimalDelta(after.totalCost, before.totalCost).toString(),
+      totalNetContribution: decimalDelta(after.totalNetContribution, before.totalNetContribution).toString(),
+      shopifyCharges: decimalDelta(after.shopifyCharges, before.shopifyCharges).toString(),
+      donationPool: decimalDelta(after.donationPool, before.donationPool).toString(),
+      causeAllocationTotal: decimalDelta(after.causeAllocationTotal, before.causeAllocationTotal).toString(),
+      artistPayoutTotal: decimalDelta(after.artistPayoutTotal, before.artistPayoutTotal).toString(),
+      causeAllocationCount: after.causeAllocationCount - before.causeAllocationCount,
+      artistAllocationCount: after.artistAllocationCount - before.artistAllocationCount,
+    },
   };
 }
 
@@ -982,11 +1103,12 @@ export async function rebuildAllReporting(input: { shopId: string; db?: DbClient
   const periods = await db.reportingPeriod.findMany({
     where: { shopId: input.shopId },
     orderBy: { startDate: "asc" },
-    select: { id: true },
+    select: { id: true, startDate: true, endDate: true },
   });
+
   const rebuilt = [];
   for (const period of periods) {
-    rebuilt.push(await rebuildReportingPeriod({ shopId: input.shopId, periodId: period.id, db }));
+    rebuilt.push(await rebuildPaymentSafeReportingPeriod({ shopId: input.shopId, period, db }));
   }
   return rebuilt;
 }
