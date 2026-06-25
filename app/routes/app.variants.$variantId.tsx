@@ -22,6 +22,7 @@ import {
 import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
+import { createEquipmentLibraryItem, createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { buildAdminVariantEstimate, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
@@ -205,6 +206,14 @@ function sortSerializedEquipmentLines(lines: SerializedEquipmentLine[]) {
   return [...lines].sort((a, b) => a.equipmentName.localeCompare(b.equipmentName));
 }
 
+function sortAvailableMaterials(lines: AvailableMaterial[]) {
+  return [...lines].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function sortAvailableEquipment(lines: AvailableEquipment[]) {
+  return [...lines].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 function formatProviderName(provider: string) {
   return provider.charAt(0).toUpperCase() + provider.slice(1);
 }
@@ -259,6 +268,19 @@ const variantDraftSchema = z.object({
 
 const copyVariantConfigSchema = z.object({
   sourceVariantId: z.string().min(1),
+});
+
+const promoteTemplateSchema = z.object({
+  name: z.string().trim().min(1, "Template name is required."),
+  description: z.string().trim().optional(),
+  includeMaterials: z.boolean(),
+  includeEquipment: z.boolean(),
+  includeLabor: z.boolean(),
+  freezeShopLaborRate: z.boolean(),
+  includeDefaultShippingTemplate: z.boolean(),
+  assignBack: z.boolean(),
+  materialLineKeys: z.array(z.string()),
+  equipmentLineKeys: z.array(z.string()),
 });
 
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
@@ -603,6 +625,65 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
+
+  if (intent === "quick-create-material") {
+    let material: Awaited<ReturnType<typeof createMaterialLibraryItem>>;
+    try {
+      const materialType = formData.get("type")?.toString();
+      const costingModel = formData.get("costingModel")?.toString();
+      const normalizedType = materialType === "shipping" ? "shipping" : "production";
+      const normalizedCostingModel =
+        costingModel === "yield" || costingModel === "uses" || costingModel === "counted"
+          ? costingModel
+          : "counted";
+      material = await createMaterialLibraryItem({
+        shopId,
+        input: {
+          name: formData.get("name")?.toString() ?? "",
+          type: normalizedType,
+          costingModel: normalizedCostingModel,
+          purchasePrice: formData.get("purchasePrice")?.toString() ?? "",
+          purchaseQty: formData.get("purchaseQty")?.toString() ?? "",
+          totalUsesPerUnit: formData.get("totalUsesPerUnit")?.toString() ?? "",
+          purchaseLink: formData.get("purchaseLink")?.toString() ?? "",
+          weightGrams: formData.get("weightGrams")?.toString() ?? "",
+          unitDescription: formData.get("unitDescription")?.toString() ?? "",
+          notes: formData.get("notes")?.toString() ?? "",
+        },
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return jsonResponse({ ok: false, message: await error.text(), actionKind: "quick-create-material" }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return jsonResponse({ ok: true, message: "Material created.", actionKind: "quick-create-material", material });
+  }
+
+  if (intent === "quick-create-equipment") {
+    let equipment: Awaited<ReturnType<typeof createEquipmentLibraryItem>>;
+    try {
+      equipment = await createEquipmentLibraryItem({
+        shopId,
+        input: {
+          name: formData.get("name")?.toString() ?? "",
+          hourlyRate: formData.get("hourlyRate")?.toString() ?? "",
+          perUseCost: formData.get("perUseCost")?.toString() ?? "",
+          equipmentCost: formData.get("equipmentCost")?.toString() ?? "",
+          purchaseLink: formData.get("purchaseLink")?.toString() ?? "",
+          notes: formData.get("notes")?.toString() ?? "",
+        },
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return jsonResponse({ ok: false, message: await error.text(), actionKind: "quick-create-equipment" }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return jsonResponse({ ok: true, message: "Equipment created.", actionKind: "quick-create-equipment", equipment });
+  }
 
   async function ensureConfig() {
     const existing = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId } });
@@ -1149,6 +1230,425 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       ok: true,
       message: "Variant configuration copied.",
       savedAt: new Date().toISOString(),
+    });
+  }
+
+  if (intent === "promote-template") {
+    const parsed = promoteTemplateSchema.safeParse({
+      name: formData.get("name")?.toString() ?? "",
+      description: formData.get("description")?.toString() ?? "",
+      includeMaterials: formData.get("includeMaterials") === "on",
+      includeEquipment: formData.get("includeEquipment") === "on",
+      includeLabor: formData.get("includeLabor") === "on",
+      freezeShopLaborRate: formData.get("freezeShopLaborRate") === "on",
+      includeDefaultShippingTemplate: formData.get("includeDefaultShippingTemplate") === "on",
+      assignBack: formData.get("assignBack") === "on",
+      materialLineKeys: formData.getAll("materialLineKey").map((value) => value.toString()),
+      equipmentLineKeys: formData.getAll("equipmentLineKey").map((value) => value.toString()),
+    });
+
+    if (!parsed.success) {
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
+    }
+
+    const promotion = parsed.data;
+    const selectedMaterialLineKeys = new Set(promotion.materialLineKeys);
+    const selectedEquipmentLineKeys = new Set(promotion.equipmentLineKeys);
+    if (!promotion.includeMaterials && !promotion.includeEquipment && !promotion.includeLabor) {
+      return jsonResponse(
+        { ok: false, message: "Choose at least one cost area to include in the template." },
+        { status: 400 },
+      );
+    }
+
+    const [sourceConfig, shop] = await Promise.all([
+      prisma.variantCostConfig.findFirst({
+        where: { variantId, shopId },
+        include: {
+          productionTemplate: {
+            include: {
+              materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+              equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
+            },
+          },
+          shippingTemplate: { select: { id: true, type: true } },
+          materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+          equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
+        },
+      }),
+      prisma.shop.findUnique({
+        where: { shopId },
+        select: { defaultLaborRate: true },
+      }),
+    ]);
+
+    if (!sourceConfig) {
+      return jsonResponse({ ok: false, message: "Save a variant configuration before creating a template from it." }, { status: 400 });
+    }
+
+    const promotedMaterialLines: Array<{
+      materialId: string;
+      materialName: string;
+      quantity: Prisma.Decimal;
+      yield: Prisma.Decimal | null;
+      usesPerVariant: Prisma.Decimal | null;
+    }> = [];
+    const retainedTemplateMaterialLines: Array<{
+      materialId: string;
+      quantity: Prisma.Decimal;
+      yield: Prisma.Decimal | null;
+      usesPerVariant: Prisma.Decimal | null;
+    }> = [];
+    const promotedEquipmentLines: Array<{
+      equipmentId: string;
+      equipmentName: string;
+      usageMode: string;
+      minutes: Prisma.Decimal | null;
+      uses: Prisma.Decimal | null;
+      yieldDurationMinutes: Prisma.Decimal | null;
+      yieldUses: Prisma.Decimal | null;
+      yieldQuantity: Prisma.Decimal | null;
+    }> = [];
+    const retainedTemplateEquipmentLines: Array<{
+      equipmentId: string;
+      usageMode: string;
+      minutes: Prisma.Decimal | null;
+      uses: Prisma.Decimal | null;
+      yieldDurationMinutes: Prisma.Decimal | null;
+      yieldUses: Prisma.Decimal | null;
+      yieldQuantity: Prisma.Decimal | null;
+    }> = [];
+
+    if (promotion.includeMaterials || promotion.assignBack) {
+      if (promotion.includeMaterials && selectedMaterialLineKeys.size === 0) {
+        return jsonResponse({ ok: false, message: "Choose at least one material line to include." }, { status: 400 });
+      }
+
+      const templateMaterialSource = sourceConfig.productionTemplate?.materialLines ?? [];
+      const explicitMaterialOverrides = new Map(
+        sourceConfig.materialLines
+          .filter((line) => line.templateLineId)
+          .map((line) => [line.templateLineId as string, line]),
+      );
+      const materialIdTemplateCounts = buildCountMap(templateMaterialSource.map((line) => line.materialId));
+      const legacyMaterialOverrides = new Map(
+        sourceConfig.materialLines
+          .filter(
+            (line) =>
+              !line.templateLineId &&
+              line.material.type === "production" &&
+              (materialIdTemplateCounts.get(line.materialId) ?? 0) === 1,
+          )
+          .map((line) => [line.materialId, line]),
+      );
+      const consumedMaterialLineIds = new Set<string>();
+
+      for (const line of templateMaterialSource) {
+        const override = explicitMaterialOverrides.get(line.id) ?? legacyMaterialOverrides.get(line.materialId) ?? null;
+        if (override) consumedMaterialLineIds.add(override.id);
+        const effectiveLine = {
+          materialId: line.materialId,
+          quantity: override?.quantity ?? line.quantity,
+          yield: override?.yield ?? line.yield,
+          usesPerVariant: override?.usesPerVariant ?? line.usesPerVariant,
+        };
+        if (promotion.includeMaterials && selectedMaterialLineKeys.has(`template:${line.id}`)) {
+          promotedMaterialLines.push({
+            ...effectiveLine,
+            materialName: line.material.name,
+          });
+        } else {
+          retainedTemplateMaterialLines.push(effectiveLine);
+        }
+      }
+
+      if (promotion.includeMaterials) {
+        for (const line of sourceConfig.materialLines) {
+          if (
+            line.templateLineId ||
+            consumedMaterialLineIds.has(line.id) ||
+            line.material.type !== "production" ||
+            !selectedMaterialLineKeys.has(`variant:${line.id}`)
+          ) continue;
+          promotedMaterialLines.push({
+            materialId: line.materialId,
+            materialName: line.material.name,
+            quantity: line.quantity,
+            yield: line.yield,
+            usesPerVariant: line.usesPerVariant,
+          });
+        }
+      }
+
+      if (promotion.includeMaterials) {
+        const duplicateMaterialNames = promotedMaterialLines
+          .filter((line, index, lines) => lines.findIndex((candidate) => candidate.materialId === line.materialId) !== index)
+          .map((line) => line.materialName);
+        if (duplicateMaterialNames.length > 0) {
+          return jsonResponse(
+            {
+              ok: false,
+              message: `Cannot create a template from duplicate production materials yet: ${[...new Set(duplicateMaterialNames)].join(", ")}.`,
+            },
+            { status: 400 },
+          );
+        }
+      }
+    }
+
+    if (promotion.includeEquipment || promotion.assignBack) {
+      if (promotion.includeEquipment && selectedEquipmentLineKeys.size === 0) {
+        return jsonResponse({ ok: false, message: "Choose at least one equipment line to include." }, { status: 400 });
+      }
+
+      const templateEquipmentSource = sourceConfig.productionTemplate?.equipmentLines ?? [];
+      const explicitEquipmentOverrides = new Map(
+        sourceConfig.equipmentLines
+          .filter((line) => line.templateLineId)
+          .map((line) => [line.templateLineId as string, line]),
+      );
+      const equipmentIdTemplateCounts = buildCountMap(templateEquipmentSource.map((line) => line.equipmentId));
+      const legacyEquipmentOverrides = new Map(
+        sourceConfig.equipmentLines
+          .filter(
+            (line) =>
+              !line.templateLineId &&
+              (equipmentIdTemplateCounts.get(line.equipmentId) ?? 0) === 1,
+          )
+          .map((line) => [line.equipmentId, line]),
+      );
+      const consumedEquipmentLineIds = new Set<string>();
+
+      for (const line of templateEquipmentSource) {
+        const override = explicitEquipmentOverrides.get(line.id) ?? legacyEquipmentOverrides.get(line.equipmentId) ?? null;
+        if (override) consumedEquipmentLineIds.add(override.id);
+        const effectiveLine = {
+          equipmentId: line.equipmentId,
+          usageMode: override?.usageMode ?? line.usageMode ?? "direct",
+          minutes: override?.minutes ?? line.minutes,
+          uses: override?.uses ?? line.uses,
+          yieldDurationMinutes: override?.yieldDurationMinutes ?? line.yieldDurationMinutes,
+          yieldUses: override?.yieldUses ?? line.yieldUses,
+          yieldQuantity: override?.yieldQuantity ?? line.yieldQuantity,
+        };
+        if (promotion.includeEquipment && selectedEquipmentLineKeys.has(`template:${line.id}`)) {
+          promotedEquipmentLines.push({
+            ...effectiveLine,
+            equipmentName: line.equipment.name,
+          });
+        } else {
+          retainedTemplateEquipmentLines.push(effectiveLine);
+        }
+      }
+
+      if (promotion.includeEquipment) {
+        for (const line of sourceConfig.equipmentLines) {
+          if (line.templateLineId || consumedEquipmentLineIds.has(line.id) || !selectedEquipmentLineKeys.has(`variant:${line.id}`)) continue;
+          promotedEquipmentLines.push({
+            equipmentId: line.equipmentId,
+            equipmentName: line.equipment.name,
+            usageMode: line.usageMode ?? "direct",
+            minutes: line.minutes,
+            uses: line.uses,
+            yieldDurationMinutes: line.yieldDurationMinutes,
+            yieldUses: line.yieldUses,
+            yieldQuantity: line.yieldQuantity,
+          });
+        }
+      }
+
+      if (promotion.includeEquipment) {
+        const duplicateEquipmentNames = promotedEquipmentLines
+          .filter((line, index, lines) => lines.findIndex((candidate) => candidate.equipmentId === line.equipmentId) !== index)
+          .map((line) => line.equipmentName);
+        if (duplicateEquipmentNames.length > 0) {
+          return jsonResponse(
+            {
+              ok: false,
+              message: `Cannot create a template from duplicate equipment items yet: ${[...new Set(duplicateEquipmentNames)].join(", ")}.`,
+            },
+            { status: 400 },
+          );
+        }
+      }
+    }
+
+    const defaultLaborMinutes = promotion.includeLabor
+      ? sourceConfig.laborMinutes ?? sourceConfig.productionTemplate?.defaultLaborMinutes ?? null
+      : null;
+    const defaultLaborRate = promotion.includeLabor
+      ? sourceConfig.laborRate ?? sourceConfig.productionTemplate?.defaultLaborRate ?? (promotion.freezeShopLaborRate ? shop?.defaultLaborRate ?? null : null)
+      : null;
+
+    const exactPromotedVariantMaterialLineIds = sourceConfig.materialLines
+      .filter((line) => promotion.includeMaterials && !line.templateLineId && line.material.type === "production" && selectedMaterialLineKeys.has(`variant:${line.id}`))
+      .map((line) => line.id);
+    const exactPromotedVariantEquipmentLineIds = sourceConfig.equipmentLines
+      .filter((line) => promotion.includeEquipment && !line.templateLineId && selectedEquipmentLineKeys.has(`variant:${line.id}`))
+      .map((line) => line.id);
+    const staleMaterialOverrideCount = sourceConfig.materialLines.filter((line) => line.templateLineId).length;
+    const staleEquipmentOverrideCount = sourceConfig.equipmentLines.filter((line) => line.templateLineId).length;
+    const retainedMaterialLineCount = promotion.assignBack
+      ? sourceConfig.materialLines.filter((line) => !line.templateLineId && !exactPromotedVariantMaterialLineIds.includes(line.id)).length +
+        retainedTemplateMaterialLines.length
+      : sourceConfig.materialLines.filter((line) => !line.templateLineId).length;
+    const retainedEquipmentLineCount = promotion.assignBack
+      ? sourceConfig.equipmentLines.filter((line) => !line.templateLineId && !exactPromotedVariantEquipmentLineIds.includes(line.id)).length +
+        retainedTemplateEquipmentLines.length
+      : sourceConfig.equipmentLines.filter((line) => !line.templateLineId).length;
+
+    const template = await prisma.$transaction(async (tx) => {
+      const createdTemplate = await tx.costTemplate.create({
+        data: {
+          shopId,
+          name: promotion.name,
+          type: "production",
+          description: promotion.description || null,
+          defaultLaborMinutes,
+          defaultLaborRate,
+          defaultShippingTemplateId:
+            promotion.includeDefaultShippingTemplate && sourceConfig.shippingTemplate?.type === "shipping"
+              ? sourceConfig.shippingTemplate.id
+              : null,
+        },
+      });
+
+      if (promotedMaterialLines.length > 0) {
+        await tx.costTemplateMaterialLine.createMany({
+          data: promotedMaterialLines.map((line) => ({
+            templateId: createdTemplate.id,
+            materialId: line.materialId,
+            quantity: line.quantity,
+            yield: line.yield,
+            usesPerVariant: line.usesPerVariant,
+          })),
+        });
+      }
+
+      if (promotedEquipmentLines.length > 0) {
+        await tx.costTemplateEquipmentLine.createMany({
+          data: promotedEquipmentLines.map((line) => ({
+            templateId: createdTemplate.id,
+            equipmentId: line.equipmentId,
+            usageMode: line.usageMode,
+            minutes: line.minutes,
+            uses: line.uses,
+            yieldDurationMinutes: line.yieldDurationMinutes,
+            yieldUses: line.yieldUses,
+            yieldQuantity: line.yieldQuantity,
+          })),
+        });
+      }
+
+      if (promotion.assignBack) {
+        await tx.variantCostConfig.updateMany({
+          where: { id: sourceConfig.id, shopId },
+          data: {
+            productionTemplateId: createdTemplate.id,
+            lineItemCount: retainedMaterialLineCount + retainedEquipmentLineCount,
+          },
+        });
+
+        await tx.variantMaterialLine.deleteMany({
+          where: {
+            configId: sourceConfig.id,
+            shopId,
+            OR: [
+              { templateLineId: { not: null } },
+              { id: { in: exactPromotedVariantMaterialLineIds } },
+            ],
+          },
+        });
+        await tx.variantEquipmentLine.deleteMany({
+          where: {
+            configId: sourceConfig.id,
+            shopId,
+            OR: [
+              { templateLineId: { not: null } },
+              { id: { in: exactPromotedVariantEquipmentLineIds } },
+            ],
+          },
+        });
+
+        if (retainedTemplateMaterialLines.length > 0) {
+          await tx.variantMaterialLine.createMany({
+            data: retainedTemplateMaterialLines.map((line) => ({
+              shopId,
+              configId: sourceConfig.id,
+              materialId: line.materialId,
+              quantity: line.quantity,
+              yield: line.yield,
+              usesPerVariant: line.usesPerVariant,
+            })),
+          });
+        }
+
+        if (retainedTemplateEquipmentLines.length > 0) {
+          await tx.variantEquipmentLine.createMany({
+            data: retainedTemplateEquipmentLines.map((line) => ({
+              shopId,
+              configId: sourceConfig.id,
+              equipmentId: line.equipmentId,
+              usageMode: line.usageMode,
+              minutes: line.minutes,
+              uses: line.uses,
+              yieldDurationMinutes: line.yieldDurationMinutes,
+              yieldUses: line.yieldUses,
+              yieldQuantity: line.yieldQuantity,
+            })),
+          });
+        }
+      }
+
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "CostTemplate",
+          entityId: createdTemplate.id,
+          action: "TEMPLATE_CREATED_FROM_VARIANT",
+          actor: "merchant",
+          payload: {
+            variantId,
+            materialLineCount: promotedMaterialLines.length,
+            equipmentLineCount: promotedEquipmentLines.length,
+            assignedBack: promotion.assignBack,
+          },
+        },
+      });
+
+      if (promotion.assignBack) {
+        await tx.auditLog.create({
+          data: {
+            shopId,
+            entity: "VariantCostConfig",
+            entityId: sourceConfig.id,
+            action: "TEMPLATE_ASSIGNED_FROM_VARIANT_PROMOTION",
+            actor: "merchant",
+            payload: {
+              templateId: createdTemplate.id,
+              removedMaterialLineCount: exactPromotedVariantMaterialLineIds.length + staleMaterialOverrideCount,
+              removedEquipmentLineCount: exactPromotedVariantEquipmentLineIds.length + staleEquipmentOverrideCount,
+            },
+          },
+        });
+      }
+
+      return createdTemplate;
+    });
+
+    const cleanupMessage = promotion.assignBack
+      ? ` Assigned to this variant and cleaned up ${exactPromotedVariantMaterialLineIds.length + staleMaterialOverrideCount} material row(s) and ${exactPromotedVariantEquipmentLineIds.length + staleEquipmentOverrideCount} equipment row(s).`
+      : "";
+    const retainedMessage =
+      promotion.assignBack && retainedMaterialLineCount + retainedEquipmentLineCount > 0
+        ? ` ${retainedMaterialLineCount + retainedEquipmentLineCount} variant-specific row(s) remain for review.`
+        : "";
+
+    return jsonResponse({
+      ok: true,
+      message: `Template "${template.name}" created.${cleanupMessage}${retainedMessage}`,
+      savedAt: new Date().toISOString(),
+      templateId: template.id,
     });
   }
 
@@ -1699,10 +2199,26 @@ function serializeVariantDraftState(draft: VariantDraft) {
 }
 
 export default function VariantDetailPage() {
-  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment, packages, copySourceVariants } =
-    useLoaderData<typeof loader>();
+  const {
+    variant,
+    config,
+    shopDefaults,
+    templates,
+    availableMaterials: loadedMaterials,
+    availableEquipment: loadedEquipment,
+    packages,
+    copySourceVariants,
+  } = useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
   const copyFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
+  const promoteFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string; templateId?: string }>();
+  const quickCreateFetcher = useFetcher<{
+    ok: boolean;
+    message: string;
+    actionKind?: "quick-create-material" | "quick-create-equipment";
+    material?: AvailableMaterial;
+    equipment?: AvailableEquipment;
+  }>();
   const previewFetcher = useFetcher<{
     ok: boolean;
     message: string;
@@ -1731,6 +2247,16 @@ export default function VariantDetailPage() {
   const [matQty, setMatQty] = useState("1");
   const [matYield, setMatYield] = useState("1");
   const [matUses, setMatUses] = useState("");
+  const [quickMaterialOpen, setQuickMaterialOpen] = useState(false);
+  const [quickMaterialForm, setQuickMaterialForm] = useState({
+    name: "",
+    type: "production",
+    costingModel: "counted",
+    purchasePrice: "",
+    purchaseQty: "1",
+    totalUsesPerUnit: "",
+    purchaseLink: "",
+  });
 
   const [materialOverrideTargetId, setMaterialOverrideTargetId] = useState<string | null>(null);
   const [overrideMatQty, setOverrideMatQty] = useState("1");
@@ -1746,6 +2272,14 @@ export default function VariantDetailPage() {
   const [eqYieldDurationMinutes, setEqYieldDurationMinutes] = useState("");
   const [eqYieldUses, setEqYieldUses] = useState("");
   const [eqYieldQuantity, setEqYieldQuantity] = useState("");
+  const [quickEquipmentOpen, setQuickEquipmentOpen] = useState(false);
+  const [quickEquipmentForm, setQuickEquipmentForm] = useState({
+    name: "",
+    hourlyRate: "",
+    perUseCost: "",
+    equipmentCost: "",
+    purchaseLink: "",
+  });
 
   const [equipmentOverrideTargetId, setEquipmentOverrideTargetId] = useState<string | null>(null);
   const [overrideEqUsageMode, setOverrideEqUsageMode] = useState("direct");
@@ -1758,11 +2292,27 @@ export default function VariantDetailPage() {
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [selectedCopySourceId, setSelectedCopySourceId] = useState("");
   const [copySourceSearchValue, setCopySourceSearchValue] = useState("");
+  const [promoteDialogOpen, setPromoteDialogOpen] = useState(false);
+  const [promoteForm, setPromoteForm] = useState({
+    name: `${variant.productTitle} - ${variant.title}`,
+    description: "",
+    includeMaterials: true,
+    includeEquipment: true,
+    includeLabor: true,
+    freezeShopLaborRate: false,
+    includeDefaultShippingTemplate: true,
+    assignBack: false,
+    materialLineKeys: [] as string[],
+    equipmentLineKeys: [] as string[],
+  });
 
   const [baseDraft, setBaseDraft] = useState(() => buildVariantDraft(config));
   const [draft, setDraft] = useState(() => buildVariantDraft(config));
+  const [availableMaterials, setAvailableMaterials] = useState<AvailableMaterial[]>(() => loadedMaterials);
+  const [availableEquipment, setAvailableEquipment] = useState<AvailableEquipment[]>(() => loadedEquipment);
   const handledSaveRef = useRef<string | null>(null);
   const handledCopyRef = useRef<string | null>(null);
+  const handledPromoteRef = useRef<string | null>(null);
   const preCopyDraftStateRef = useRef<string | null>(null);
 
   const isSaving = saveFetcher.state !== "idle";
@@ -1854,6 +2404,48 @@ export default function VariantDetailPage() {
   const loadedVariantDraftState = serializeVariantDraftState(buildVariantDraft(config));
   const selectedCopySource =
     copySourceVariants.find((sourceVariant: CopySourceVariant) => sourceVariant.id === selectedCopySourceId) ?? null;
+  const promotableMaterialLines = [
+    ...draft.templateMaterialLines.map((line: VariantTemplateMaterialDraftLine) => ({
+      key: `template:${line.templateLineId}`,
+      name: line.materialName,
+      source: "Template",
+      description: describeMaterialLine({
+        costingModel: line.costingModel,
+        quantity: line.hasOverride ? line.overrideQuantity : line.quantity,
+        yield: line.hasOverride ? line.overrideYield : line.yield,
+        usesPerVariant: line.hasOverride ? line.overrideUsesPerVariant : line.usesPerVariant,
+      }),
+    })),
+    ...draft.materialLines
+      .filter((line: SerializedMaterialLine) => line.materialType === "production")
+      .map((line: SerializedMaterialLine) => ({
+        key: `variant:${line.id}`,
+        name: line.materialName,
+        source: "Variant",
+        description: describeMaterialLine(line),
+      })),
+  ];
+  const promotableEquipmentLines = [
+    ...draft.templateEquipmentLines.map((line: VariantTemplateEquipmentDraftLine) => ({
+      key: `template:${line.templateLineId}`,
+      name: line.equipmentName,
+      source: "Template",
+      description: describeEquipmentLine({
+        usageMode: line.hasOverride ? line.overrideUsageMode : line.usageMode,
+        minutes: line.hasOverride ? line.overrideMinutes : line.minutes,
+        uses: line.hasOverride ? line.overrideUses : line.uses,
+        yieldDurationMinutes: line.hasOverride ? line.overrideYieldDurationMinutes : line.yieldDurationMinutes,
+        yieldUses: line.hasOverride ? line.overrideYieldUses : line.yieldUses,
+        yieldQuantity: line.hasOverride ? line.overrideYieldQuantity : line.yieldQuantity,
+      }),
+    })),
+    ...draft.equipmentLines.map((line: SerializedEquipmentLine) => ({
+      key: `variant:${line.id}`,
+      name: line.equipmentName,
+      source: "Variant",
+      description: describeEquipmentLine(line),
+    })),
+  ];
 
   useEffect(() => {
     if (!saveFetcher.data?.ok || !saveFetcher.data.savedAt || saveFetcher.data.savedAt === handledSaveRef.current) return;
@@ -1869,10 +2461,60 @@ export default function VariantDetailPage() {
     handledCopyRef.current = copyFetcher.data.savedAt;
     preCopyDraftStateRef.current = loadedVariantDraftState;
     setCopyDialogOpen(false);
+    setPromoteDialogOpen(false);
     setSelectedCopySourceId("");
     setCopySourceSearchValue("");
     revalidator.revalidate();
   }, [copyFetcher.data, loadedVariantDraftState, revalidator]);
+
+  useEffect(() => {
+    if (!promoteFetcher.data?.ok || !promoteFetcher.data.savedAt || promoteFetcher.data.savedAt === handledPromoteRef.current) return;
+    handledPromoteRef.current = promoteFetcher.data.savedAt;
+    preCopyDraftStateRef.current = loadedVariantDraftState;
+    setPromoteDialogOpen(false);
+    revalidator.revalidate();
+  }, [loadedVariantDraftState, promoteFetcher.data, revalidator]);
+
+  useEffect(() => {
+    setAvailableMaterials(loadedMaterials);
+  }, [loadedMaterials]);
+
+  useEffect(() => {
+    setAvailableEquipment(loadedEquipment);
+  }, [loadedEquipment]);
+
+  useEffect(() => {
+    if (!quickCreateFetcher.data?.ok) return;
+
+    if (quickCreateFetcher.data.actionKind === "quick-create-material" && quickCreateFetcher.data.material) {
+      const material = quickCreateFetcher.data.material;
+      setAvailableMaterials((current) =>
+        sortAvailableMaterials([
+          ...current.filter((item) => item.id !== material.id),
+          material,
+        ]),
+      );
+      setSelectedMaterialId(material.id);
+      setMaterialSearchValue(material.name);
+      setMatQty("1");
+      setMatYield(material.costingModel === "yield" ? "1" : "");
+      setMatUses("");
+      setQuickMaterialOpen(false);
+    }
+
+    if (quickCreateFetcher.data.actionKind === "quick-create-equipment" && quickCreateFetcher.data.equipment) {
+      const equipment = quickCreateFetcher.data.equipment;
+      setAvailableEquipment((current) =>
+        sortAvailableEquipment([
+          ...current.filter((item) => item.id !== equipment.id),
+          equipment,
+        ]),
+      );
+      setSelectedEquipmentId(equipment.id);
+      setEquipmentSearchValue(equipment.name);
+      setQuickEquipmentOpen(false);
+    }
+  }, [quickCreateFetcher.data]);
 
   useEffect(() => {
     if (!preCopyDraftStateRef.current || preCopyDraftStateRef.current === loadedVariantDraftState) return;
@@ -1946,6 +2588,8 @@ export default function VariantDetailPage() {
     setEquipmentOverrideTargetId(null);
     setAddMaterialOpen(false);
     setAddEquipmentOpen(false);
+    setQuickMaterialOpen(false);
+    setQuickEquipmentOpen(false);
     resetAdditionalMaterialModal();
     resetAdditionalEquipmentModal();
     closeMaterialOverride();
@@ -1965,6 +2609,69 @@ export default function VariantDetailPage() {
     formData.append("intent", "copy-variant-config");
     formData.append("sourceVariantId", selectedCopySourceId);
     copyFetcher.submit(formData, { method: "post" });
+  }
+
+  function promoteVariantToTemplate() {
+    if (isDirty) return;
+    const formData = new FormData();
+    formData.append("intent", "promote-template");
+    formData.append("name", promoteForm.name);
+    formData.append("description", promoteForm.description);
+    if (promoteForm.includeMaterials) formData.append("includeMaterials", "on");
+    if (promoteForm.includeEquipment) formData.append("includeEquipment", "on");
+    if (promoteForm.includeLabor) formData.append("includeLabor", "on");
+    if (promoteForm.freezeShopLaborRate) formData.append("freezeShopLaborRate", "on");
+    if (promoteForm.includeDefaultShippingTemplate) formData.append("includeDefaultShippingTemplate", "on");
+    if (promoteForm.assignBack) formData.append("assignBack", "on");
+    for (const key of promoteForm.materialLineKeys) {
+      formData.append("materialLineKey", key);
+    }
+    for (const key of promoteForm.equipmentLineKeys) {
+      formData.append("equipmentLineKey", key);
+    }
+    promoteFetcher.submit(formData, { method: "post" });
+  }
+
+  function togglePromoteMaterialLine(key: string) {
+    setPromoteForm((current) => ({
+      ...current,
+      materialLineKeys: current.materialLineKeys.includes(key)
+        ? current.materialLineKeys.filter((item) => item !== key)
+        : [...current.materialLineKeys, key],
+    }));
+  }
+
+  function togglePromoteEquipmentLine(key: string) {
+    setPromoteForm((current) => ({
+      ...current,
+      equipmentLineKeys: current.equipmentLineKeys.includes(key)
+        ? current.equipmentLineKeys.filter((item) => item !== key)
+        : [...current.equipmentLineKeys, key],
+    }));
+  }
+
+  function submitQuickMaterial() {
+    const formData = new FormData();
+    formData.append("intent", "quick-create-material");
+    formData.append("name", quickMaterialForm.name);
+    formData.append("type", quickMaterialForm.type);
+    formData.append("costingModel", quickMaterialForm.costingModel);
+    formData.append("purchasePrice", quickMaterialForm.purchasePrice);
+    formData.append("purchaseQty", quickMaterialForm.purchaseQty);
+    formData.append("totalUsesPerUnit", quickMaterialForm.totalUsesPerUnit);
+    formData.append("purchaseLink", quickMaterialForm.purchaseLink);
+    quickCreateFetcher.submit(formData, { method: "post" });
+  }
+
+  function submitQuickEquipment() {
+    const formData = new FormData();
+    formData.append("intent", "quick-create-equipment");
+    formData.append("name", quickEquipmentForm.name);
+    formData.append("hourlyRate", quickEquipmentForm.hourlyRate);
+    formData.append("perUseCost", quickEquipmentForm.perUseCost);
+    formData.append("equipmentCost", quickEquipmentForm.equipmentCost);
+    formData.append("purchaseLink", quickEquipmentForm.purchaseLink);
+    quickCreateFetcher.submit(formData, { method: "post" });
   }
 
   function applySelectedTemplate() {
@@ -2149,7 +2856,7 @@ export default function VariantDetailPage() {
         aria-atomic="true"
         style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
       >
-        {saveFetcher.data?.message ?? copyFetcher.data?.message ?? previewFetcher.data?.message ?? ""}
+        {saveFetcher.data?.message ?? copyFetcher.data?.message ?? promoteFetcher.data?.message ?? previewFetcher.data?.message ?? ""}
       </div>
 
       <BlockStack gap="600">
@@ -2191,6 +2898,49 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">
                 No other configured variants are available to copy from.
               </Text>
+            ) : null}
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="300">
+            <InlineStack align="space-between" blockAlign="center">
+              <BlockStack gap="100">
+                <Text as="h2" variant="headingMd">Create template from variant</Text>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Turn this saved variant setup into a reusable production cost template.
+                </Text>
+              </BlockStack>
+              <Button
+                onClick={() => {
+                  setPromoteForm((current) => ({
+                    ...current,
+                    name: `${variant.productTitle} - ${variant.title}`,
+                    includeDefaultShippingTemplate: Boolean(effectiveTemplateSelection.shippingTemplateId),
+                    materialLineKeys: promotableMaterialLines.map((line) => line.key),
+                    equipmentLineKeys: promotableEquipmentLines.map((line) => line.key),
+                  }));
+                  setPromoteDialogOpen(true);
+                }}
+                disabled={!config || isDirty}
+              >
+                Create template
+              </Button>
+            </InlineStack>
+            {!config ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Save a variant configuration before creating a template from it.
+              </Text>
+            ) : null}
+            {isDirty ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Save or discard your staged changes before promoting this variant.
+              </Text>
+            ) : null}
+            {promoteFetcher.data ? (
+              <Banner tone={promoteFetcher.data.ok ? "success" : "critical"}>
+                <Text as="p" variant="bodyMd">{promoteFetcher.data.message}</Text>
+              </Banner>
             ) : null}
           </BlockStack>
         </Card>
@@ -2452,7 +3202,7 @@ export default function VariantDetailPage() {
                     <input
                       type="checkbox"
                       checked={draft.canSharePackage}
-                      onChange={(event) => setDraft((current) => ({ ...current, canSharePackage: event.currentTarget.checked }))}
+                      onChange={() => setDraft((current) => ({ ...current, canSharePackage: !current.canSharePackage }))}
                     />
                     <span>Can share a package with other items</span>
                   </label>
@@ -2977,6 +3727,152 @@ export default function VariantDetailPage() {
       </Modal>
 
       <Modal
+        open={promoteDialogOpen}
+        onClose={() => setPromoteDialogOpen(false)}
+        title="Create template from variant"
+        primaryAction={{
+          content: "Create template",
+          loading: promoteFetcher.state !== "idle",
+          disabled:
+            isDirty ||
+            !promoteForm.name.trim() ||
+            (!promoteForm.includeMaterials && !promoteForm.includeEquipment && !promoteForm.includeLabor) ||
+            (promoteForm.includeMaterials && promoteForm.materialLineKeys.length === 0) ||
+            (promoteForm.includeEquipment && promoteForm.equipmentLineKeys.length === 0),
+          onAction: promoteVariantToTemplate,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setPromoteDialogOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {promoteFetcher.data && !promoteFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{promoteFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Template name"
+              value={promoteForm.name}
+              onChange={(value) => setPromoteForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <TextField
+              label="Description"
+              value={promoteForm.description}
+              onChange={(value) => setPromoteForm((current) => ({ ...current, description: value }))}
+              autoComplete="off"
+            />
+            <BlockStack gap="200">
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.includeMaterials}
+                  onChange={() => setPromoteForm((current) => ({ ...current, includeMaterials: !current.includeMaterials }))}
+                />
+                <span>Include effective production materials</span>
+              </label>
+              {promoteForm.includeMaterials ? (
+                <BlockStack gap="150">
+                  {promotableMaterialLines.length === 0 ? (
+                    <Text as="p" variant="bodyMd" tone="subdued">No production material lines are available to include.</Text>
+                  ) : (
+                    promotableMaterialLines.map((line) => (
+                      <label key={line.key} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", paddingLeft: "1.5rem" }}>
+                        <input
+                          type="checkbox"
+                          checked={promoteForm.materialLineKeys.includes(line.key)}
+                          onChange={() => togglePromoteMaterialLine(line.key)}
+                        />
+                        <span>
+                          <span>{line.name}</span>
+                          <span style={{ color: "#616161" }}> ({line.source}: {line.description})</span>
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </BlockStack>
+              ) : null}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.includeEquipment}
+                  onChange={() => setPromoteForm((current) => ({ ...current, includeEquipment: !current.includeEquipment }))}
+                />
+                <span>Include effective equipment</span>
+              </label>
+              {promoteForm.includeEquipment ? (
+                <BlockStack gap="150">
+                  {promotableEquipmentLines.length === 0 ? (
+                    <Text as="p" variant="bodyMd" tone="subdued">No equipment lines are available to include.</Text>
+                  ) : (
+                    promotableEquipmentLines.map((line) => (
+                      <label key={line.key} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", paddingLeft: "1.5rem" }}>
+                        <input
+                          type="checkbox"
+                          checked={promoteForm.equipmentLineKeys.includes(line.key)}
+                          onChange={() => togglePromoteEquipmentLine(line.key)}
+                        />
+                        <span>
+                          <span>{line.name}</span>
+                          <span style={{ color: "#616161" }}> ({line.source}: {line.description || "No usage set"})</span>
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </BlockStack>
+              ) : null}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.includeLabor}
+                  onChange={() => setPromoteForm((current) => ({ ...current, includeLabor: !current.includeLabor }))}
+                />
+                <span>Include labor defaults</span>
+              </label>
+              {promoteForm.includeLabor && !draft.laborRate && !selectedProductionTemplate?.defaultLaborRate && shopDefaultLaborRate ? (
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={promoteForm.freezeShopLaborRate}
+                    onChange={() => setPromoteForm((current) => ({ ...current, freezeShopLaborRate: !current.freezeShopLaborRate }))}
+                  />
+                  <span>Copy current shop default labor rate into the template</span>
+                </label>
+              ) : null}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.includeDefaultShippingTemplate && Boolean(effectiveTemplateSelection.shippingTemplateId)}
+                  disabled={!effectiveTemplateSelection.shippingTemplateId}
+                  onChange={() =>
+                    setPromoteForm((current) => ({
+                      ...current,
+                      includeDefaultShippingTemplate: !current.includeDefaultShippingTemplate,
+                    }))
+                  }
+                />
+                <span>Use current shipping template as the new template default</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.assignBack}
+                  onChange={() => setPromoteForm((current) => ({ ...current, assignBack: !current.assignBack }))}
+                />
+                <span>Assign the new template back to this variant</span>
+              </label>
+            </BlockStack>
+            {promoteForm.assignBack ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Exact promoted variant-only rows and stale previous-template overrides will be removed; any remaining
+                variant-specific rows will be reported for review.
+              </Text>
+            ) : null}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
         open={Boolean(materialOverrideTarget)}
         onClose={closeMaterialOverride}
         title={materialOverrideTarget ? `Override ${materialOverrideTarget.materialName}` : "Override material"}
@@ -3091,6 +3987,17 @@ export default function VariantDetailPage() {
                 </Text>
               }
             />
+            <Button
+              onClick={() => {
+                setQuickMaterialForm((current) => ({
+                  ...current,
+                  name: materialSearchValue,
+                }));
+                setQuickMaterialOpen(true);
+              }}
+            >
+              Create material
+            </Button>
             {selectedMaterial?.costingModel === "counted" && (
               <TextField
                 label="Quantity used per item"
@@ -3300,6 +4207,17 @@ export default function VariantDetailPage() {
                 </Text>
               }
             />
+            <Button
+              onClick={() => {
+                setQuickEquipmentForm((current) => ({
+                  ...current,
+                  name: equipmentSearchValue,
+                }));
+                setQuickEquipmentOpen(true);
+              }}
+            >
+              Create equipment
+            </Button>
             <Select
               label="Usage mode"
               value={eqUsageMode}
@@ -3390,6 +4308,161 @@ export default function VariantDetailPage() {
                 </div>
               </InlineStack>
             )}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={quickMaterialOpen}
+        onClose={() => setQuickMaterialOpen(false)}
+        title="Create material"
+        primaryAction={{
+          content: "Create material",
+          loading: quickCreateFetcher.state !== "idle" && quickCreateFetcher.formData?.get("intent") === "quick-create-material",
+          onAction: submitQuickMaterial,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setQuickMaterialOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {quickCreateFetcher.data?.actionKind === "quick-create-material" && !quickCreateFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{quickCreateFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Name"
+              value={quickMaterialForm.name}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <Select
+              label="Material type"
+              value={quickMaterialForm.type}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, type: value }))}
+              options={[
+                { label: "Production", value: "production" },
+                { label: "Shipping", value: "shipping" },
+              ]}
+            />
+            <Select
+              label="Costing method"
+              value={quickMaterialForm.costingModel}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, costingModel: value }))}
+              options={[
+                { label: "Counted parts", value: "counted" },
+                { label: "Variable yield", value: "yield" },
+                { label: "Portioned use", value: "uses" },
+              ]}
+            />
+            <InlineStack gap="400" wrap={false}>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Purchase price"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickMaterialForm.purchasePrice}
+                  onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchasePrice: value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Purchase quantity"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickMaterialForm.purchaseQty}
+                  onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchaseQty: value }))}
+                  autoComplete="off"
+                />
+              </div>
+            </InlineStack>
+            {quickMaterialForm.costingModel === "uses" ? (
+              <TextField
+                label="Portions per purchased unit"
+                type="number"
+                min={0}
+                step={0.01}
+                value={quickMaterialForm.totalUsesPerUnit}
+                onChange={(value) => setQuickMaterialForm((current) => ({ ...current, totalUsesPerUnit: value }))}
+                autoComplete="off"
+              />
+            ) : null}
+            <TextField
+              label="Purchase link"
+              value={quickMaterialForm.purchaseLink}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchaseLink: value }))}
+              autoComplete="off"
+            />
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={quickEquipmentOpen}
+        onClose={() => setQuickEquipmentOpen(false)}
+        title="Create equipment"
+        primaryAction={{
+          content: "Create equipment",
+          loading: quickCreateFetcher.state !== "idle" && quickCreateFetcher.formData?.get("intent") === "quick-create-equipment",
+          onAction: submitQuickEquipment,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setQuickEquipmentOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {quickCreateFetcher.data?.actionKind === "quick-create-equipment" && !quickCreateFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{quickCreateFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Name"
+              value={quickEquipmentForm.name}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <InlineStack gap="400" wrap={false}>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Hourly rate"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickEquipmentForm.hourlyRate}
+                  onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, hourlyRate: value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Per-use cost"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickEquipmentForm.perUseCost}
+                  onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, perUseCost: value }))}
+                  autoComplete="off"
+                />
+              </div>
+            </InlineStack>
+            <TextField
+              label="Equipment cost"
+              type="number"
+              min={0}
+              step={0.01}
+              value={quickEquipmentForm.equipmentCost}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, equipmentCost: value }))}
+              autoComplete="off"
+            />
+            <TextField
+              label="Purchase link"
+              value={quickEquipmentForm.purchaseLink}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, purchaseLink: value }))}
+              autoComplete="off"
+            />
           </BlockStack>
         </Modal.Section>
       </Modal>

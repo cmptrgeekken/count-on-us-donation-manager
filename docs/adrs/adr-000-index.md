@@ -25,6 +25,7 @@ This directory contains Architecture Decision Records (ADRs) for the Shopify Don
 | [ADR-017](adr-017-outsourced-production-costs.md) | Outsourced production costs | Proposed | June 2026 |
 | [ADR-018](adr-018-production-cost-model-expansion.md) | Production cost model expansion candidates | Proposed | June 2026 |
 | [ADR-019](adr-019-merchant-triggered-historical-backfill.md) | Merchant-triggered historical backfill | Proposed | June 2026 |
+| [ADR-020](adr-020-contextual-creation-and-template-promotion.md) | Contextual creation and template promotion | Proposed | June 2026 |
 
 ## Dependencies
 
@@ -46,6 +47,7 @@ ADR-016 (Single-server Docker deployment and CI/CD strategy) - extends ADR-001, 
 ADR-017 (Outsourced production costs) - extends ADR-003, ADR-010, and ADR-013 for manual third-party production costs, variant-level production economics, and future variant donation override implications
 ADR-018 (Production cost model expansion candidates) - extends ADR-001, ADR-003, and ADR-017 for equipment-rate breakdowns, scrap/waste, batch/setup costs, indirect supplies, and optional overhead allocation
 ADR-019 (Merchant-triggered historical backfill) - extends ADR-001, ADR-002, ADR-003, ADR-006, ADR-009, and ADR-012 for explicit owner-controlled historical imports and reporting regeneration using current Count On Us configuration
+ADR-020 (Contextual creation and template promotion) - extends ADR-003, ADR-008, ADR-013, ADR-015, and ADR-018 for inline creation of related library/configuration records and creating reusable templates from effective variant cost configuration
 ```
 
 ## Conventions

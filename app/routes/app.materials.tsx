@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { EmptyTableRow, ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
+import { createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import {
@@ -129,16 +130,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
 
     if (intent === "create") {
-      const material = await prisma.materialLibraryItem.create({ data });
-      await prisma.auditLog.create({
-        data: {
+      try {
+        await createMaterialLibraryItem({
           shopId,
-          entity: "MaterialLibraryItem",
-          entityId: material.id,
-          action: "MATERIAL_CREATED",
-          actor: "merchant",
-        },
-      });
+          input: {
+            name,
+            type,
+            costingModel,
+            purchasePrice: formData.get("purchasePrice")?.toString() ?? "",
+            purchaseQty: formData.get("purchaseQty")?.toString() ?? "",
+            totalUsesPerUnit: formData.get("totalUsesPerUnit")?.toString() ?? "",
+            purchaseLink: parsed.data.purchaseLink,
+            weightGrams: formData.get("weightGrams")?.toString() ?? "",
+            unitDescription: unitDescription ?? "",
+            notes: notes ?? "",
+          },
+        });
+      } catch (error) {
+        if (error instanceof Response) {
+          return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
+        }
+        throw error;
+      }
       return jsonResponse({ ok: true, message: "Material created." });
     }
 

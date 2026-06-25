@@ -6,6 +6,7 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
+import { createEquipmentLibraryItem } from "../services/libraryCreate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import { parseOptionalNonNegativeMoney } from "../utils/money-parsing";
@@ -103,16 +104,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
 
     if (intent === "create") {
-      const item = await prisma.equipmentLibraryItem.create({ data });
-      await prisma.auditLog.create({
-        data: {
+      try {
+        await createEquipmentLibraryItem({
           shopId,
-          entity: "EquipmentLibraryItem",
-          entityId: item.id,
-          action: "EQUIPMENT_CREATED",
-          actor: "merchant",
-        },
-      });
+          input: {
+            name,
+            hourlyRate: hourlyRateStr ?? "",
+            perUseCost: perUseCostStr ?? "",
+            equipmentCost: equipmentCostStr ?? "",
+            purchaseLink: parsed.data.purchaseLink,
+            notes: notes ?? "",
+          },
+        });
+      } catch (error) {
+        if (error instanceof Response) {
+          return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
+        }
+        throw error;
+      }
       return jsonResponse({ ok: true, message: "Equipment created." });
     }
 

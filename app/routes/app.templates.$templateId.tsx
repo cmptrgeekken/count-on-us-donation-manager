@@ -23,6 +23,7 @@ import {
 import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
+import { createEquipmentLibraryItem, createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import {
   parseOptionalNonNegativeNumber,
@@ -154,6 +155,14 @@ function sortTemplateEquipmentLines(lines: TemplateDraftEquipmentLine[]) {
   return [...lines].sort((a, b) => a.equipmentName.localeCompare(b.equipmentName));
 }
 
+function sortAvailableMaterials(lines: AvailableMaterial[]) {
+  return [...lines].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function sortAvailableEquipment(lines: AvailableEquipment[]) {
+  return [...lines].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -233,6 +242,63 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
+
+  if (intent === "quick-create-material") {
+    let material: Awaited<ReturnType<typeof createMaterialLibraryItem>>;
+    try {
+      const costingModel = formData.get("costingModel")?.toString();
+      const normalizedCostingModel =
+        costingModel === "yield" || costingModel === "uses" || costingModel === "counted"
+          ? costingModel
+          : "counted";
+      material = await createMaterialLibraryItem({
+        shopId,
+        input: {
+          name: formData.get("name")?.toString() ?? "",
+          type: template.type === "shipping" ? "shipping" : "production",
+          costingModel: normalizedCostingModel,
+          purchasePrice: formData.get("purchasePrice")?.toString() ?? "",
+          purchaseQty: formData.get("purchaseQty")?.toString() ?? "",
+          totalUsesPerUnit: formData.get("totalUsesPerUnit")?.toString() ?? "",
+          purchaseLink: formData.get("purchaseLink")?.toString() ?? "",
+          weightGrams: formData.get("weightGrams")?.toString() ?? "",
+          unitDescription: formData.get("unitDescription")?.toString() ?? "",
+          notes: formData.get("notes")?.toString() ?? "",
+        },
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return jsonResponse({ ok: false, message: await error.text(), actionKind: "quick-create-material" }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return jsonResponse({ ok: true, message: "Material created.", actionKind: "quick-create-material", material });
+  }
+
+  if (intent === "quick-create-equipment") {
+    let equipment: Awaited<ReturnType<typeof createEquipmentLibraryItem>>;
+    try {
+      equipment = await createEquipmentLibraryItem({
+        shopId,
+        input: {
+          name: formData.get("name")?.toString() ?? "",
+          hourlyRate: formData.get("hourlyRate")?.toString() ?? "",
+          perUseCost: formData.get("perUseCost")?.toString() ?? "",
+          equipmentCost: formData.get("equipmentCost")?.toString() ?? "",
+          purchaseLink: formData.get("purchaseLink")?.toString() ?? "",
+          notes: formData.get("notes")?.toString() ?? "",
+        },
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return jsonResponse({ ok: false, message: await error.text(), actionKind: "quick-create-equipment" }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return jsonResponse({ ok: true, message: "Equipment created.", actionKind: "quick-create-equipment", equipment });
+  }
 
   if (intent !== "save-template-draft") {
     return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
@@ -497,13 +563,27 @@ function describeEquipmentLine(line: TemplateDraftEquipmentLine) {
 }
 
 export default function TemplateDetailPage() {
-  const { template, availableMaterials, availableEquipment, availableShippingTemplates } = useLoaderData<typeof loader>();
+  const {
+    template,
+    availableMaterials: loadedMaterials,
+    availableEquipment: loadedEquipment,
+    availableShippingTemplates,
+  } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
+  const quickCreateFetcher = useFetcher<{
+    ok: boolean;
+    message: string;
+    actionKind?: "quick-create-material" | "quick-create-equipment";
+    material?: AvailableMaterial;
+    equipment?: AvailableEquipment;
+  }>();
   const revalidator = useRevalidator();
   const { formatMoney, getCurrencySymbol } = useAppLocalization();
 
   const [baseDraft, setBaseDraft] = useState(() => buildTemplateDraft(template));
   const [draft, setDraft] = useState(() => buildTemplateDraft(template));
+  const [availableMaterials, setAvailableMaterials] = useState<AvailableMaterial[]>(() => loadedMaterials);
+  const [availableEquipment, setAvailableEquipment] = useState<AvailableEquipment[]>(() => loadedEquipment);
 
   const [materialModalOpen, setMaterialModalOpen] = useState(false);
   const [editingMaterialLineId, setEditingMaterialLineId] = useState<string | null>(null);
@@ -512,6 +592,15 @@ export default function TemplateDetailPage() {
   const [matQty, setMatQty] = useState("1");
   const [matYield, setMatYield] = useState("1");
   const [matUses, setMatUses] = useState("");
+  const [quickMaterialOpen, setQuickMaterialOpen] = useState(false);
+  const [quickMaterialForm, setQuickMaterialForm] = useState({
+    name: "",
+    costingModel: "counted",
+    purchasePrice: "",
+    purchaseQty: "1",
+    totalUsesPerUnit: "",
+    purchaseLink: "",
+  });
 
   const [equipmentModalOpen, setEquipmentModalOpen] = useState(false);
   const [editingEquipmentLineId, setEditingEquipmentLineId] = useState<string | null>(null);
@@ -523,6 +612,14 @@ export default function TemplateDetailPage() {
   const [eqYieldDurationMinutes, setEqYieldDurationMinutes] = useState("");
   const [eqYieldUses, setEqYieldUses] = useState("");
   const [eqYieldQuantity, setEqYieldQuantity] = useState("");
+  const [quickEquipmentOpen, setQuickEquipmentOpen] = useState(false);
+  const [quickEquipmentForm, setQuickEquipmentForm] = useState({
+    name: "",
+    hourlyRate: "",
+    perUseCost: "",
+    equipmentCost: "",
+    purchaseLink: "",
+  });
 
   const handledSaveRef = useRef<string | null>(null);
 
@@ -539,6 +636,29 @@ export default function TemplateDetailPage() {
     setDraft(committedDraft);
     revalidator.revalidate();
   }, [draft, fetcher.data, revalidator]);
+
+  useEffect(() => {
+    if (!quickCreateFetcher.data?.ok) return;
+
+    if (quickCreateFetcher.data.actionKind === "quick-create-material" && quickCreateFetcher.data.material) {
+      const material = quickCreateFetcher.data.material;
+      setAvailableMaterials((current) => sortAvailableMaterials([...current, material]));
+      setSelectedMaterialId(material.id);
+      setMaterialSearchValue(material.name);
+      setMatQty("1");
+      setMatYield(material.costingModel === "yield" ? "1" : "");
+      setMatUses("");
+      setQuickMaterialOpen(false);
+    }
+
+    if (quickCreateFetcher.data.actionKind === "quick-create-equipment" && quickCreateFetcher.data.equipment) {
+      const equipment = quickCreateFetcher.data.equipment;
+      setAvailableEquipment((current) => sortAvailableEquipment([...current, equipment]));
+      setSelectedEquipmentId(equipment.id);
+      setEquipmentSearchValue(equipment.name);
+      setQuickEquipmentOpen(false);
+    }
+  }, [quickCreateFetcher.data]);
 
   function resetMaterialModal() {
     setEditingMaterialLineId(null);
@@ -680,6 +800,29 @@ export default function TemplateDetailPage() {
       ...current,
       equipmentLines: current.equipmentLines.filter((line) => line.id !== lineId),
     }));
+  }
+
+  function submitQuickMaterial() {
+    const formData = new FormData();
+    formData.append("intent", "quick-create-material");
+    formData.append("name", quickMaterialForm.name);
+    formData.append("costingModel", quickMaterialForm.costingModel);
+    formData.append("purchasePrice", quickMaterialForm.purchasePrice);
+    formData.append("purchaseQty", quickMaterialForm.purchaseQty);
+    formData.append("totalUsesPerUnit", quickMaterialForm.totalUsesPerUnit);
+    formData.append("purchaseLink", quickMaterialForm.purchaseLink);
+    quickCreateFetcher.submit(formData, { method: "post" });
+  }
+
+  function submitQuickEquipment() {
+    const formData = new FormData();
+    formData.append("intent", "quick-create-equipment");
+    formData.append("name", quickEquipmentForm.name);
+    formData.append("hourlyRate", quickEquipmentForm.hourlyRate);
+    formData.append("perUseCost", quickEquipmentForm.perUseCost);
+    formData.append("equipmentCost", quickEquipmentForm.equipmentCost);
+    formData.append("purchaseLink", quickEquipmentForm.purchaseLink);
+    quickCreateFetcher.submit(formData, { method: "post" });
   }
 
   function previewMaterialLineCost() {
@@ -1013,6 +1156,19 @@ export default function TemplateDetailPage() {
                 }
               />
             )}
+            {!editingMaterialLineId ? (
+              <Button
+                onClick={() => {
+                  setQuickMaterialForm((current) => ({
+                    ...current,
+                    name: materialSearchValue,
+                  }));
+                  setQuickMaterialOpen(true);
+                }}
+              >
+                Create material
+              </Button>
+            ) : null}
             {selectedMaterial?.costingModel === "counted" && (
               <TextField
                 label="Quantity used per item"
@@ -1113,6 +1269,19 @@ export default function TemplateDetailPage() {
                 }
               />
             )}
+            {!editingEquipmentLineId ? (
+              <Button
+                onClick={() => {
+                  setQuickEquipmentForm((current) => ({
+                    ...current,
+                    name: equipmentSearchValue,
+                  }));
+                  setQuickEquipmentOpen(true);
+                }}
+              >
+                Create equipment
+              </Button>
+            ) : null}
             <Select
               label="Usage mode"
               value={eqUsageMode}
@@ -1210,6 +1379,152 @@ export default function TemplateDetailPage() {
                 Estimated line cost: <strong>{previewEquipmentLineCost()}</strong>
               </Text>
             )}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={quickMaterialOpen}
+        onClose={() => setQuickMaterialOpen(false)}
+        title={`Create ${template.type === "shipping" ? "shipping" : "production"} material`}
+        primaryAction={{
+          content: "Create material",
+          loading: quickCreateFetcher.state !== "idle" && quickCreateFetcher.formData?.get("intent") === "quick-create-material",
+          onAction: submitQuickMaterial,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setQuickMaterialOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {quickCreateFetcher.data?.actionKind === "quick-create-material" && !quickCreateFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{quickCreateFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Name"
+              value={quickMaterialForm.name}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <Select
+              label="Costing method"
+              value={quickMaterialForm.costingModel}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, costingModel: value }))}
+              options={[
+                { label: "Counted parts", value: "counted" },
+                { label: "Variable yield", value: "yield" },
+                { label: "Portioned use", value: "uses" },
+              ]}
+            />
+            <InlineStack gap="400" wrap={false}>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Purchase price"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickMaterialForm.purchasePrice}
+                  onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchasePrice: value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Purchase quantity"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickMaterialForm.purchaseQty}
+                  onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchaseQty: value }))}
+                  autoComplete="off"
+                />
+              </div>
+            </InlineStack>
+            {quickMaterialForm.costingModel === "uses" ? (
+              <TextField
+                label="Portions per purchased unit"
+                type="number"
+                min={0}
+                step={0.01}
+                value={quickMaterialForm.totalUsesPerUnit}
+                onChange={(value) => setQuickMaterialForm((current) => ({ ...current, totalUsesPerUnit: value }))}
+                autoComplete="off"
+              />
+            ) : null}
+            <TextField
+              label="Purchase link"
+              value={quickMaterialForm.purchaseLink}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchaseLink: value }))}
+              autoComplete="off"
+            />
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={quickEquipmentOpen}
+        onClose={() => setQuickEquipmentOpen(false)}
+        title="Create equipment"
+        primaryAction={{
+          content: "Create equipment",
+          loading: quickCreateFetcher.state !== "idle" && quickCreateFetcher.formData?.get("intent") === "quick-create-equipment",
+          onAction: submitQuickEquipment,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setQuickEquipmentOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {quickCreateFetcher.data?.actionKind === "quick-create-equipment" && !quickCreateFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{quickCreateFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Name"
+              value={quickEquipmentForm.name}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <InlineStack gap="400" wrap={false}>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Hourly rate"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickEquipmentForm.hourlyRate}
+                  onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, hourlyRate: value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Per-use cost"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickEquipmentForm.perUseCost}
+                  onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, perUseCost: value }))}
+                  autoComplete="off"
+                />
+              </div>
+            </InlineStack>
+            <TextField
+              label="Equipment cost"
+              type="number"
+              min={0}
+              step={0.01}
+              value={quickEquipmentForm.equipmentCost}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, equipmentCost: value }))}
+              autoComplete="off"
+            />
+            <TextField
+              label="Purchase link"
+              value={quickEquipmentForm.purchaseLink}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, purchaseLink: value }))}
+              autoComplete="off"
+            />
           </BlockStack>
         </Modal.Section>
       </Modal>
