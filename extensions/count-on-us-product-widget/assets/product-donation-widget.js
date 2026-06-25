@@ -132,6 +132,7 @@
     const packaging = money(variant.reconciliation?.packaging);
     const pod = money(variant.reconciliation?.pod || variant.podCostTotal) * nextQuantity;
     const mistakeBuffer = money(variant.reconciliation?.mistakeBuffer || variant.mistakeBufferAmount) * nextQuantity;
+    const artistPayout = money(variant.reconciliation?.artistPayout) * nextQuantity;
     const processingRate = money(variant.shopifyFees?.processingRate) / 100;
     const managedMarketsRate = variant.shopifyFees?.managedMarketsApplicable ? money(variant.shopifyFees?.managedMarketsRate) / 100 : 0;
     const processingFlatFee = money(variant.shopifyFees?.processingFlatFee);
@@ -139,7 +140,7 @@
     const taxReserve = money(variant.taxReserve?.estimatedAmount) * nextQuantity;
     const donationPool = Math.max(
       0,
-      estimatedTotal - (labor + materials + equipment + packaging + pod + mistakeBuffer + shopifyFees + taxReserve),
+      estimatedTotal - (labor + materials + equipment + packaging + pod + mistakeBuffer + artistPayout + shopifyFees + taxReserve),
     );
     const totalDonationPercentage = variant.causes.reduce((sum, cause) => sum + money(cause.donationPercentage), 0);
     const allocatedDonations = Math.min(
@@ -195,6 +196,7 @@
         packaging: packaging.toFixed(2),
         pod: pod.toFixed(2),
         mistakeBuffer: mistakeBuffer.toFixed(2),
+        artistPayout: artistPayout.toFixed(2),
         shopifyFees: shopifyFees.toFixed(2),
         taxReserve: taxReserve.toFixed(2),
         remainder: "0.00",
@@ -225,6 +227,7 @@
       { label: "Packaging", key: "packaging", value: money(reconciliation.packaging), estimated: true },
       { label: "POD", key: "pod", value: money(reconciliation.pod), estimated: false },
       { label: "Mistake buffer", key: "mistakeBuffer", value: money(reconciliation.mistakeBuffer), estimated: false },
+      { label: "Artist payout", key: "artistPayout", value: money(reconciliation.artistPayout), estimated: false },
       { label: "Shopify fees", key: "fees", value: money(reconciliation.shopifyFees), estimated: true },
       { label: "Tax reserve", key: "taxReserve", value: money(reconciliation.taxReserve), estimated: true },
     ]

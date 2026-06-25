@@ -32,6 +32,8 @@ import {
 import {
   parseOptionalNonNegativeNumber,
   parseOptionalNonNegativeWholeNumber,
+  parseOptionalPositiveNumber,
+  parseOptionalPositiveWholeNumber,
   parseOptionalPercent,
   parseRequiredNonNegativeWholeNumber,
 } from "../utils/number-parsing";
@@ -100,6 +102,9 @@ type TemplateEquipmentOverrideLine = {
   usageMode: string;
   minutes: string | null;
   uses: string | null;
+  yieldDurationMinutes: string | null;
+  yieldUses: string | null;
+  yieldQuantity: string | null;
   overrideLineId: string | null;
   overrideUsageMode: string | null;
   overrideMinutes: string | null;
@@ -846,17 +851,32 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     const equipmentOverrideLines = draft.templateEquipmentLines
       .filter((line) => line.hasOverride)
-      .map((line) => ({
-        shopId,
-        templateLineId: line.templateLineId,
-        equipmentId: line.equipmentId,
-        usageMode: line.overrideUsageMode || "direct",
-        minutes: (line.overrideUsageMode || "direct") === "direct" ? parseOptionalNonNegativeNumber(line.overrideMinutes, "Equipment minutes") : null,
-        uses: (line.overrideUsageMode || "direct") === "direct" ? parseOptionalNonNegativeWholeNumber(line.overrideUses, "Equipment uses") : null,
-        yieldDurationMinutes: line.overrideUsageMode === "duration_yield" ? parseOptionalNonNegativeNumber(line.overrideYieldDurationMinutes, "Equipment yield duration") : null,
-        yieldUses: line.overrideUsageMode === "use_yield" ? parseOptionalNonNegativeWholeNumber(line.overrideYieldUses, "Equipment yield uses") : null,
-        yieldQuantity: line.overrideUsageMode && line.overrideUsageMode !== "direct" ? parseOptionalNonNegativeWholeNumber(line.overrideYieldQuantity, "Products yielded") : null,
-      }));
+      .map((line) => {
+        const usageMode = line.overrideUsageMode || "direct";
+        const data = {
+          shopId,
+          templateLineId: line.templateLineId,
+          equipmentId: line.equipmentId,
+          usageMode,
+          minutes: usageMode === "direct" ? parseOptionalNonNegativeNumber(line.overrideMinutes, "Equipment minutes") : null,
+          uses: usageMode === "direct" ? parseOptionalNonNegativeWholeNumber(line.overrideUses, "Equipment uses") : null,
+          yieldDurationMinutes: usageMode === "duration_yield" ? parseOptionalPositiveNumber(line.overrideYieldDurationMinutes, "Equipment yield duration") : null,
+          yieldUses: usageMode === "use_yield" ? parseOptionalPositiveWholeNumber(line.overrideYieldUses, "Equipment yield uses") : null,
+          yieldQuantity: usageMode !== "direct" ? parseOptionalPositiveWholeNumber(line.overrideYieldQuantity, "Products yielded") : null,
+        };
+
+        if (usageMode === "duration_yield" && data.yieldDurationMinutes === null) {
+          throw new Response("Equipment yield duration must be greater than 0.", { status: 400 });
+        }
+        if (usageMode === "use_yield" && data.yieldUses === null) {
+          throw new Response("Equipment yield uses must be a positive whole number.", { status: 400 });
+        }
+        if (usageMode !== "direct" && data.yieldQuantity === null) {
+          throw new Response("Products yielded must be a positive whole number.", { status: 400 });
+        }
+
+        return data;
+      });
 
     const additionalMaterialLines = draft.materialLines.map((line) => ({
       shopId,
@@ -866,16 +886,31 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Portions used per item"),
     }));
 
-    const additionalEquipmentLines = draft.equipmentLines.map((line) => ({
-      shopId,
-      equipmentId: line.equipmentId,
-      usageMode: line.usageMode || "direct",
-      minutes: (line.usageMode || "direct") === "direct" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
-      uses: (line.usageMode || "direct") === "direct" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
-      yieldDurationMinutes: line.usageMode === "duration_yield" ? parseOptionalNonNegativeNumber(line.yieldDurationMinutes, "Equipment yield duration") : null,
-      yieldUses: line.usageMode === "use_yield" ? parseOptionalNonNegativeWholeNumber(line.yieldUses, "Equipment yield uses") : null,
-      yieldQuantity: line.usageMode && line.usageMode !== "direct" ? parseOptionalNonNegativeWholeNumber(line.yieldQuantity, "Products yielded") : null,
-    }));
+    const additionalEquipmentLines = draft.equipmentLines.map((line) => {
+      const usageMode = line.usageMode || "direct";
+      const data = {
+        shopId,
+        equipmentId: line.equipmentId,
+        usageMode,
+        minutes: usageMode === "direct" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
+        uses: usageMode === "direct" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
+        yieldDurationMinutes: usageMode === "duration_yield" ? parseOptionalPositiveNumber(line.yieldDurationMinutes, "Equipment yield duration") : null,
+        yieldUses: usageMode === "use_yield" ? parseOptionalPositiveWholeNumber(line.yieldUses, "Equipment yield uses") : null,
+        yieldQuantity: usageMode !== "direct" ? parseOptionalPositiveWholeNumber(line.yieldQuantity, "Products yielded") : null,
+      };
+
+      if (usageMode === "duration_yield" && data.yieldDurationMinutes === null) {
+        throw new Response("Equipment yield duration must be greater than 0.", { status: 400 });
+      }
+      if (usageMode === "use_yield" && data.yieldUses === null) {
+        throw new Response("Equipment yield uses must be a positive whole number.", { status: 400 });
+      }
+      if (usageMode !== "direct" && data.yieldQuantity === null) {
+        throw new Response("Products yielded must be a positive whole number.", { status: 400 });
+      }
+
+      return data;
+    });
 
     await prisma.$transaction(async (tx) => {
       let configId = existingConfig?.id;
@@ -2503,6 +2538,10 @@ export default function VariantDetailPage() {
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Mistake buffer</Text>
                   <Text as="p" variant="bodyMd">{formatMoney(preview.mistakeBufferAmount)}</Text>
+                </InlineStack>
+                <InlineStack align="space-between">
+                  <Text as="p" variant="bodyMd">Artist payout</Text>
+                  <Text as="p" variant="bodyMd">{formatMoney(preview.reconciliation.artistPayout)}</Text>
                 </InlineStack>
                 <InlineStack align="space-between">
                   <Text as="p" variant="bodyMd">Approx. Shopify/payment fees</Text>

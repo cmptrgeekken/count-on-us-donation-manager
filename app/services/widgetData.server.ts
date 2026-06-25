@@ -30,6 +30,26 @@ type WidgetProductContext = {
       donationLink: string | null;
     };
   }>;
+  artistAssignments: Array<{
+    collaborationShare: Prisma.Decimal;
+    payoutEnabledOverride: boolean | null;
+    payoutRateOverride: Prisma.Decimal | null;
+    artist: {
+      paymentEnabled: boolean;
+      defaultPayoutRate: Prisma.Decimal;
+      causeAssignments: Array<{
+        causeId: string;
+        percentage: Prisma.Decimal;
+        cause: {
+          id: string;
+          name: string;
+          is501c3: boolean;
+          iconUrl: string | null;
+          donationLink: string | null;
+        };
+      }>;
+    };
+  }>;
   shop: {
     currency: string;
     paymentRate: Prisma.Decimal | null;
@@ -106,33 +126,70 @@ async function loadWidgetProductContext(
     return null;
   }
 
-  const causeAssignments = await db.productCauseAssignment.findMany({
-    where: {
-      shopId,
-      productId: product.id,
-      cause: {
-        status: "active",
-      },
-    },
-    orderBy: [{ percentage: "desc" }, { cause: { name: "asc" } }],
-    select: {
-      causeId: true,
-      percentage: true,
-      cause: {
-        select: {
-          id: true,
-          name: true,
-          is501c3: true,
-          iconUrl: true,
-          donationLink: true,
+  const [causeAssignments, artistAssignments] = await Promise.all([
+    db.productCauseAssignment.findMany({
+      where: {
+        shopId,
+        productId: product.id,
+        cause: {
+          status: "active",
         },
       },
-    },
-  });
+      orderBy: [{ percentage: "desc" }, { cause: { name: "asc" } }],
+      select: {
+        causeId: true,
+        percentage: true,
+        cause: {
+          select: {
+            id: true,
+            name: true,
+            is501c3: true,
+            iconUrl: true,
+            donationLink: true,
+          },
+        },
+      },
+    }),
+    db.productArtistAssignment.findMany({
+      where: {
+        shopId,
+        productId: product.id,
+        status: "active",
+      },
+      orderBy: [{ attributionOrder: "asc" }, { createdAt: "asc" }],
+      select: {
+        collaborationShare: true,
+        payoutEnabledOverride: true,
+        payoutRateOverride: true,
+        artist: {
+          select: {
+            paymentEnabled: true,
+            defaultPayoutRate: true,
+            causeAssignments: {
+              select: {
+                causeId: true,
+                percentage: true,
+                cause: {
+                  select: {
+                    id: true,
+                    name: true,
+                    is501c3: true,
+                    iconUrl: true,
+                    donationLink: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
+  ]);
 
   return {
     product,
     causeAssignments,
+    artistAssignments,
     shop,
     taxOffsetCache,
   };
@@ -154,7 +211,10 @@ export async function buildWidgetProductMetadata(
     0,
   );
   const deliveryMode = totalLineItemCount < WIDGET_PRELOAD_LINE_THRESHOLD ? "preload" : "lazy";
-  const visible = context.causeAssignments.length > 0 && context.product.variants.length > 0;
+  const hasRoutedCauses =
+    context.causeAssignments.length > 0 ||
+    context.artistAssignments.some((assignment) => assignment.artist.causeAssignments.length > 0);
+  const visible = hasRoutedCauses && context.product.variants.length > 0;
 
   return {
     productId: context.product.shopifyId,
@@ -181,7 +241,10 @@ export async function buildWidgetProductPayload(
     0,
   );
   const deliveryMode = totalLineItemCount < WIDGET_PRELOAD_LINE_THRESHOLD ? "preload" : "lazy";
-  const visible = context.causeAssignments.length > 0 && context.product.variants.length > 0;
+  const hasRoutedCauses =
+    context.causeAssignments.length > 0 ||
+    context.artistAssignments.some((assignment) => assignment.artist.causeAssignments.length > 0);
+  const visible = hasRoutedCauses && context.product.variants.length > 0;
   const widgetTaxSuppressed = context.taxOffsetCache?.widgetTaxSuppressed ?? true;
 
   const productVariants = lineContext
@@ -194,6 +257,7 @@ export async function buildWidgetProductPayload(
         shopId,
         variant,
         causeAssignments: context.causeAssignments,
+        artistAssignments: context.artistAssignments,
         shop: context.shop,
         widgetTaxSuppressed,
         quantity: lineContext?.quantity,

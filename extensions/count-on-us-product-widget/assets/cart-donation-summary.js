@@ -609,6 +609,7 @@
       packaging: 0,
       pod: 0,
       mistakeBuffer: 0,
+      artistPayout: 0,
       fees: 0,
       taxReserve: 0,
     };
@@ -637,6 +638,9 @@
       costBreakdown.mistakeBuffer = roundCurrency(
         costBreakdown.mistakeBuffer + money(variant.reconciliation?.mistakeBuffer),
       );
+      costBreakdown.artistPayout = roundCurrency(
+        costBreakdown.artistPayout + money(variant.reconciliation?.artistPayout),
+      );
       costBreakdown.fees = roundCurrency(costBreakdown.fees + money(variant.reconciliation?.shopifyFees));
       costBreakdown.taxReserve = roundCurrency(costBreakdown.taxReserve + money(variant.reconciliation?.taxReserve));
 
@@ -662,6 +666,7 @@
         costBreakdown.packaging +
         costBreakdown.pod +
         costBreakdown.mistakeBuffer +
+        costBreakdown.artistPayout +
         costBreakdown.fees +
         costBreakdown.taxReserve,
     );
@@ -689,6 +694,7 @@
       { label: "Packaging", key: "packaging", value: money(costBreakdown.packaging), estimated: true },
       { label: "POD", key: "pod", value: money(costBreakdown.pod), estimated: false },
       { label: "Mistake buffer", key: "mistakeBuffer", value: money(costBreakdown.mistakeBuffer), estimated: false },
+      { label: "Artist payout", key: "artistPayout", value: money(costBreakdown.artistPayout), estimated: false },
       { label: "Shopify fees", key: "fees", value: money(costBreakdown.fees), estimated: true },
       { label: "Tax reserve", key: "taxReserve", value: money(costBreakdown.taxReserve), estimated: true },
     ]

@@ -26,6 +26,8 @@ import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import {
   parseOptionalNonNegativeNumber,
   parseOptionalNonNegativeWholeNumber,
+  parseOptionalPositiveNumber,
+  parseOptionalPositiveWholeNumber,
   parseRequiredNonNegativeWholeNumber,
 } from "../utils/number-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
@@ -362,14 +364,25 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     for (const line of draft.equipmentLines) {
+      const usageMode = line.usageMode || "direct";
       const data = {
-        usageMode: line.usageMode || "direct",
-        minutes: (line.usageMode || "direct") === "direct" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
-        uses: (line.usageMode || "direct") === "direct" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
-        yieldDurationMinutes: line.usageMode === "duration_yield" ? parseOptionalNonNegativeNumber(line.yieldDurationMinutes, "Equipment yield duration") : null,
-        yieldUses: line.usageMode === "use_yield" ? parseOptionalNonNegativeWholeNumber(line.yieldUses, "Equipment yield uses") : null,
-        yieldQuantity: line.usageMode && line.usageMode !== "direct" ? parseOptionalNonNegativeWholeNumber(line.yieldQuantity, "Products yielded") : null,
+        usageMode,
+        minutes: usageMode === "direct" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
+        uses: usageMode === "direct" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
+        yieldDurationMinutes: usageMode === "duration_yield" ? parseOptionalPositiveNumber(line.yieldDurationMinutes, "Equipment yield duration") : null,
+        yieldUses: usageMode === "use_yield" ? parseOptionalPositiveWholeNumber(line.yieldUses, "Equipment yield uses") : null,
+        yieldQuantity: usageMode !== "direct" ? parseOptionalPositiveWholeNumber(line.yieldQuantity, "Products yielded") : null,
       };
+
+      if (usageMode === "duration_yield" && data.yieldDurationMinutes === null) {
+        throw new Response("Equipment yield duration must be greater than 0.", { status: 400 });
+      }
+      if (usageMode === "use_yield" && data.yieldUses === null) {
+        throw new Response("Equipment yield uses must be a positive whole number.", { status: 400 });
+      }
+      if (usageMode !== "direct" && data.yieldQuantity === null) {
+        throw new Response("Products yielded must be a positive whole number.", { status: 400 });
+      }
 
       if (existingEquipmentLines.has(line.id)) {
         await tx.costTemplateEquipmentLine.update({

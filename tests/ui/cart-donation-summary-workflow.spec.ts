@@ -18,7 +18,7 @@ test("cart donation summary modal renders per-cause totals and returns focus on 
   const dialog = page.getByRole("dialog", { name: "Cart donation impact" });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator(".count-on-us-widget__cause").nth(0)).toContainText("Neighborhood Arts");
-  await expect(dialog.locator(".count-on-us-widget__cause").nth(0)).toContainText("$23.88");
+  await expect(dialog.locator(".count-on-us-widget__cause").nth(0)).toContainText("$21.88");
   await expect(dialog.locator(".count-on-us-widget__cause").nth(1)).toContainText("Community Library");
   await expect(dialog.locator(".count-on-us-widget__cause").nth(1)).toContainText("$3.16");
   const disclosure = dialog.locator("[data-count-on-us-cart-breakdown]");
@@ -35,15 +35,17 @@ test("cart donation summary modal renders per-cause totals and returns focus on 
   await expect(disclosure).toContainText("- $5.00");
   await expect(disclosure).toContainText("Less: Equipment");
   await expect(disclosure).toContainText("- $2.75");
+  await expect(disclosure).toContainText("Less: Artist payout");
+  await expect(disclosure).toContainText("- $2.00");
   await expect(disclosure).toContainText("Less: Shopify fees");
   await expect(disclosure).toContainText("(estimate)");
   await expect(disclosure).toContainText("- $2.20");
   await expect(disclosure).toContainText("Less: Packaging");
   await expect(disclosure).toContainText("- $1.00");
   await expect(disclosure).toContainText("Equals: amount remaining after costs");
-  await expect(disclosure).toContainText("$27.04");
+  await expect(disclosure).toContainText("$25.04");
   await expect(disclosure).toContainText("Allocated to causes");
-  await expect(disclosure).toContainText("$27.04");
+  await expect(disclosure).toContainText("$25.04");
   await expect(disclosure).toContainText("Retained by shop");
   await expect(disclosure).toContainText("$0.00");
   const feesInfo = disclosure.locator('[aria-label="Learn more about Shopify fees"]');
@@ -155,7 +157,7 @@ test("cart donation summary refreshes when a new cart line is added", async ({ p
     article.style.border = "1px solid rgba(17, 24, 39, 0.08)";
     article.innerHTML =
       '<div style="display:flex;justify-content:space-between;gap:1rem;align-items:baseline;"><a href="/products/fixture-3" style="color:#111827;font-weight:600;text-decoration:none;">Fixture cart item 3</a><span data-fixture-qty style="color:#6b7280;font-size:0.92rem;">Qty 1</span></div><label style="display:grid;gap:0.25rem;max-width:6rem;"><span style="color:#6b7280;font-size:0.82rem;">Quantity</span><input name="updates[]" type="number" value="1" min="0"></label>';
-    document.querySelector("main section")?.appendChild(article);
+    document.querySelector("[data-fixture-cart-items]")?.appendChild(article);
   });
 
   await expect(page.locator("[data-count-on-us-cart-summary]")).toBeVisible();

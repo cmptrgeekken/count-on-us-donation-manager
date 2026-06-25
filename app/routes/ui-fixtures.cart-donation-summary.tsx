@@ -459,7 +459,7 @@ function buildFixturePayload(mode: FixtureMode) {
                 name: "Neighborhood Arts",
                 iconUrl: null,
                 donationPercentage: "100.00",
-                estimatedDonationAmount: "20.73",
+                estimatedDonationAmount: "18.73",
                 donationCurrencyCode: "USD",
                 donationLink: "https://example.com/neighborhood-arts",
               },
@@ -471,15 +471,16 @@ function buildFixturePayload(mode: FixtureMode) {
             },
             reconciliation: {
               estimatedTotal: "40.00",
-              allocatedDonations: "20.73",
+                allocatedDonations: "18.73",
               retainedByShop: "0.00",
               labor: "6.00",
               materials: "3.00",
               equipment: "1.50",
               packaging: "0.40",
-              pod: "0.00",
-              mistakeBuffer: "0.00",
-              shopifyFees: "1.46",
+                pod: "0.00",
+                mistakeBuffer: "0.00",
+                artistPayout: "2.00",
+                shopifyFees: "1.46",
               taxReserve: "6.91",
               remainder: "0.00",
             },
@@ -664,7 +665,7 @@ export default function CartDonationSummaryFixtureRoute() {
             Mode: <strong>{mode}</strong>
           </p>
 
-          <section style={{ display: "grid", gap: "0.75rem" }}>
+          <section data-fixture-cart-items style={{ display: "grid", gap: "0.75rem" }}>
             {(fixture.lines as FixtureLine[]).map((line, index) => (
               <article
                 key={`${line.productId}-${index}`}

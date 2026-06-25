@@ -231,6 +231,7 @@ function estimateTotalCost(estimate: VariantEstimatePayload) {
     estimate.reconciliation.equipment,
     estimate.reconciliation.pod,
     estimate.reconciliation.mistakeBuffer,
+    estimate.reconciliation.artistPayout,
     estimate.reconciliation.shopifyFees,
     estimate.reconciliation.taxReserve,
   ]

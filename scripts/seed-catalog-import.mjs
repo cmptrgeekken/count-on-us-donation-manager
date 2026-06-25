@@ -1724,8 +1724,12 @@ async function importCatalog(data, options) {
       data: {
         template: { connect: { id: templateId } },
         equipment: { connect: { id: equipmentId } },
+        usageMode: row.usageMode ?? "direct",
         minutes: decimal(row.minutes),
         uses: decimal(row.uses),
+        yieldDurationMinutes: decimal(row.yieldDurationMinutes),
+        yieldUses: decimal(row.yieldUses),
+        yieldQuantity: decimal(row.yieldQuantity),
       },
     });
     templateEquipmentLineIds.set(row._dedupeKey, line.id);
@@ -1858,8 +1862,12 @@ async function importCatalog(data, options) {
         config: { connect: { id: configId } },
         equipment: { connect: { id: equipmentId } },
         ...(templateLineId ? { templateLine: { connect: { id: templateLineId } } } : {}),
+        usageMode: row.usageMode ?? "direct",
         minutes: decimal(row.minutes),
         uses: decimal(row.uses),
+        yieldDurationMinutes: decimal(row.yieldDurationMinutes),
+        yieldUses: decimal(row.yieldUses),
+        yieldQuantity: decimal(row.yieldQuantity),
       },
     });
   }
