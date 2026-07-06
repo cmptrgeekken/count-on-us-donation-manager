@@ -2324,12 +2324,6 @@ type AvailableEquipment = {
   perUseCost: string | null;
 };
 
-type AvailablePackage = {
-  id: string;
-  name: string;
-  dimensions: string;
-};
-
 type CopySourceVariant = {
   id: string;
   title: string;
@@ -2416,16 +2410,15 @@ function serializeVariantDraftState(draft: VariantDraft) {
 }
 
 export default function VariantDetailPage() {
-  const {
-    variant,
-    config,
-    shopDefaults,
-    templates,
-    availableMaterials: loadedMaterials,
-    availableEquipment: loadedEquipment,
-    packages,
-    copySourceVariants,
-  } = useLoaderData<typeof loader>();
+	  const {
+	    variant,
+	    config,
+	    shopDefaults,
+	    templates,
+	    availableMaterials: loadedMaterials,
+	    availableEquipment: loadedEquipment,
+	    copySourceVariants,
+	  } = useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
   const copyFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
   const promoteFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string; templateId?: string }>();
@@ -2540,14 +2533,10 @@ export default function VariantDetailPage() {
   const handledPromoteRef = useRef<string | null>(null);
   const preCopyDraftStateRef = useRef<string | null>(null);
 
-  const isSaving = saveFetcher.state !== "idle";
-  const isCopying = copyFetcher.state !== "idle";
-  const productionTemplates = templates.filter((template: TemplateCatalogEntry) => template.type !== "shipping");
-  const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
-  const packageOptions = [
-    { label: "No preferred package", value: "" },
-    ...packages.map((pkg: AvailablePackage) => ({ label: `${pkg.name} (${pkg.dimensions})`, value: pkg.id })),
-  ];
+	  const isSaving = saveFetcher.state !== "idle";
+	  const isCopying = copyFetcher.state !== "idle";
+	  const productionTemplates = templates.filter((template: TemplateCatalogEntry) => template.type !== "shipping");
+	  const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
   const effectiveTemplateSelection = resolveEffectiveTemplateSelection(
     {
       productionTemplateId: draft.productionTemplateId ?? null,
@@ -2599,6 +2588,15 @@ export default function VariantDetailPage() {
   );
   const additionalShippingMaterialLines = draft.materialLines.filter(
     (line: SerializedMaterialLine) => line.materialType === "shipping",
+  );
+  const productionTemplateMaterialIds = new Set(
+    draft.templateMaterialLines.map((line: VariantTemplateMaterialDraftLine) => line.materialId),
+  );
+  const shippingTemplateMaterialIds = new Set(
+    shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => line.materialId),
+  );
+  const productionTemplateEquipmentIds = new Set(
+    draft.templateEquipmentLines.map((line: VariantTemplateEquipmentDraftLine) => line.equipmentId),
   );
   const materialOverrideTarget =
     draft.templateMaterialLines.find((line) => line.templateLineId === materialOverrideTargetId) ?? null;
@@ -3136,97 +3134,99 @@ export default function VariantDetailPage() {
         </Card>
 
         <Card>
-          <BlockStack gap="300">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Copy configuration</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Overwrite this variant with settings from another configured variant.
-                </Text>
+          <details>
+            <summary style={{ cursor: "pointer", fontWeight: 650 }}>Actions & automation</summary>
+            <div style={{ marginTop: "1rem" }}>
+              <BlockStack gap="400">
+                <InlineStack align="space-between" blockAlign="center">
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">Copy configuration</Text>
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      Overwrite this variant with settings from another configured variant.
+                    </Text>
+                  </BlockStack>
+                  <Button
+                    onClick={() => {
+                      setSelectedCopySourceId("");
+                      setCopySourceSearchValue("");
+                      setCopyDialogOpen(true);
+                    }}
+                    disabled={copySourceVariants.length === 0 || isDirty}
+                  >
+                    Copy from variant
+                  </Button>
+                </InlineStack>
+                {isDirty ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Save or discard your staged changes before copying another variant configuration.
+                  </Text>
+                ) : null}
+                {copySourceVariants.length === 0 ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    No other configured variants are available to copy from.
+                  </Text>
+                ) : null}
+                <Divider />
+                <InlineStack align="space-between" blockAlign="center">
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">Create template from variant</Text>
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      Save this setup as a production or shipping template.
+                    </Text>
+                  </BlockStack>
+                  <InlineStack gap="200">
+                    <Button
+                      onClick={() => {
+                        setPromoteForm((current) => ({
+                          ...current,
+                          name: `${variant.productTitle} - ${variant.title}`,
+                          includeDefaultShippingTemplate: Boolean(effectiveTemplateSelection.shippingTemplateId),
+                          materialLineKeys: promotableMaterialLines.map((line) => line.key),
+                          equipmentLineKeys: promotableEquipmentLines.map((line) => line.key),
+                        }));
+                        setPromoteDialogOpen(true);
+                      }}
+                      disabled={!config || isDirty}
+                    >
+                      Production template
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setPromoteShippingForm((current) => ({
+                          ...current,
+                          name: `${variant.productTitle} - ${variant.title} Shipping`,
+                          setAsProductionDefault: Boolean(effectiveTemplateSelection.productionTemplateId),
+                          materialLineKeys: promotableShippingMaterialLines.map((line) => line.key),
+                        }));
+                        setPromoteShippingDialogOpen(true);
+                      }}
+                      disabled={!config || isDirty || promotableShippingMaterialLines.length === 0}
+                    >
+                      Shipping template
+                    </Button>
+                  </InlineStack>
+                </InlineStack>
+                {!config ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Save a variant configuration before creating a template from it.
+                  </Text>
+                ) : null}
+                {isDirty ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Save or discard your staged changes before promoting this variant.
+                  </Text>
+                ) : null}
+                {promoteFetcher.data ? (
+                  <Banner tone={promoteFetcher.data.ok ? "success" : "critical"}>
+                    <Text as="p" variant="bodyMd">{promoteFetcher.data.message}</Text>
+                  </Banner>
+                ) : null}
               </BlockStack>
-              <Button
-                onClick={() => {
-                  setSelectedCopySourceId("");
-                  setCopySourceSearchValue("");
-                  setCopyDialogOpen(true);
-                }}
-                disabled={copySourceVariants.length === 0 || isDirty}
-              >
-                Copy from variant
-              </Button>
-            </InlineStack>
-            {isDirty ? (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Save or discard your staged changes before copying another variant configuration.
-              </Text>
-            ) : null}
-            {copySourceVariants.length === 0 ? (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                No other configured variants are available to copy from.
-              </Text>
-            ) : null}
-          </BlockStack>
+            </div>
+          </details>
         </Card>
 
-        <Card>
-          <BlockStack gap="300">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Create template from variant</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Turn this saved variant setup into reusable production or shipping cost templates.
-                </Text>
-              </BlockStack>
-              <InlineStack gap="200">
-                <Button
-                  onClick={() => {
-                    setPromoteForm((current) => ({
-                      ...current,
-                      name: `${variant.productTitle} - ${variant.title}`,
-                      includeDefaultShippingTemplate: Boolean(effectiveTemplateSelection.shippingTemplateId),
-                      materialLineKeys: promotableMaterialLines.map((line) => line.key),
-                      equipmentLineKeys: promotableEquipmentLines.map((line) => line.key),
-                    }));
-                    setPromoteDialogOpen(true);
-                  }}
-                  disabled={!config || isDirty}
-                >
-                  Production template
-                </Button>
-                <Button
-                  onClick={() => {
-                    setPromoteShippingForm((current) => ({
-                      ...current,
-                      name: `${variant.productTitle} - ${variant.title} Shipping`,
-                      setAsProductionDefault: Boolean(effectiveTemplateSelection.productionTemplateId),
-                      materialLineKeys: promotableShippingMaterialLines.map((line) => line.key),
-                    }));
-                    setPromoteShippingDialogOpen(true);
-                  }}
-                  disabled={!config || isDirty || promotableShippingMaterialLines.length === 0}
-                >
-                  Shipping template
-                </Button>
-              </InlineStack>
-            </InlineStack>
-            {!config ? (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Save a variant configuration before creating a template from it.
-              </Text>
-            ) : null}
-            {isDirty ? (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Save or discard your staged changes before promoting this variant.
-              </Text>
-            ) : null}
-            {promoteFetcher.data ? (
-              <Banner tone={promoteFetcher.data.ok ? "success" : "critical"}>
-                <Text as="p" variant="bodyMd">{promoteFetcher.data.message}</Text>
-              </Banner>
-            ) : null}
-          </BlockStack>
-        </Card>
-
+        {variant.providerMappings.length > 0 ? (
         <Card>
           <BlockStack gap="400">
             <BlockStack gap="100">
@@ -3244,66 +3244,259 @@ export default function VariantDetailPage() {
               </Text>
             </BlockStack>
             <Divider />
-            {variant.providerMappings.length === 0 ? (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                No provider mapping is saved for this variant yet. Manual cost configuration remains in effect unless you
-                choose to map this variant through a POD provider.
-              </Text>
+            <BlockStack gap="400">
+              {variant.providerMappings.map((mapping: SerializedProviderMapping) => (
+                <BlockStack key={mapping.id} gap="200">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <InlineStack gap="200" blockAlign="center">
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">{formatProviderName(mapping.provider)}</Text>
+                      <Badge tone={mapping.status === "mapped" ? "success" : "warning"}>
+                        {mapping.status === "mapped" ? "Mapped" : mapping.status}
+                      </Badge>
+                      <Badge tone={mapping.connectionStatus === "validated" ? "info" : "warning"}>
+                        {mapping.connectionStatus === "validated" ? "Connection healthy" : "Connection needs review"}
+                      </Badge>
+                    </InlineStack>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      {mapping.lastCostSyncedAt
+                        ? `Costs synced ${new Date(mapping.lastCostSyncedAt).toLocaleString()}`
+                        : "No cached provider costs yet"}
+                    </Text>
+                  </InlineStack>
+
+                  <BlockStack gap="100">
+                    {mapping.providerProductTitle ? (
+                      <Text as="p" variant="bodyMd">Provider product: {mapping.providerProductTitle}</Text>
+                    ) : null}
+                    {mapping.providerVariantTitle ? (
+                      <Text as="p" variant="bodyMd">Provider variant: {mapping.providerVariantTitle}</Text>
+                    ) : null}
+                    {mapping.providerSku ? (
+                      <Text as="p" variant="bodyMd">Provider SKU: {mapping.providerSku}</Text>
+                    ) : null}
+                    {mapping.matchMethod ? (
+                      <Text as="p" variant="bodyMd" tone="subdued">
+                        Match method: {mapping.matchMethod === "sku" ? "Unique SKU match" : mapping.matchMethod}
+                      </Text>
+                    ) : null}
+                  </BlockStack>
+
+                  {mapping.latestCostLines.length > 0 ? (
+                    <BlockStack gap="100">
+                      <Text as="h3" variant="headingSm">Latest cached POD costs</Text>
+                      {mapping.latestCostLines.map((line) => (
+                        <InlineStack key={`${mapping.id}-${line.costLineType}-${line.description ?? "line"}`} align="space-between">
+                          <Text as="p" variant="bodyMd">
+                            {line.description ?? line.costLineType}
+                          </Text>
+                          <Text as="p" variant="bodyMd">{formatMoney(line.amount)}</Text>
+                        </InlineStack>
+                      ))}
+                    </BlockStack>
+                  ) : (
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      No cached POD costs have been stored for this mapping yet.
+                    </Text>
+                  )}
+                </BlockStack>
+              ))}
+            </BlockStack>
+          </BlockStack>
+        </Card>
+        ) : null}
+
+        <Card>
+          <BlockStack gap="400">
+            <Text as="h2" variant="headingMd">Templates</Text>
+            <Divider />
+            <InlineStack gap="400" blockAlign="start">
+              <div style={{ flex: 1 }}>
+                <BlockStack gap="200">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h3" variant="headingSm">Production</Text>
+                    <InlineStack gap="200">
+                      {assignedProductionTemplate ? (
+                        <Button variant="plain" tone="critical" onClick={removeSelectedTemplate}>
+                          Remove
+                        </Button>
+                      ) : null}
+                      <Button
+                        onClick={() => {
+                          setSelectedTemplateId(draft.productionTemplateId ?? productionTemplates[0]?.id ?? "");
+                          setAssignTemplateOpen(true);
+                        }}
+                        disabled={productionTemplates.length === 0}
+                      >
+                        {assignedProductionTemplate ? "Change" : "Assign"}
+                      </Button>
+                    </InlineStack>
+                  </InlineStack>
+                  <Text as="p" variant="bodyMd" tone={assignedProductionTemplate ? undefined : "subdued"}>
+                    {assignedProductionTemplate?.name ?? "No production template assigned"}
+                  </Text>
+                </BlockStack>
+              </div>
+              <div style={{ flex: 1 }}>
+                <BlockStack gap="200">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <InlineStack gap="200" blockAlign="center">
+                      <Text as="h3" variant="headingSm">Shipping</Text>
+                      <Badge tone={effectiveTemplateSelection.shippingSource === "explicit" ? "attention" : "info"}>
+                        {effectiveTemplateSelection.shippingSource === "explicit"
+                          ? "Override"
+                          : effectiveTemplateSelection.shippingSource === "production-default"
+                            ? "Inherited"
+                            : "Unassigned"}
+                      </Badge>
+                    </InlineStack>
+                    <InlineStack gap="200">
+                      {draft.shippingTemplateId ? (
+                        <Button variant="plain" tone="critical" onClick={removeSelectedShippingTemplate}>
+                          Remove
+                        </Button>
+                      ) : null}
+                      <Button
+                        onClick={() => {
+                          setSelectedShippingTemplateId(draft.shippingTemplateId ?? effectiveShippingTemplate?.id ?? shippingTemplates[0]?.id ?? "");
+                          setAssignShippingTemplateOpen(true);
+                        }}
+                        disabled={shippingTemplates.length === 0}
+                      >
+                        {draft.shippingTemplateId ? "Change" : "Set override"}
+                      </Button>
+                    </InlineStack>
+                  </InlineStack>
+                  <Text as="p" variant="bodyMd" tone={effectiveShippingTemplate ? undefined : "subdued"}>
+                    {effectiveShippingTemplate?.name ?? "No effective shipping template"}
+                  </Text>
+                </BlockStack>
+              </div>
+            </InlineStack>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="400">
+            <InlineStack align="space-between" blockAlign="center">
+              <BlockStack gap="100">
+                <InlineStack gap="200" blockAlign="center">
+                  <Text as="h2" variant="headingMd">Materials</Text>
+                  {draft.templateMaterialLines.length + shippingTemplateMaterialLines.length + draft.materialLines.length > 0 && (
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {draft.templateMaterialLines.length + shippingTemplateMaterialLines.length + draft.materialLines.length}
+                    </Text>
+                  )}
+                </InlineStack>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Template, shipping template, and variant-specific material costs in calculation order.
+                </Text>
+              </BlockStack>
+              <Button onClick={() => setAddMaterialOpen(true)} disabled={availableMaterials.length === draft.materialLines.length}>
+                Add material
+              </Button>
+            </InlineStack>
+            <Divider />
+            {draft.templateMaterialLines.length + shippingTemplateMaterialLines.length + draft.materialLines.length === 0 ? (
+              <Text as="p" variant="bodyMd" tone="subdued">No materials configured yet.</Text>
             ) : (
               <BlockStack gap="400">
-                {variant.providerMappings.map((mapping: SerializedProviderMapping) => (
-                  <BlockStack key={mapping.id} gap="200">
-                    <InlineStack align="space-between" blockAlign="center">
-                      <InlineStack gap="200" blockAlign="center">
-                        <Text as="p" variant="bodyMd" fontWeight="semibold">{formatProviderName(mapping.provider)}</Text>
-                        <Badge tone={mapping.status === "mapped" ? "success" : "warning"}>
-                          {mapping.status === "mapped" ? "Mapped" : mapping.status}
-                        </Badge>
-                        <Badge tone={mapping.connectionStatus === "validated" ? "info" : "warning"}>
-                          {mapping.connectionStatus === "validated" ? "Connection healthy" : "Connection needs review"}
-                        </Badge>
-                      </InlineStack>
-                      <Text as="p" variant="bodySm" tone="subdued">
-                        {mapping.lastCostSyncedAt
-                          ? `Costs synced ${new Date(mapping.lastCostSyncedAt).toLocaleString()}`
-                          : "No cached provider costs yet"}
-                      </Text>
-                    </InlineStack>
-
-                    <BlockStack gap="100">
-                      {mapping.providerProductTitle ? (
-                        <Text as="p" variant="bodyMd">Provider product: {mapping.providerProductTitle}</Text>
-                      ) : null}
-                      {mapping.providerVariantTitle ? (
-                        <Text as="p" variant="bodyMd">Provider variant: {mapping.providerVariantTitle}</Text>
-                      ) : null}
-                      {mapping.providerSku ? (
-                        <Text as="p" variant="bodyMd">Provider SKU: {mapping.providerSku}</Text>
-                      ) : null}
-                      {mapping.matchMethod ? (
-                        <Text as="p" variant="bodyMd" tone="subdued">
-                          Match method: {mapping.matchMethod === "sku" ? "Unique SKU match" : mapping.matchMethod}
-                        </Text>
-                      ) : null}
-                    </BlockStack>
-
-                    {mapping.latestCostLines.length > 0 ? (
-                      <BlockStack gap="100">
-                        <Text as="h3" variant="headingSm">Latest cached POD costs</Text>
-                        {mapping.latestCostLines.map((line) => (
-                          <InlineStack key={`${mapping.id}-${line.costLineType}-${line.description ?? "line"}`} align="space-between">
-                            <Text as="p" variant="bodyMd">
-                              {line.description ?? line.costLineType}
-                            </Text>
-                            <Text as="p" variant="bodyMd">{formatMoney(line.amount)}</Text>
+                {draft.templateMaterialLines.length > 0 ? (
+                  <BlockStack gap="300">
+                    <Text as="h3" variant="headingSm">Production template</Text>
+                    {draft.templateMaterialLines.map((line) => (
+                      <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
+                        <BlockStack gap="100">
+                          <InlineStack gap="200" blockAlign="center">
+                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
+                            <Badge tone="info">Template</Badge>
+                            <Badge tone={line.materialType === "shipping" ? "info" : "success"}>
+                              {line.materialType === "shipping" ? "Shipping" : "Production"}
+                            </Badge>
+                            {line.hasOverride ? <Badge tone="attention">Override active</Badge> : null}
                           </InlineStack>
-                        ))}
+                          <Text as="p" variant="bodyMd" tone="subdued">
+                            Default: {describeMaterialLine(line)}
+                          </Text>
+                          {line.hasOverride ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              Override: {describeMaterialLine({
+                                costingModel: line.costingModel,
+                                quantity: line.overrideQuantity,
+                                yield: line.overrideYield,
+                                usesPerVariant: line.overrideUsesPerVariant,
+                              })}
+                            </Text>
+                          ) : null}
+                        </BlockStack>
+                        <InlineStack gap="200">
+                          <Button variant="plain" onClick={() => openMaterialOverride(line)}>
+                            {line.hasOverride ? "Edit override" : "Override"}
+                          </Button>
+                          {line.hasOverride ? (
+                            <Button variant="plain" onClick={() => resetMaterialOverride(line.templateLineId)}>
+                              Reset
+                            </Button>
+                          ) : null}
+                        </InlineStack>
+                      </InlineStack>
+                    ))}
+                  </BlockStack>
+                ) : assignedProductionTemplate ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">The assigned production template has no material lines.</Text>
+                ) : null}
+
+                {shippingTemplateMaterialLines.length > 0 ? (
+                  <BlockStack gap="300">
+                    <Text as="h3" variant="headingSm">Shipping template</Text>
+                    {shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => (
+                      <BlockStack key={line.templateLineId} gap="100">
+                        <InlineStack gap="200" blockAlign="center">
+                          <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
+                          <Badge tone="info">Shipping template</Badge>
+                          <Badge tone="info">Shipping</Badge>
+                        </InlineStack>
+                        <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
                       </BlockStack>
-                    ) : (
-                      <Text as="p" variant="bodyMd" tone="subdued">
-                        No cached POD costs have been stored for this mapping yet.
-                      </Text>
-                    )}
+                    ))}
+                  </BlockStack>
+                ) : effectiveShippingTemplate ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">The effective shipping template has no material lines.</Text>
+                ) : null}
+
+                {[
+                  {
+                    heading: "Variant-specific production",
+                    lines: additionalProductionMaterialLines,
+                  },
+                  {
+                    heading: "Variant-specific shipping",
+                    lines: additionalShippingMaterialLines,
+                  },
+                ].filter((section) => section.lines.length > 0).map((section) => (
+                  <BlockStack key={section.heading} gap="300">
+                    <Text as="h3" variant="headingSm">{section.heading}</Text>
+                    {section.lines.map((line: SerializedMaterialLine) => {
+                      const alsoInTemplate =
+                        productionTemplateMaterialIds.has(line.materialId) || shippingTemplateMaterialIds.has(line.materialId);
+                      return (
+                        <InlineStack key={line.id} align="space-between" blockAlign="center">
+                          <BlockStack gap="100">
+                            <InlineStack gap="200" blockAlign="center">
+                              <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
+                              <Badge tone="attention">Variant-specific</Badge>
+                              <Badge tone={line.materialType === "shipping" ? "info" : "success"}>
+                                {line.materialType === "shipping" ? "Shipping" : "Production"}
+                              </Badge>
+                              {alsoInTemplate ? <Badge tone="warning">Also in template</Badge> : null}
+                            </InlineStack>
+                            <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
+                          </BlockStack>
+                          <Button variant="plain" tone="critical" onClick={() => removeAdditionalMaterialLine(line.id)}>
+                            Remove
+                          </Button>
+                        </InlineStack>
+                      );
+                    })}
                   </BlockStack>
                 ))}
               </BlockStack>
@@ -3314,183 +3507,96 @@ export default function VariantDetailPage() {
         <Card>
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
-              <Text as="h2" variant="headingMd">Production Template</Text>
-              <InlineStack gap="200">
-                {assignedProductionTemplate && (
-                  <Button variant="plain" tone="critical" onClick={removeSelectedTemplate}>
-                    Remove
-                  </Button>
-                )}
-                <Button
-                  onClick={() => {
-                    setSelectedTemplateId(draft.productionTemplateId ?? productionTemplates[0]?.id ?? "");
-                    setAssignTemplateOpen(true);
-                  }}
-                  disabled={productionTemplates.length === 0}
-                >
-                  {assignedProductionTemplate ? "Change production template" : "Assign production template"}
-                </Button>
-              </InlineStack>
-            </InlineStack>
-            <Divider />
-            {assignedProductionTemplate ? (
-              <Text as="p" variant="bodyMd">
-                {assignedProductionTemplate.name}
-              </Text>
-            ) : (
-              <Text as="p" variant="bodyMd" tone="subdued">No production template assigned - configure lines manually below.</Text>
-            )}
-          </BlockStack>
-        </Card>
-
-        <Card>
-          <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <Text as="h2" variant="headingMd">Shipping Template</Text>
-              <InlineStack gap="200" blockAlign="center">
-                <Badge tone={effectiveTemplateSelection.shippingSource === "explicit" ? "attention" : "info"}>
-                  {effectiveTemplateSelection.shippingSource === "explicit"
-                    ? "Explicit override"
-                    : effectiveTemplateSelection.shippingSource === "production-default"
-                      ? "Inherited from production template"
-                      : "Unassigned"}
-                </Badge>
-                {draft.shippingTemplateId && (
-                  <Button variant="plain" tone="critical" onClick={removeSelectedShippingTemplate}>
-                    Remove override
-                  </Button>
-                )}
-                <Button
-                  onClick={() => {
-                    setSelectedShippingTemplateId(draft.shippingTemplateId ?? effectiveShippingTemplate?.id ?? shippingTemplates[0]?.id ?? "");
-                    setAssignShippingTemplateOpen(true);
-                  }}
-                  disabled={shippingTemplates.length === 0}
-                >
-                  {draft.shippingTemplateId ? "Change override" : "Set override"}
-                </Button>
-              </InlineStack>
-            </InlineStack>
-            <Divider />
-            {effectiveShippingTemplate ? (
-              <BlockStack gap="300">
-                <Text as="p" variant="bodyMd">{effectiveShippingTemplate.name}</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  {effectiveTemplateSelection.shippingSource === "explicit"
-                    ? "This variant uses an explicit shipping override."
-                    : effectiveTemplateSelection.shippingSource === "production-default"
-                      ? "This shipping template is inherited from the assigned production template."
-                      : "No active shipping templates are available yet."}
-                </Text>
-                <BlockStack gap="200">
-                  <Text as="h3" variant="headingSm">Shipping material lines</Text>
-                  {shippingTemplateMaterialLines.length === 0 ? (
-                    <Text as="p" variant="bodyMd" tone="subdued">
-                      This Shipping template has no material lines.
+              <BlockStack gap="100">
+                <InlineStack gap="200" blockAlign="center">
+                  <Text as="h2" variant="headingMd">Equipment</Text>
+                  {draft.templateEquipmentLines.length + draft.equipmentLines.length > 0 && (
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {draft.templateEquipmentLines.length + draft.equipmentLines.length}
                     </Text>
-                  ) : (
-                    <BlockStack gap="200">
-                      {shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => (
-                        <BlockStack key={line.templateLineId} gap="100">
+                  )}
+                </InlineStack>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Template and variant-specific equipment usage in calculation order.
+                </Text>
+              </BlockStack>
+              <Button onClick={() => setAddEquipmentOpen(true)} disabled={availableEquipment.length === draft.equipmentLines.length}>
+                Add equipment
+              </Button>
+            </InlineStack>
+            <Divider />
+            {draft.templateEquipmentLines.length + draft.equipmentLines.length === 0 ? (
+              <Text as="p" variant="bodyMd" tone="subdued">No equipment configured yet.</Text>
+            ) : (
+              <BlockStack gap="400">
+                {draft.templateEquipmentLines.length > 0 ? (
+                  <BlockStack gap="300">
+                    <Text as="h3" variant="headingSm">Production template</Text>
+                    {draft.templateEquipmentLines.map((line) => (
+                      <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
+                        <BlockStack gap="100">
                           <InlineStack gap="200" blockAlign="center">
-                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                            <Badge tone="info">Shipping</Badge>
+                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
+                            <Badge tone="info">Template</Badge>
+                            {line.hasOverride ? <Badge tone="attention">Override active</Badge> : null}
                           </InlineStack>
                           <Text as="p" variant="bodyMd" tone="subdued">
-                            {describeMaterialLine(line)}
+                            Default: {describeEquipmentLine(line)}
                           </Text>
+                          {line.hasOverride ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              Override: {describeEquipmentLine({
+                                usageMode: line.overrideUsageMode,
+                                minutes: line.overrideMinutes,
+                                uses: line.overrideUses,
+                                yieldDurationMinutes: line.overrideYieldDurationMinutes,
+                                yieldUses: line.overrideYieldUses,
+                                yieldQuantity: line.overrideYieldQuantity,
+                              })}
+                            </Text>
+                          ) : null}
                         </BlockStack>
-                      ))}
-                    </BlockStack>
-                  )}
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    Edit these line items on the Shipping template itself. Use variant-only Shipping materials below for one-off additions.
-                  </Text>
-                </BlockStack>
-              </BlockStack>
-            ) : (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                No shipping template is currently effective for this variant.
-              </Text>
-            )}
-          </BlockStack>
-        </Card>
+                        <InlineStack gap="200">
+                          <Button variant="plain" onClick={() => openEquipmentOverride(line)}>
+                            {line.hasOverride ? "Edit override" : "Override"}
+                          </Button>
+                          {line.hasOverride ? (
+                            <Button variant="plain" onClick={() => resetEquipmentOverride(line.templateLineId)}>
+                              Reset
+                            </Button>
+                          ) : null}
+                        </InlineStack>
+                      </InlineStack>
+                    ))}
+                  </BlockStack>
+                ) : assignedProductionTemplate ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">The assigned production template has no equipment lines.</Text>
+                ) : null}
 
-        <Card>
-          <BlockStack gap="400">
-            <BlockStack gap="100">
-              <Text as="h2" variant="headingMd">Package Profile</Text>
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Used by automatic cartonization for future order snapshots. Shipping templates remain estimate-only.
-              </Text>
-            </BlockStack>
-            <Divider />
-            <BlockStack gap="400">
-              <Select
-                label="Preferred package"
-                options={packageOptions}
-                value={draft.preferredPackageId ?? ""}
-                onChange={(value) => setDraft((current) => ({ ...current, preferredPackageId: value || null }))}
-              />
-              <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Packed length"
-                    type="number"
-                    min={0}
-                    step={0.001}
-                    value={draft.packedLength}
-                    onChange={(value) => setDraft((current) => ({ ...current, packedLength: value }))}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Packed width"
-                    type="number"
-                    min={0}
-                    step={0.001}
-                    value={draft.packedWidth}
-                    onChange={(value) => setDraft((current) => ({ ...current, packedWidth: value }))}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Packed height"
-                    type="number"
-                    min={0}
-                    step={0.001}
-                    value={draft.packedHeight}
-                    onChange={(value) => setDraft((current) => ({ ...current, packedHeight: value }))}
-                    autoComplete="off"
-                  />
-                </div>
-              </InlineStack>
-              <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Packed weight (g)"
-                    type="number"
-                    min={0}
-                    step={0.001}
-                    value={draft.packedWeightGrams}
-                    onChange={(value) => setDraft((current) => ({ ...current, packedWeightGrams: value }))}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1, display: "flex", alignItems: "end" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <input
-                      type="checkbox"
-                      checked={draft.canSharePackage}
-                      onChange={() => setDraft((current) => ({ ...current, canSharePackage: !current.canSharePackage }))}
-                    />
-                    <span>Can share a package with other items</span>
-                  </label>
-                </div>
-              </InlineStack>
-            </BlockStack>
+                {draft.equipmentLines.length > 0 ? (
+                  <BlockStack gap="300">
+                    <Text as="h3" variant="headingSm">Variant-specific</Text>
+                    {draft.equipmentLines.map((line: SerializedEquipmentLine) => (
+                      <InlineStack key={line.id} align="space-between" blockAlign="center">
+                        <BlockStack gap="100">
+                          <InlineStack gap="200" blockAlign="center">
+                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
+                            <Badge tone="attention">Variant-specific</Badge>
+                            {productionTemplateEquipmentIds.has(line.equipmentId) ? (
+                              <Badge tone="warning">Also in template</Badge>
+                            ) : null}
+                          </InlineStack>
+                          <Text as="p" variant="bodyMd" tone="subdued">{describeEquipmentLine(line)}</Text>
+                        </BlockStack>
+                        <Button variant="plain" tone="critical" onClick={() => removeAdditionalEquipmentLine(line.id)}>
+                          Remove
+                        </Button>
+                      </InlineStack>
+                    ))}
+                  </BlockStack>
+                ) : null}
+              </BlockStack>
+            )}
           </BlockStack>
         </Card>
 
@@ -3499,294 +3605,60 @@ export default function VariantDetailPage() {
             <Text as="h2" variant="headingMd">Labor</Text>
             <Divider />
             <BlockStack gap="400">
-              <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Minutes per variant"
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={draft.laborMinutes}
-                    onChange={(value) => setDraft((current) => ({ ...current, laborMinutes: value }))}
-                    autoComplete="off"
-                    helpText="Leave blank to use the template default minutes when one is configured."
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label={`Hourly rate (${getCurrencySymbol()})`}
-                    placeholder={
-                      shopDefaultLaborRate
-                        ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
-                        : "Set a variant override or configure a shop default"
-                    }
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={draft.laborRate}
-                    onChange={(value) => setDraft((current) => ({ ...current, laborRate: value }))}
-                    onBlur={() => setDraft((current) => ({ ...current, laborRate: normalizeFixedDecimalInput(current.laborRate) }))}
-                    autoComplete="off"
-                    helpText={laborRateHelpText}
-                  />
-                </div>
-              </InlineStack>
+              <TextField
+                label="Minutes per variant"
+                type="number"
+                min={0}
+                step={0.5}
+                value={draft.laborMinutes}
+                onChange={(value) => setDraft((current) => ({ ...current, laborMinutes: value }))}
+                autoComplete="off"
+                helpText="Leave blank to use the template default minutes when one is configured."
+              />
               <Text as="p" variant="bodyMd" tone="subdued">
                 Current effective labor: {effectiveLaborMinutesLabel}; {effectiveLaborRateLabel}
               </Text>
-            </BlockStack>
-          </BlockStack>
-        </Card>
-
-        <Card>
-          <BlockStack gap="400">
-            <BlockStack gap="100">
-              <Text as="h2" variant="headingMd">Mistake Buffer Override</Text>
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Overrides the global default from Settings for this variant only.
-              </Text>
-            </BlockStack>
-            <Divider />
-            <BlockStack gap="400">
-              <TextField
-                label="Mistake buffer (%)"
-                placeholder={`${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
-                type="number"
-                min={0}
-                max={100}
-                step={0.1}
-                value={draft.mistakeBuffer}
-                onChange={(value) => setDraft((current) => ({ ...current, mistakeBuffer: value }))}
-                autoComplete="off"
-                helpText="Leave blank to use the global default from Settings"
-              />
-              <Text as="p" variant="bodyMd" tone="subdued">
-                {draft.mistakeBuffer
-                  ? formatPct(Number(draft.mistakeBuffer) / 100)
-                  : `${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
-              </Text>
-            </BlockStack>
-          </BlockStack>
-        </Card>
-
-        {assignedProductionTemplate && (
-          <Card>
-            <BlockStack gap="400">
-              <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Template Material Lines</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Override assigned template materials without cloning the template.
-                </Text>
-              </BlockStack>
-              <Divider />
-              {draft.templateMaterialLines.length === 0 ? (
-                <Text as="p" variant="bodyMd" tone="subdued">This template has no material lines.</Text>
-              ) : (
-                <BlockStack gap="300">
-                  {draft.templateMaterialLines.map((line) => (
-                    <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
-                      <BlockStack gap="100">
-                        <InlineStack gap="200" blockAlign="center">
-                          <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                          <Badge tone={line.hasOverride ? "attention" : "info"}>
-                            {line.hasOverride ? "Override active" : "Using template default"}
-                          </Badge>
-                        </InlineStack>
-                        <Text as="p" variant="bodyMd" tone="subdued">
-                          Default: {describeMaterialLine(line)}
-                        </Text>
-                        {line.hasOverride && (
-                          <Text as="p" variant="bodyMd" tone="subdued">
-                            Override: {describeMaterialLine({
-                              costingModel: line.costingModel,
-                              quantity: line.overrideQuantity,
-                              yield: line.overrideYield,
-                              usesPerVariant: line.overrideUsesPerVariant,
-                            })}
-                          </Text>
-                        )}
-                      </BlockStack>
-                      <InlineStack gap="200">
-                        <Button variant="plain" onClick={() => openMaterialOverride(line)}>
-                          {line.hasOverride ? "Edit override" : "Override"}
-                        </Button>
-                        {line.hasOverride && (
-                          <Button variant="plain" onClick={() => resetMaterialOverride(line.templateLineId)}>
-                            Reset
-                          </Button>
-                        )}
-                      </InlineStack>
-                    </InlineStack>
-                  ))}
-                </BlockStack>
-              )}
-            </BlockStack>
-          </Card>
-        )}
-
-        <Card>
-          <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <InlineStack gap="200" blockAlign="center">
-                  <Text as="h2" variant="headingMd">Additional Material Lines</Text>
-                  {draft.materialLines.length > 0 && (
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      {draft.materialLines.length}
+              <details>
+                <summary style={{ cursor: "pointer", fontWeight: 650 }}>Overrides</summary>
+                <div style={{ marginTop: "1rem" }}>
+                  <BlockStack gap="400">
+                    <TextField
+                      label={`Hourly rate (${getCurrencySymbol()})`}
+                      placeholder={
+                        shopDefaultLaborRate
+                          ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
+                          : "Set a variant override or configure a shop default"
+                      }
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={draft.laborRate}
+                      onChange={(value) => setDraft((current) => ({ ...current, laborRate: value }))}
+                      onBlur={() => setDraft((current) => ({ ...current, laborRate: normalizeFixedDecimalInput(current.laborRate) }))}
+                      autoComplete="off"
+                      helpText={laborRateHelpText}
+                    />
+                    <TextField
+                      label="Mistake buffer (%)"
+                      placeholder={`${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.1}
+                      value={draft.mistakeBuffer}
+                      onChange={(value) => setDraft((current) => ({ ...current, mistakeBuffer: value }))}
+                      autoComplete="off"
+                      helpText="Leave blank to use the global default from Settings"
+                    />
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      Effective mistake buffer: {draft.mistakeBuffer
+                        ? formatPct(Number(draft.mistakeBuffer) / 100)
+                        : `${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
                     </Text>
-                  )}
-                </InlineStack>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Add variant-only materials that are not part of the assigned template.
-                </Text>
-              </BlockStack>
-              <Button onClick={() => setAddMaterialOpen(true)} disabled={availableMaterials.length === draft.materialLines.length}>
-                Add material
-              </Button>
-            </InlineStack>
-            <Divider />
-            {draft.materialLines.length === 0 ? (
-              <Text as="p" variant="bodyMd" tone="subdued">No variant-only material lines.</Text>
-            ) : (
-              <BlockStack gap="400">
-                {[
-                  {
-                    heading: "Production materials",
-                    lines: additionalProductionMaterialLines,
-                    emptyText: "No additional production materials.",
-                  },
-                  {
-                    heading: "Shipping materials",
-                    lines: additionalShippingMaterialLines,
-                    emptyText: "No additional shipping materials.",
-                  },
-                ].map((section) => (
-                  <BlockStack key={section.heading} gap="200">
-                    <Text as="h3" variant="headingSm">{section.heading}</Text>
-                    {section.lines.length === 0 ? (
-                      <Text as="p" variant="bodyMd" tone="subdued">{section.emptyText}</Text>
-                    ) : (
-                      <BlockStack gap="300">
-                        {section.lines.map((line: SerializedMaterialLine) => (
-                          <InlineStack key={line.id} align="space-between" blockAlign="center">
-                            <BlockStack gap="100">
-                              <InlineStack gap="200" blockAlign="center">
-                                <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                                <Badge tone={line.materialType === "shipping" ? "info" : "success"}>
-                                  {line.materialType === "shipping" ? "Shipping" : "Production"}
-                                </Badge>
-                              </InlineStack>
-                              <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
-                            </BlockStack>
-                            <Button variant="plain" tone="critical" onClick={() => removeAdditionalMaterialLine(line.id)}>
-                              Remove
-                            </Button>
-                          </InlineStack>
-                        ))}
-                      </BlockStack>
-                    )}
                   </BlockStack>
-                ))}
-              </BlockStack>
-            )}
-          </BlockStack>
-        </Card>
-
-        {assignedProductionTemplate && (
-          <Card>
-            <BlockStack gap="400">
-              <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Template Equipment Lines</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Override assigned template equipment values per variant.
-                </Text>
-              </BlockStack>
-              <Divider />
-              {draft.templateEquipmentLines.length === 0 ? (
-                <Text as="p" variant="bodyMd" tone="subdued">This template has no equipment lines.</Text>
-              ) : (
-                <BlockStack gap="300">
-                  {draft.templateEquipmentLines.map((line) => (
-                    <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
-                      <BlockStack gap="100">
-                        <InlineStack gap="200" blockAlign="center">
-                          <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
-                          <Badge tone={line.hasOverride ? "attention" : "info"}>
-                            {line.hasOverride ? "Override active" : "Using template default"}
-                          </Badge>
-                        </InlineStack>
-                        <Text as="p" variant="bodyMd" tone="subdued">
-                          Default: {describeEquipmentLine(line)}
-                        </Text>
-                        {line.hasOverride && (
-                          <Text as="p" variant="bodyMd" tone="subdued">
-                            Override: {describeEquipmentLine({
-                              usageMode: line.overrideUsageMode,
-                              minutes: line.overrideMinutes,
-                              uses: line.overrideUses,
-                              yieldDurationMinutes: line.overrideYieldDurationMinutes,
-                              yieldUses: line.overrideYieldUses,
-                              yieldQuantity: line.overrideYieldQuantity,
-                            })}
-                          </Text>
-                        )}
-                      </BlockStack>
-                      <InlineStack gap="200">
-                        <Button variant="plain" onClick={() => openEquipmentOverride(line)}>
-                          {line.hasOverride ? "Edit override" : "Override"}
-                        </Button>
-                        {line.hasOverride && (
-                          <Button variant="plain" onClick={() => resetEquipmentOverride(line.templateLineId)}>
-                            Reset
-                          </Button>
-                        )}
-                      </InlineStack>
-                    </InlineStack>
-                  ))}
-                </BlockStack>
-              )}
+                </div>
+              </details>
             </BlockStack>
-          </Card>
-        )}
-
-        <Card>
-          <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <InlineStack gap="200" blockAlign="center">
-                  <Text as="h2" variant="headingMd">Additional Equipment Lines</Text>
-                  {draft.equipmentLines.length > 0 && (
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      {draft.equipmentLines.length}
-                    </Text>
-                  )}
-                </InlineStack>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Add variant-only equipment usage outside the assigned template.
-                </Text>
-              </BlockStack>
-              <Button onClick={() => setAddEquipmentOpen(true)} disabled={availableEquipment.length === draft.equipmentLines.length}>
-                Add equipment
-              </Button>
-            </InlineStack>
-            <Divider />
-            {draft.equipmentLines.length === 0 ? (
-              <Text as="p" variant="bodyMd" tone="subdued">No variant-only equipment lines.</Text>
-            ) : (
-              <BlockStack gap="300">
-                {draft.equipmentLines.map((line: SerializedEquipmentLine) => (
-                  <InlineStack key={line.id} align="space-between" blockAlign="center">
-                    <BlockStack gap="100">
-                      <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
-                      <Text as="p" variant="bodyMd" tone="subdued">{describeEquipmentLine(line)}</Text>
-                    </BlockStack>
-                    <Button variant="plain" tone="critical" onClick={() => removeAdditionalEquipmentLine(line.id)}>
-                      Remove
-                    </Button>
-                  </InlineStack>
-                ))}
-              </BlockStack>
-            )}
           </BlockStack>
         </Card>
 
