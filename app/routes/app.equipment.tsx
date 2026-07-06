@@ -1,5 +1,5 @@
 import { jsonResponse } from "~/utils/json-response.server";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
@@ -20,6 +20,17 @@ const equipmentFormSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   purchaseLink: z.union([z.literal(""), z.url({ message: "Equipment purchase link must be a valid URL." })]),
 });
+
+const dialogFieldStyle: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "0.75rem",
+  borderRadius: "0.75rem",
+  border: "1px solid var(--p-color-border, #d2d5d8)",
+  background: "var(--p-color-bg-surface, #fff)",
+  color: "var(--p-color-text, #303030)",
+  font: "inherit",
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -611,14 +622,7 @@ export default function EquipmentPage() {
               value={form.notes}
               onChange={(event) => updateForm("notes", event.currentTarget.value)}
                 style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  padding: "0.75rem",
-                  borderRadius: "0.75rem",
-                  border: "1px solid var(--p-color-border)",
-                  background: "var(--p-color-bg-surface, #fff)",
-                  color: "var(--p-color-text, #303030)",
-                  font: "inherit",
+                  ...dialogFieldStyle,
                   resize: "vertical",
                 }}
               />

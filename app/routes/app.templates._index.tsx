@@ -1,5 +1,5 @@
 import { jsonResponse } from "~/utils/json-response.server";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { z } from "zod";
@@ -15,6 +15,17 @@ const templateCreateSchema = z.object({
 const templateIdSchema = z.object({
   id: z.string().trim().cuid("Template id is invalid."),
 });
+
+const dialogFieldStyle: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "0.75rem",
+  borderRadius: "0.75rem",
+  border: "1px solid var(--p-color-border, #d2d5d8)",
+  background: "var(--p-color-bg-surface, #fff)",
+  color: "var(--p-color-text, #303030)",
+  font: "inherit",
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -436,13 +447,7 @@ export default function TemplatesPage() {
               id="template-type"
               value={newType}
               onChange={(event) => setNewType(event.currentTarget.value as "production" | "shipping")}
-              style={{
-                width: "100%",
-                padding: "0.75rem",
-                borderRadius: "0.75rem",
-                border: "1px solid var(--p-color-border)",
-                font: "inherit",
-              }}
+              style={dialogFieldStyle}
             >
               <option value="production">Production template</option>
               <option value="shipping">Shipping template</option>
@@ -457,11 +462,8 @@ export default function TemplatesPage() {
               value={newDesc}
               onChange={(event) => setNewDesc(event.currentTarget.value)}
               style={{
-                width: "100%",
-                padding: "0.75rem",
-                borderRadius: "0.75rem",
-                border: "1px solid var(--p-color-border)",
-                font: "inherit",
+                ...dialogFieldStyle,
+                resize: "vertical",
               }}
             />
           </div>

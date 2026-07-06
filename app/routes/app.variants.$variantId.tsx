@@ -283,6 +283,14 @@ const promoteTemplateSchema = z.object({
   equipmentLineKeys: z.array(z.string()),
 });
 
+const promoteShippingTemplateSchema = z.object({
+  name: z.string().trim().min(1, "Template name is required."),
+  description: z.string().trim().optional(),
+  assignBack: z.boolean(),
+  setAsProductionDefault: z.boolean(),
+  materialLineKeys: z.array(z.string()).min(1, "Choose at least one shipping material line to include."),
+});
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -1652,6 +1660,215 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     });
   }
 
+  if (intent === "promote-shipping-template") {
+    const parsed = promoteShippingTemplateSchema.safeParse({
+      name: formData.get("name")?.toString() ?? "",
+      description: formData.get("description")?.toString() ?? "",
+      assignBack: formData.get("assignBack") === "on",
+      setAsProductionDefault: formData.get("setAsProductionDefault") === "on",
+      materialLineKeys: formData.getAll("materialLineKey").map((value) => value.toString()),
+    });
+
+    if (!parsed.success) {
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid shipping template." }, { status: 400 });
+    }
+
+    const promotion = parsed.data;
+    const selectedMaterialLineKeys = new Set(promotion.materialLineKeys);
+    const sourceConfig = await prisma.variantCostConfig.findFirst({
+      where: { variantId, shopId },
+      include: {
+        productionTemplate: { select: { id: true, type: true } },
+        shippingTemplate: {
+          include: {
+            materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+          },
+        },
+        materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+        equipmentLines: { select: { id: true } },
+      },
+    });
+
+    if (!sourceConfig) {
+      return jsonResponse({ ok: false, message: "Save a variant configuration before creating a shipping template from it." }, { status: 400 });
+    }
+
+    const promotedShippingLines: Array<{
+      materialId: string;
+      materialName: string;
+      quantity: Prisma.Decimal;
+      yield: Prisma.Decimal | null;
+      usesPerVariant: Prisma.Decimal | null;
+    }> = [];
+    const retainedTemplateShippingLines: Array<{
+      materialId: string;
+      quantity: Prisma.Decimal;
+      yield: Prisma.Decimal | null;
+      usesPerVariant: Prisma.Decimal | null;
+    }> = [];
+
+    for (const line of sourceConfig.shippingTemplate?.materialLines ?? []) {
+      const effectiveLine = {
+        materialId: line.materialId,
+        quantity: line.quantity,
+        yield: line.yield,
+        usesPerVariant: line.usesPerVariant,
+      };
+      if (selectedMaterialLineKeys.has(`template:${line.id}`)) {
+        promotedShippingLines.push({
+          ...effectiveLine,
+          materialName: line.material.name,
+        });
+      } else {
+        retainedTemplateShippingLines.push(effectiveLine);
+      }
+    }
+
+    for (const line of sourceConfig.materialLines) {
+      if (line.templateLineId || line.material.type !== "shipping" || !selectedMaterialLineKeys.has(`variant:${line.id}`)) continue;
+      promotedShippingLines.push({
+        materialId: line.materialId,
+        materialName: line.material.name,
+        quantity: line.quantity,
+        yield: line.yield,
+        usesPerVariant: line.usesPerVariant,
+      });
+    }
+
+    const duplicateMaterialNames = promotedShippingLines
+      .filter((line, index, lines) => lines.findIndex((candidate) => candidate.materialId === line.materialId) !== index)
+      .map((line) => line.materialName);
+    if (duplicateMaterialNames.length > 0) {
+      return jsonResponse(
+        {
+          ok: false,
+          message: `Cannot create a shipping template from duplicate shipping materials yet: ${[...new Set(duplicateMaterialNames)].join(", ")}.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    const promotedVariantShippingLineIds = sourceConfig.materialLines
+      .filter((line) => !line.templateLineId && line.material.type === "shipping" && selectedMaterialLineKeys.has(`variant:${line.id}`))
+      .map((line) => line.id);
+    const retainedMaterialLineCount = promotion.assignBack
+      ? sourceConfig.materialLines.filter((line) => !promotedVariantShippingLineIds.includes(line.id)).length +
+        retainedTemplateShippingLines.length
+      : sourceConfig.materialLines.length;
+    const retainedEquipmentLineCount = sourceConfig.equipmentLines.length;
+
+    const template = await prisma.$transaction(async (tx) => {
+      const createdTemplate = await tx.costTemplate.create({
+        data: {
+          shopId,
+          name: promotion.name,
+          type: "shipping",
+          description: promotion.description || null,
+        },
+      });
+
+      await tx.costTemplateMaterialLine.createMany({
+        data: promotedShippingLines.map((line) => ({
+          templateId: createdTemplate.id,
+          materialId: line.materialId,
+          quantity: line.quantity,
+          yield: line.yield,
+          usesPerVariant: line.usesPerVariant,
+        })),
+      });
+
+      if (promotion.assignBack) {
+        await tx.variantCostConfig.updateMany({
+          where: { id: sourceConfig.id, shopId },
+          data: {
+            shippingTemplateId: createdTemplate.id,
+            lineItemCount: retainedMaterialLineCount + retainedEquipmentLineCount,
+          },
+        });
+
+        await tx.variantMaterialLine.deleteMany({
+          where: {
+            configId: sourceConfig.id,
+            shopId,
+            id: { in: promotedVariantShippingLineIds },
+          },
+        });
+
+        if (retainedTemplateShippingLines.length > 0) {
+          await tx.variantMaterialLine.createMany({
+            data: retainedTemplateShippingLines.map((line) => ({
+              shopId,
+              configId: sourceConfig.id,
+              materialId: line.materialId,
+              quantity: line.quantity,
+              yield: line.yield,
+              usesPerVariant: line.usesPerVariant,
+            })),
+          });
+        }
+      }
+
+      if (promotion.setAsProductionDefault && sourceConfig.productionTemplateId) {
+        await tx.costTemplate.updateMany({
+          where: { id: sourceConfig.productionTemplateId, shopId, type: { not: "shipping" } },
+          data: { defaultShippingTemplateId: createdTemplate.id },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "CostTemplate",
+          entityId: createdTemplate.id,
+          action: "SHIPPING_TEMPLATE_CREATED_FROM_VARIANT",
+          actor: "merchant",
+          payload: {
+            variantId,
+            materialLineCount: promotedShippingLines.length,
+            assignedBack: promotion.assignBack,
+            setAsProductionDefault: promotion.setAsProductionDefault,
+          },
+        },
+      });
+
+      if (promotion.assignBack || promotion.setAsProductionDefault) {
+        await tx.auditLog.create({
+          data: {
+            shopId,
+            entity: "VariantCostConfig",
+            entityId: sourceConfig.id,
+            action: "SHIPPING_TEMPLATE_PROMOTION_APPLIED",
+            actor: "merchant",
+            payload: {
+              templateId: createdTemplate.id,
+              assignedBack: promotion.assignBack,
+              setAsProductionDefault: promotion.setAsProductionDefault,
+              removedMaterialLineCount: promotedVariantShippingLineIds.length,
+            },
+          },
+        });
+      }
+
+      return createdTemplate;
+    });
+
+    const cleanupMessage = promotion.assignBack
+      ? ` Assigned to this variant and cleaned up ${promotedVariantShippingLineIds.length} shipping material row(s).`
+      : "";
+    const defaultMessage = promotion.setAsProductionDefault ? " Set as the current production template's default shipping template." : "";
+    const retainedMessage =
+      promotion.assignBack && retainedMaterialLineCount + retainedEquipmentLineCount > 0
+        ? ` ${retainedMaterialLineCount + retainedEquipmentLineCount} variant-specific row(s) remain for review.`
+        : "";
+
+    return jsonResponse({
+      ok: true,
+      message: `Shipping template "${template.name}" created.${cleanupMessage}${defaultMessage}${retainedMessage}`,
+      savedAt: new Date().toISOString(),
+      templateId: template.id,
+    });
+  }
+
   if (intent === "assign-template") {
     const templateId = formData.get("templateId")?.toString() ?? "";
     await requireTemplate(templateId);
@@ -2305,6 +2522,14 @@ export default function VariantDetailPage() {
     materialLineKeys: [] as string[],
     equipmentLineKeys: [] as string[],
   });
+  const [promoteShippingDialogOpen, setPromoteShippingDialogOpen] = useState(false);
+  const [promoteShippingForm, setPromoteShippingForm] = useState({
+    name: `${variant.productTitle} - ${variant.title} Shipping`,
+    description: "",
+    assignBack: false,
+    setAsProductionDefault: false,
+    materialLineKeys: [] as string[],
+  });
 
   const [baseDraft, setBaseDraft] = useState(() => buildVariantDraft(config));
   const [draft, setDraft] = useState(() => buildVariantDraft(config));
@@ -2446,6 +2671,20 @@ export default function VariantDetailPage() {
       description: describeEquipmentLine(line),
     })),
   ];
+  const promotableShippingMaterialLines = [
+    ...shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => ({
+      key: `template:${line.templateLineId}`,
+      name: line.materialName,
+      source: "Shipping template",
+      description: describeMaterialLine(line),
+    })),
+    ...additionalShippingMaterialLines.map((line: SerializedMaterialLine) => ({
+      key: `variant:${line.id}`,
+      name: line.materialName,
+      source: "Variant",
+      description: describeMaterialLine(line),
+    })),
+  ];
 
   useEffect(() => {
     if (!saveFetcher.data?.ok || !saveFetcher.data.savedAt || saveFetcher.data.savedAt === handledSaveRef.current) return;
@@ -2462,6 +2701,7 @@ export default function VariantDetailPage() {
     preCopyDraftStateRef.current = loadedVariantDraftState;
     setCopyDialogOpen(false);
     setPromoteDialogOpen(false);
+    setPromoteShippingDialogOpen(false);
     setSelectedCopySourceId("");
     setCopySourceSearchValue("");
     revalidator.revalidate();
@@ -2472,6 +2712,7 @@ export default function VariantDetailPage() {
     handledPromoteRef.current = promoteFetcher.data.savedAt;
     preCopyDraftStateRef.current = loadedVariantDraftState;
     setPromoteDialogOpen(false);
+    setPromoteShippingDialogOpen(false);
     revalidator.revalidate();
   }, [loadedVariantDraftState, promoteFetcher.data, revalidator]);
 
@@ -2582,6 +2823,8 @@ export default function VariantDetailPage() {
     setAssignTemplateOpen(false);
     setAssignShippingTemplateOpen(false);
     setCopyDialogOpen(false);
+    setPromoteDialogOpen(false);
+    setPromoteShippingDialogOpen(false);
     setSelectedCopySourceId("");
     setCopySourceSearchValue("");
     setMaterialOverrideTargetId(null);
@@ -2632,6 +2875,20 @@ export default function VariantDetailPage() {
     promoteFetcher.submit(formData, { method: "post" });
   }
 
+  function promoteVariantToShippingTemplate() {
+    if (isDirty) return;
+    const formData = new FormData();
+    formData.append("intent", "promote-shipping-template");
+    formData.append("name", promoteShippingForm.name);
+    formData.append("description", promoteShippingForm.description);
+    if (promoteShippingForm.assignBack) formData.append("assignBack", "on");
+    if (promoteShippingForm.setAsProductionDefault) formData.append("setAsProductionDefault", "on");
+    for (const key of promoteShippingForm.materialLineKeys) {
+      formData.append("materialLineKey", key);
+    }
+    promoteFetcher.submit(formData, { method: "post" });
+  }
+
   function togglePromoteMaterialLine(key: string) {
     setPromoteForm((current) => ({
       ...current,
@@ -2647,6 +2904,15 @@ export default function VariantDetailPage() {
       equipmentLineKeys: current.equipmentLineKeys.includes(key)
         ? current.equipmentLineKeys.filter((item) => item !== key)
         : [...current.equipmentLineKeys, key],
+    }));
+  }
+
+  function togglePromoteShippingMaterialLine(key: string) {
+    setPromoteShippingForm((current) => ({
+      ...current,
+      materialLineKeys: current.materialLineKeys.includes(key)
+        ? current.materialLineKeys.filter((item) => item !== key)
+        : [...current.materialLineKeys, key],
     }));
   }
 
@@ -2908,24 +3174,40 @@ export default function VariantDetailPage() {
               <BlockStack gap="100">
                 <Text as="h2" variant="headingMd">Create template from variant</Text>
                 <Text as="p" variant="bodyMd" tone="subdued">
-                  Turn this saved variant setup into a reusable production cost template.
+                  Turn this saved variant setup into reusable production or shipping cost templates.
                 </Text>
               </BlockStack>
-              <Button
-                onClick={() => {
-                  setPromoteForm((current) => ({
-                    ...current,
-                    name: `${variant.productTitle} - ${variant.title}`,
-                    includeDefaultShippingTemplate: Boolean(effectiveTemplateSelection.shippingTemplateId),
-                    materialLineKeys: promotableMaterialLines.map((line) => line.key),
-                    equipmentLineKeys: promotableEquipmentLines.map((line) => line.key),
-                  }));
-                  setPromoteDialogOpen(true);
-                }}
-                disabled={!config || isDirty}
-              >
-                Create template
-              </Button>
+              <InlineStack gap="200">
+                <Button
+                  onClick={() => {
+                    setPromoteForm((current) => ({
+                      ...current,
+                      name: `${variant.productTitle} - ${variant.title}`,
+                      includeDefaultShippingTemplate: Boolean(effectiveTemplateSelection.shippingTemplateId),
+                      materialLineKeys: promotableMaterialLines.map((line) => line.key),
+                      equipmentLineKeys: promotableEquipmentLines.map((line) => line.key),
+                    }));
+                    setPromoteDialogOpen(true);
+                  }}
+                  disabled={!config || isDirty}
+                >
+                  Production template
+                </Button>
+                <Button
+                  onClick={() => {
+                    setPromoteShippingForm((current) => ({
+                      ...current,
+                      name: `${variant.productTitle} - ${variant.title} Shipping`,
+                      setAsProductionDefault: Boolean(effectiveTemplateSelection.productionTemplateId),
+                      materialLineKeys: promotableShippingMaterialLines.map((line) => line.key),
+                    }));
+                    setPromoteShippingDialogOpen(true);
+                  }}
+                  disabled={!config || isDirty || promotableShippingMaterialLines.length === 0}
+                >
+                  Shipping template
+                </Button>
+              </InlineStack>
             </InlineStack>
             {!config ? (
               <Text as="p" variant="bodyMd" tone="subdued">
@@ -3851,7 +4133,7 @@ export default function VariantDetailPage() {
                     }))
                   }
                 />
-                <span>Use current shipping template as the new template default</span>
+                <span>Set this production template&apos;s default shipping template to the current shipping template</span>
               </label>
               <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
                 <input
@@ -3866,6 +4148,87 @@ export default function VariantDetailPage() {
               <Text as="p" variant="bodyMd" tone="subdued">
                 Exact promoted variant-only rows and stale previous-template overrides will be removed; any remaining
                 variant-specific rows will be reported for review.
+              </Text>
+            ) : null}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={promoteShippingDialogOpen}
+        onClose={() => setPromoteShippingDialogOpen(false)}
+        title="Create shipping template from variant"
+        primaryAction={{
+          content: "Create shipping template",
+          loading: promoteFetcher.state !== "idle",
+          disabled: isDirty || !promoteShippingForm.name.trim() || promoteShippingForm.materialLineKeys.length === 0,
+          onAction: promoteVariantToShippingTemplate,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setPromoteShippingDialogOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {promoteFetcher.data && !promoteFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{promoteFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Template name"
+              value={promoteShippingForm.name}
+              onChange={(value) => setPromoteShippingForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <TextField
+              label="Description"
+              value={promoteShippingForm.description}
+              onChange={(value) => setPromoteShippingForm((current) => ({ ...current, description: value }))}
+              autoComplete="off"
+            />
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Select the effective shipping material lines to include in the new shipping template.
+              </Text>
+              {promotableShippingMaterialLines.map((line) => (
+                <label key={line.key} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={promoteShippingForm.materialLineKeys.includes(line.key)}
+                    onChange={() => togglePromoteShippingMaterialLine(line.key)}
+                  />
+                  <span>
+                    <span>{line.name}</span>
+                    <span style={{ color: "#616161" }}> ({line.source}: {line.description})</span>
+                  </span>
+                </label>
+              ))}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteShippingForm.assignBack}
+                  onChange={() => setPromoteShippingForm((current) => ({ ...current, assignBack: !current.assignBack }))}
+                />
+                <span>Assign the new shipping template back to this variant</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteShippingForm.setAsProductionDefault && Boolean(effectiveTemplateSelection.productionTemplateId)}
+                  disabled={!effectiveTemplateSelection.productionTemplateId}
+                  onChange={() =>
+                    setPromoteShippingForm((current) => ({
+                      ...current,
+                      setAsProductionDefault: !current.setAsProductionDefault,
+                    }))
+                  }
+                />
+                <span>Set as the current production template&apos;s default shipping template</span>
+              </label>
+            </BlockStack>
+            {promoteShippingForm.assignBack ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Selected variant-only shipping rows will be removed after promotion; excluded inherited rows will be
+                preserved as variant-specific rows.
               </Text>
             ) : null}
           </BlockStack>
