@@ -1217,6 +1217,28 @@ async function rebuildPaymentSafeReportingPeriod(input: {
       },
       data: { periodId: period.id },
     });
+    await tx.orderSettlement.updateMany({
+      where: {
+        shopId: input.shopId,
+        snapshot: {
+          createdAt: { gte: period.startDate, lt: period.endDate },
+        },
+      },
+      data: { periodId: period.id },
+    });
+    await tx.orderSettlement.updateMany({
+      where: {
+        shopId: input.shopId,
+        periodId: period.id,
+        snapshot: {
+          OR: [
+            { createdAt: { lt: period.startDate } },
+            { createdAt: { gte: period.endDate } },
+          ],
+        },
+      },
+      data: { periodId: null },
+    });
     await tx.analyticalRecalculationRun.deleteMany({ where: { shopId: input.shopId, periodId: period.id } });
   });
 

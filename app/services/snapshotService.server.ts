@@ -3,6 +3,7 @@ import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
 import { resolveCosts, type CostResult, type PodCostResolution } from "./costEngine.server";
 import { reconcileSnapshotPackaging } from "./packaging.server";
+import { detectAndUpsertExternalSettlementReview } from "./orderSettlement.server";
 import { decryptProviderCredential } from "./providerCredentials.server";
 import { listPrintifyProducts } from "./printify.server";
 import { recomputeTaxOffsetCache } from "./taxOffsetCache.server";
@@ -41,6 +42,33 @@ export type ShopifyOrderPayload = {
   order_number?: string | number | null;
   created_at?: string | null;
   createdAt?: string | null;
+  source_name?: string | null;
+  landing_site?: string | null;
+  referring_site?: string | null;
+  financial_status?: string | null;
+  fulfillment_status?: string | null;
+  currency?: string | null;
+  presentment_currency?: string | null;
+  total_price?: string | number | null;
+  current_total_price?: string | number | null;
+  subtotal_price?: string | number | null;
+  current_subtotal_price?: string | number | null;
+  total_received?: string | number | null;
+  total_outstanding?: string | number | null;
+  payment_gateway_names?: string[] | null;
+  gateway?: string | null;
+  total_price_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+      currency_code?: string | null;
+    } | null;
+  } | null;
+  current_total_price_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+      currency_code?: string | null;
+    } | null;
+  } | null;
   total_tax?: string | number | null;
   current_total_tax?: string | number | null;
   total_tax_set?: {
@@ -805,6 +833,16 @@ export async function createSnapshot(
       }
 
       await recomputeTaxOffsetCache(shopId, tx);
+
+      if (typeof tx.orderSettlement?.upsert === "function") {
+        await detectAndUpsertExternalSettlementReview({
+          shopId,
+          snapshotId: snapshot.id,
+          periodId: metadata.periodId ?? null,
+          order,
+          db: tx,
+        });
+      }
 
       await tx.auditLog.create({
         data: {

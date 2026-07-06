@@ -727,11 +727,46 @@ model OrderSnapshot {
   lines OrderSnapshotLine[]
   packageAllocations OrderPackageAllocation[]
   packagingReviewItems PackagingReviewItem[]
+  settlements OrderSettlement[]
 
   @@unique([shopId, shopifyOrderId])
   @@index([shopId])
   @@index([shopId, periodId])
   @@index([shopId, importBatchId])
+}
+
+model OrderSettlement {
+  id               String   @id @default(cuid())
+  shopId           String
+  snapshotId       String?
+  snapshot         OrderSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: SetNull)
+  periodId         String?
+  period           ReportingPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  shopifyOrderId   String
+  orderNumber      String?
+  source           String   @default("manual")
+  status           String   @default("needs_review")
+  grossOrderAmount Decimal  @db.Decimal(10, 2)
+  shopifyPaidAmount Decimal? @db.Decimal(10, 2)
+  amountReceived   Decimal? @db.Decimal(10, 2)
+  feeAmount        Decimal  @default(0) @db.Decimal(10, 2)
+  currency         String   @default("USD")
+  paidAt           DateTime?
+  referenceId      String?
+  notes            String?
+  detectedReason   String?
+  confirmedAt      DateTime?
+  confirmedBy      String?
+  ignoredAt        DateTime?
+  ignoredBy        String?
+  ignoreReason     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([shopId, shopifyOrderId])
+  @@index([shopId, status])
+  @@index([shopId, periodId])
+  @@index([snapshotId])
 }
 
 model OrderPackageAllocation {
@@ -934,6 +969,7 @@ model ReportingPeriod {
   taxTrueUps       TaxTrueUp[]
   appliedTrueUps   TaxTrueUp[]      @relation("AppliedTaxTrueUps")
   shopifyCharges   ShopifyChargeTransaction[]
+  settlements      OrderSettlement[]
   recalculationRuns AnalyticalRecalculationRun[]
 
   @@unique([shopId, shopifyPayoutId])

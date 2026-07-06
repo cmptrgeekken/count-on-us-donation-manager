@@ -15,9 +15,11 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
     totalNetContribution: "90.00",
     salesTaxCollected: "0.00",
     shopifyCharges: "12.00",
+    externalSettlementFees: "0.00",
     donationPool: "78.00",
     taxTrueUpSurplusApplied: "0.00",
     taxTrueUpShortfallApplied: "0.00",
+    artistPayoutTotal: "0.00",
     allocations: [
       {
         causeId: "cause-1",
@@ -49,6 +51,7 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
       processedAt: "2026-03-07T00:00:00.000Z",
     },
   ],
+  externalSettlements: [],
   packaging: {
     allocations: [],
     reviewItems: [],
@@ -76,6 +79,8 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
       ],
     },
   ],
+  artistAllocations: [],
+  artistPayments: [],
   causePayables: [
     {
       causeId: "cause-1",
@@ -95,6 +100,7 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
       ],
     },
   ],
+  artistPayables: [],
   taxTrueUps: [],
   carryForwardTrueUps: [],
   activeCauses: [
@@ -103,6 +109,7 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
       name: "Playwright Cause",
     },
   ],
+  activeArtists: [],
 };
 
 describe("reporting exports", () => {
