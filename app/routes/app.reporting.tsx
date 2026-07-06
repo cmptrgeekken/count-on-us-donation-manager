@@ -2,7 +2,6 @@ import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRevalidator, useRouteError, useSearchParams } from "@remix-run/react";
-import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { MetricCard, SectionHeader, StatusBanners, WorkflowTabs } from "../components/admin-ui";
 import { prisma } from "../db.server";
@@ -34,10 +33,29 @@ import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { parseOptionalNonNegativeMoney } from "../utils/money-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 
-const ZERO = new Prisma.Decimal(0);
+function moneyNumber(value: string | null | undefined) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
 
 function floorCurrency(value: string) {
-  return new Prisma.Decimal(value).toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR).toString();
+  return (Math.floor(moneyNumber(value) * 100) / 100).toFixed(2);
+}
+
+function subtractCurrency(left: string, right: string) {
+  return floorCurrency((moneyNumber(left) - moneyNumber(right)).toString());
+}
+
+function sumCurrency(values: string[]) {
+  return values.reduce((sum, value) => sum + moneyNumber(value), 0).toFixed(2);
+}
+
+function isGreaterThanZero(value: string | null | undefined) {
+  return moneyNumber(value) > 0;
+}
+
+function isLessThanZero(value: string | null | undefined) {
+  return moneyNumber(value) < 0;
 }
 
 function formatTaxDeductionMode(mode: string | null | undefined) {
@@ -421,10 +439,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
+    const amountReceived = parseOptionalNonNegativeMoney(parsed.data.amountReceived, "Amount received");
+    if (!amountReceived) {
+      return jsonResponse(
+        {
+          ok: false,
+          message: "Amount received is required.",
+          fieldErrors: { amountReceived: ["Amount received is required."] },
+        },
+        { status: 400 },
+      );
+    }
+
     await confirmOrderSettlement({
       shopId,
       settlementId: parsed.data.settlementId,
-      amountReceived: new Prisma.Decimal(parsed.data.amountReceived),
+      amountReceived,
       paidAt: parsed.data.paidAt ? new Date(parsed.data.paidAt) : null,
       source: parsed.data.source ?? "",
       referenceId: parsed.data.referenceId ?? "",
@@ -638,9 +668,9 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       );
     }
 
-    let actualTax: Prisma.Decimal | null;
+    let actualTax;
     try {
-      actualTax = parseOptionalNonNegativeMoney(parsed.data.actualTax, "Actual tax");
+      actualTax = parseOptionalNonNegativeMoney(parsed.data.actualTax, "Actual tax") ?? parseOptionalNonNegativeMoney("0", "Actual tax");
     } catch (error) {
       if (error instanceof Response) {
         const message = await error.text();
@@ -654,6 +684,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         );
       }
       throw error;
+    }
+    if (!actualTax) {
+      return jsonResponse(
+        {
+          ok: false,
+          message: "Actual tax is required.",
+          fieldErrors: { actualTax: ["Actual tax is required."] },
+        },
+        { status: 400 },
+      );
     }
 
     const redistributions = Array.from(formData.entries())
@@ -672,7 +712,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     try {
       await recordTaxTrueUp(shopId, {
         periodId: parsed.data.periodId,
-        actualTax: actualTax ?? ZERO,
+        actualTax,
         filedAt: new Date(parsed.data.filedAt),
         redistributionNotes: parsed.data.redistributionNotes ?? "",
         confirmShortfall: parsed.data.confirmShortfall === "on",
@@ -882,28 +922,25 @@ export default function ReportingPage() {
 
   const allocationRows: AllocationRow[] = summary
     ? summary.track1.allocations.map((allocation: AllocationRow) => {
-        const remaining = new Prisma.Decimal(allocation.allocated)
-          .sub(new Prisma.Decimal(allocation.disbursed))
-          .toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
         return {
           causeId: allocation.causeId,
           causeName: allocation.causeName,
           is501c3: allocation.is501c3,
           allocated: allocation.allocated,
           disbursed: allocation.disbursed,
-          remaining: remaining.toString(),
+          remaining: subtractCurrency(allocation.allocated, allocation.disbursed),
           details: allocation.details ?? [],
         };
       })
     : [];
   const causePayables: CausePayableRow[] = summary?.causePayables ?? [];
   const disbursementCauseOptions = causePayables.filter((allocation) =>
-    new Prisma.Decimal(allocation.totalOutstanding).greaterThan(0),
+    isGreaterThanZero(allocation.totalOutstanding),
   );
   const artistAllocations: ArtistAllocationRow[] = summary?.artistAllocations ?? [];
   const artistPayables: ArtistPayableRow[] = summary?.artistPayables ?? [];
   const artistPaymentArtistOptions = artistPayables.filter((allocation) =>
-    new Prisma.Decimal(allocation.totalOutstanding).greaterThan(0),
+    isGreaterThanZero(allocation.totalOutstanding),
   );
   const disbursements: DisbursementRow[] = summary?.disbursements ?? [];
   const artistPayments: ArtistPaymentRow[] = summary?.artistPayments ?? [];
@@ -911,7 +948,7 @@ export default function ReportingPage() {
   const externalSettlements: ExternalSettlementRow[] = summary?.externalSettlements ?? [];
   const unresolvedExternalSettlements = externalSettlements.filter((settlement) => settlement.status === "needs_review");
   const confirmedExternalSettlements = externalSettlements.filter((settlement) => settlement.status === "confirmed");
-  const externalSettlementFeesArePositive = new Prisma.Decimal(summary?.track1.externalSettlementFees ?? "0").greaterThan(0);
+  const externalSettlementFeesArePositive = isGreaterThanZero(summary?.track1.externalSettlementFees ?? "0");
   const recalculationSummary = analyticalRecalculationRun?.summary ?? null;
   const disbursementOptions = disbursementCauseOptions.map<DisbursementOption>((allocation) => ({
     causeId: allocation.causeId,
@@ -971,18 +1008,14 @@ export default function ReportingPage() {
     artistPaymentOptions[0] ??
     null;
   const selectedArtistPaymentTotalOutstandingAmount = floorCurrency(selectedArtistPaymentOption?.totalOutstanding ?? "0");
-  const totalCauseOutstanding = causePayables
-    .reduce((sum, payable) => sum.add(new Prisma.Decimal(payable.totalOutstanding)), ZERO)
-    .toString();
-  const totalArtistOutstanding = artistPayables
-    .reduce((sum, payable) => sum.add(new Prisma.Decimal(payable.totalOutstanding)), ZERO)
-    .toString();
+  const totalCauseOutstanding = sumCurrency(causePayables.map((payable) => payable.totalOutstanding));
+  const totalArtistOutstanding = sumCurrency(artistPayables.map((payable) => payable.totalOutstanding));
   const overdueCauseCount = causePayables.filter((payable) => payable.overdue).length;
   const overdueArtistCount = artistPayables.filter((payable) => payable.overdue).length;
-  const donationPoolIsNegative = new Prisma.Decimal(summary.track1.donationPool).lessThan(0);
-  const shopifyChargesArePositive = new Prisma.Decimal(summary.track1.shopifyCharges).greaterThan(0);
-  const artistPayoutsArePositive = new Prisma.Decimal(summary.track1.artistPayoutTotal ?? "0").greaterThan(0);
-  const trueUpShortfallIsPositive = new Prisma.Decimal(summary.track1.taxTrueUpShortfallApplied).greaterThan(0);
+  const donationPoolIsNegative = isLessThanZero(summary.track1.donationPool);
+  const shopifyChargesArePositive = isGreaterThanZero(summary.track1.shopifyCharges);
+  const artistPayoutsArePositive = isGreaterThanZero(summary.track1.artistPayoutTotal ?? "0");
+  const trueUpShortfallIsPositive = isGreaterThanZero(summary.track1.taxTrueUpShortfallApplied);
   const selectCauseForPayment = (causeId: string) => {
     setSelectedDisbursementCauseId(causeId);
     setActiveReportingTab("cause-payments");
@@ -1925,16 +1958,14 @@ export default function ReportingPage() {
                   </s-table-row>
                 ) : (
                   artistAllocations.map((allocation) => {
-                    const remaining = new Prisma.Decimal(allocation.allocated)
-                      .sub(new Prisma.Decimal(allocation.paid))
-                      .toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR);
+                    const remaining = subtractCurrency(allocation.allocated, allocation.paid);
                     return (
                       <s-table-row key={allocation.artistId}>
                         <s-table-cell>{allocation.artistName}</s-table-cell>
                         <s-table-cell>{allocation.creditName}</s-table-cell>
                         <s-table-cell>{formatMoney(allocation.allocated)}</s-table-cell>
                         <s-table-cell>{formatMoney(allocation.paid)}</s-table-cell>
-                        <s-table-cell>{formatMoney(remaining.toString())}</s-table-cell>
+                        <s-table-cell>{formatMoney(remaining)}</s-table-cell>
                       </s-table-row>
                     );
                   })
