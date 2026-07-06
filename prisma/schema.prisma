@@ -44,6 +44,7 @@ model Shop {
   currency         String   @default("USD")
   mistakeBuffer    Decimal? @db.Decimal(5, 4)
   defaultLaborRate Decimal? @db.Decimal(10, 4)
+  defaultElectricityCostPerKwh Decimal? @db.Decimal(10, 6)
   effectiveTaxRate Decimal? @db.Decimal(5, 4)
   taxDeductionMode String   @default("dont_deduct")
   postPurchaseEmailEnabled Boolean @default(false)
@@ -160,21 +161,54 @@ model MaterialLibraryItem {
 }
 
 model EquipmentLibraryItem {
-  id            String   @id @default(cuid())
-  shopId        String
-  name          String
-  hourlyRate    Decimal? @db.Decimal(10, 4)
-  perUseCost    Decimal? @db.Decimal(10, 4)
-  purchaseLink  String?
-  equipmentCost Decimal? @db.Decimal(10, 2)
-  status        String   @default("active")
-  notes         String?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                              String   @id @default(cuid())
+  shopId                          String
+  name                            String
+  hourlyRate                      Decimal? @db.Decimal(10, 4)
+  hourlyRateMode                  String   @default("manual") // "manual" | "calculated"
+  perUseCost                      Decimal? @db.Decimal(10, 4)
+  perUseCostMode                  String   @default("manual") // "manual" | "calculated"
+  usageBasis                      String   @default("time_and_unit") // "time" | "unit" | "time_and_unit"
+  purchaseLink                    String?
+  equipmentCost                   Decimal? @db.Decimal(10, 2)
+  acquisitionCost                 Decimal? @db.Decimal(10, 2)
+  expectedLifespanHours           Decimal? @db.Decimal(10, 4)
+  expectedLifespanUnit            String   @default("hours") // "hours" | "uses"
+  salvageValue                    Decimal? @db.Decimal(10, 2)
+  wattsPerOperatingHour           Decimal? @db.Decimal(10, 4)
+  electricityCostPerKwhOverride   Decimal? @db.Decimal(10, 6)
+  status                          String   @default("active")
+  notes                           String?
+  createdAt                       DateTime @default(now())
+  updatedAt                       DateTime @updatedAt
 
   templateLines CostTemplateEquipmentLine[]
   variantLines  VariantEquipmentLine[]
+  consumables   EquipmentConsumable[]
 
+  @@index([shopId, status])
+}
+
+model EquipmentConsumable {
+  id               String               @id @default(cuid())
+  shopId           String
+  equipmentId      String
+  equipment        EquipmentLibraryItem @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+  name             String
+  replacementCost  Decimal              @db.Decimal(10, 2)
+  lifespanQuantity Decimal              @db.Decimal(10, 4)
+  lifespanUnit     String               // "hours" | "uses"
+  sku              String?
+  purchaseLink     String?
+  status           String               @default("active")
+  notes            String?
+  sortOrder        Int                  @default(0)
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+
+  snapshotLines OrderSnapshotEquipmentConsumableLine[]
+
+  @@index([shopId, equipmentId])
   @@index([shopId, status])
 }
 
@@ -797,15 +831,35 @@ model OrderSnapshotEquipmentLine {
   snapshotLine   OrderSnapshotLine @relation(fields: [snapshotLineId], references: [id], onDelete: Cascade)
   equipmentId    String?
   equipmentName  String
-  hourlyRate     Decimal?          @db.Decimal(10, 2)
-  perUseCost     Decimal?          @db.Decimal(10, 2)
+  hourlyRate     Decimal?          @db.Decimal(10, 4)
+  perUseCost     Decimal?          @db.Decimal(10, 4)
+  hourlyRateMode String            @default("manual")
+  perUseCostMode String            @default("manual")
   usageMode      String            @default("direct")
   minutes        Decimal?          @db.Decimal(10, 2)
   uses           Decimal?          @db.Decimal(10, 2)
   yieldDurationMinutes Decimal?    @db.Decimal(10, 2)
   yieldUses      Decimal?          @db.Decimal(10, 2)
   yieldQuantity  Decimal?          @db.Decimal(10, 2)
+  electricityCost Decimal          @default(0) @db.Decimal(10, 4)
+  depreciationCost Decimal         @default(0) @db.Decimal(10, 4)
+  consumablesCost Decimal          @default(0) @db.Decimal(10, 4)
+  maintenanceCost Decimal          @default(0) @db.Decimal(10, 4)
+  manualOverrideCost Decimal       @default(0) @db.Decimal(10, 4)
   lineCost       Decimal           @db.Decimal(10, 4)
+
+  consumableLines OrderSnapshotEquipmentConsumableLine[]
+}
+
+model OrderSnapshotEquipmentConsumableLine {
+  id                      String                     @id @default(cuid())
+  snapshotEquipmentLineId String
+  snapshotEquipmentLine   OrderSnapshotEquipmentLine @relation(fields: [snapshotEquipmentLineId], references: [id], onDelete: Cascade)
+  consumableId            String?
+  consumable              EquipmentConsumable?       @relation(fields: [consumableId], references: [id], onDelete: SetNull)
+  consumableName          String
+  lifespanUnit            String
+  lineCost                Decimal                    @db.Decimal(10, 4)
 }
 
 model OrderSnapshotPODLine {

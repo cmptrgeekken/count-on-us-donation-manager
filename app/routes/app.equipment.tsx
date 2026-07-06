@@ -6,10 +6,18 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
+import { resolveEquipmentEffectiveRates } from "../services/costEngine.server";
 import { createEquipmentLibraryItem } from "../services/libraryCreate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
-import { parseOptionalNonNegativeMoney } from "../utils/money-parsing";
+import { EQUIPMENT_USAGE_BASIS_OPTIONS, usageBasisLabel } from "../utils/equipment-usage";
+import {
+  parseOptionalNonNegativeDecimal,
+  parseOptionalNonNegativeMoney,
+  parseOptionalPositiveDecimal,
+  parseRequiredPositiveDecimal,
+  parseRequiredPositiveMoney,
+} from "../utils/money-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const equipmentIdSchema = z.object({
@@ -19,6 +27,21 @@ const equipmentIdSchema = z.object({
 const equipmentFormSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   purchaseLink: z.union([z.literal(""), z.url({ message: "Equipment purchase link must be a valid URL." })]),
+  hourlyRateMode: z.enum(["manual", "calculated"]),
+  perUseCostMode: z.enum(["manual", "calculated"]),
+  usageBasis: z.enum(["time", "unit", "time_and_unit"]),
+  expectedLifespanUnit: z.enum(["hours", "uses"]),
+});
+
+const equipmentConsumableSchema = z.object({
+  id: z.string().optional(),
+  name: z.string().trim().min(1, "Consumable name is required."),
+  replacementCost: z.string(),
+  lifespanQuantity: z.string(),
+  lifespanUnit: z.enum(["hours", "uses"]),
+  sku: z.string().optional(),
+  purchaseLink: z.union([z.literal(""), z.url({ message: "Consumable purchase link must be a valid URL." })]),
+  notes: z.string().optional(),
 });
 
 const dialogFieldStyle: CSSProperties = {
@@ -32,31 +55,95 @@ const dialogFieldStyle: CSSProperties = {
   font: "inherit",
 };
 
+function parseConsumablesInput(value: FormDataEntryValue | null, shopId: string) {
+  let rawConsumables: unknown = [];
+  const raw = value?.toString().trim() ?? "";
+  if (raw) {
+    try {
+      rawConsumables = JSON.parse(raw) as unknown;
+    } catch {
+      throw new Response("Consumables must be valid JSON.", { status: 400 });
+    }
+  }
+
+  const parsed = z.array(equipmentConsumableSchema).safeParse(rawConsumables);
+  if (!parsed.success) {
+    throw new Response(parsed.error.issues[0]?.message ?? "Invalid consumables.", { status: 400 });
+  }
+
+  return parsed.data.map((consumable, index) => ({
+    id: consumable.id,
+    shopId,
+    name: consumable.name.trim(),
+    replacementCost: parseRequiredPositiveMoney(consumable.replacementCost, "Consumable replacement cost"),
+    lifespanQuantity: parseRequiredPositiveDecimal(consumable.lifespanQuantity, "Consumable lifespan"),
+    lifespanUnit: consumable.lifespanUnit,
+    sku: consumable.sku?.trim() || null,
+    purchaseLink: consumable.purchaseLink.trim() || null,
+    notes: consumable.notes?.trim() || null,
+    sortOrder: index,
+    status: "active",
+  }));
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
 
-  const equipment = await prisma.equipmentLibraryItem.findMany({
-    where: { shopId },
-    orderBy: { name: "asc" },
-    include: {
-      _count: { select: { templateLines: true, variantLines: true } },
-    },
-  });
+  const [equipment, shopDefaults] = await Promise.all([
+    prisma.equipmentLibraryItem.findMany({
+      where: { shopId },
+      orderBy: { name: "asc" },
+      include: {
+        _count: { select: { templateLines: true, variantLines: true } },
+        consumables: { orderBy: [{ sortOrder: "asc" }, { name: "asc" }] },
+      },
+    }),
+    prisma.shop.findUnique({
+      where: { shopId },
+      select: { defaultElectricityCostPerKwh: true },
+    }),
+  ]);
+  const defaultElectricityCostPerKwh = shopDefaults?.defaultElectricityCostPerKwh ?? null;
 
   return jsonResponse({
-    equipment: equipment.map((e) => ({
-      id: e.id,
-      name: e.name,
-      hourlyRate: e.hourlyRate?.toString() ?? null,
-      perUseCost: e.perUseCost?.toString() ?? null,
-      purchaseLink: e.purchaseLink ?? "",
-      equipmentCost: e.equipmentCost?.toString() ?? "",
-      status: e.status,
-      notes: e.notes ?? "",
-      templateCount: e._count.templateLines,
-      variantCount: e._count.variantLines,
-    })),
+    equipment: equipment.map((e) => {
+      const rates = resolveEquipmentEffectiveRates(e, defaultElectricityCostPerKwh);
+      return {
+        id: e.id,
+        name: e.name,
+        hourlyRate: e.hourlyRate?.toString() ?? null,
+        effectiveHourlyRate: rates.hourlyRate?.toString() ?? null,
+        hourlyRateMode: e.hourlyRateMode,
+        perUseCost: e.perUseCost?.toString() ?? null,
+        effectivePerUseCost: rates.perUseCost?.toString() ?? null,
+        perUseCostMode: e.perUseCostMode,
+        usageBasis: e.usageBasis,
+        purchaseLink: e.purchaseLink ?? "",
+        equipmentCost: e.equipmentCost?.toString() ?? "",
+        acquisitionCost: e.acquisitionCost?.toString() ?? "",
+        expectedLifespanHours: e.expectedLifespanHours?.toString() ?? "",
+        expectedLifespanUnit: e.expectedLifespanUnit,
+        salvageValue: e.salvageValue?.toString() ?? "",
+        wattsPerOperatingHour: e.wattsPerOperatingHour?.toString() ?? "",
+        electricityCostPerKwhOverride: e.electricityCostPerKwhOverride?.toString() ?? "",
+        status: e.status,
+        notes: e.notes ?? "",
+        templateCount: e._count.templateLines,
+        variantCount: e._count.variantLines,
+        consumables: e.consumables.map((consumable) => ({
+          id: consumable.id,
+          name: consumable.name,
+          replacementCost: consumable.replacementCost.toString(),
+          lifespanQuantity: consumable.lifespanQuantity.toString(),
+          lifespanUnit: consumable.lifespanUnit,
+          sku: consumable.sku ?? "",
+          purchaseLink: consumable.purchaseLink ?? "",
+          notes: consumable.notes ?? "",
+          status: consumable.status,
+        })),
+      };
+    }),
   });
 };
 
@@ -71,25 +158,51 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     const parsed = equipmentFormSchema.safeParse({
       name: formData.get("name")?.toString() ?? "",
       purchaseLink: formData.get("purchaseLink")?.toString().trim() ?? "",
+      hourlyRateMode: formData.get("hourlyRateMode")?.toString() ?? "calculated",
+      perUseCostMode: formData.get("perUseCostMode")?.toString() ?? "calculated",
+      usageBasis: formData.get("usageBasis")?.toString() ?? "time_and_unit",
+      expectedLifespanUnit: formData.get("expectedLifespanUnit")?.toString() ?? "hours",
     });
     if (!parsed.success) {
       return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
     }
 
     const name = parsed.data.name;
+    const hourlyRateMode = parsed.data.hourlyRateMode;
+    const perUseCostMode = parsed.data.perUseCostMode;
+    const usageBasis = parsed.data.usageBasis;
+    const expectedLifespanUnit = parsed.data.expectedLifespanUnit;
     const hourlyRateStr = formData.get("hourlyRate")?.toString().trim();
     const perUseCostStr = formData.get("perUseCost")?.toString().trim();
-    const equipmentCostStr = formData.get("equipmentCost")?.toString().trim();
+    const acquisitionCostStr = formData.get("acquisitionCost")?.toString().trim();
+    const expectedLifespanHoursStr = formData.get("expectedLifespanHours")?.toString().trim();
+    const salvageValueStr = formData.get("salvageValue")?.toString().trim();
+    const wattsPerOperatingHourStr = formData.get("wattsPerOperatingHour")?.toString().trim();
+    const electricityCostPerKwhOverrideStr = formData.get("electricityCostPerKwhOverride")?.toString().trim();
     const notes = formData.get("notes")?.toString().trim() || null;
     const purchaseLink = parsed.data.purchaseLink.trim() || null;
 
     let hourlyRate: Prisma.Decimal | null;
     let perUseCost: Prisma.Decimal | null;
-    let equipmentCost: Prisma.Decimal | null;
+    let acquisitionCost: Prisma.Decimal | null;
+    let expectedLifespanHours: Prisma.Decimal | null;
+    let salvageValue: Prisma.Decimal | null;
+    let wattsPerOperatingHour: Prisma.Decimal | null;
+    let electricityCostPerKwhOverride: Prisma.Decimal | null;
+    let consumables: ReturnType<typeof parseConsumablesInput>;
     try {
       hourlyRate = parseOptionalNonNegativeMoney(hourlyRateStr, "Hourly rate");
       perUseCost = parseOptionalNonNegativeMoney(perUseCostStr, "Per-use cost");
-      equipmentCost = parseOptionalNonNegativeMoney(equipmentCostStr, "Equipment cost");
+      acquisitionCost = parseOptionalNonNegativeMoney(acquisitionCostStr, "Acquisition cost");
+      expectedLifespanHours = parseOptionalPositiveDecimal(expectedLifespanHoursStr, "Expected lifespan");
+      salvageValue = parseOptionalNonNegativeMoney(salvageValueStr, "Salvage value");
+      wattsPerOperatingHour = parseOptionalNonNegativeDecimal(wattsPerOperatingHourStr, "Watts per operating hour", 4);
+      electricityCostPerKwhOverride = parseOptionalNonNegativeDecimal(
+        electricityCostPerKwhOverrideStr,
+        "Electricity cost per kWh override",
+        6,
+      );
+      consumables = parseConsumablesInput(formData.get("consumables"), shopId);
     } catch (error) {
       if (error instanceof Response) {
         return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
@@ -97,9 +210,24 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       throw error;
     }
 
-    if (hourlyRate === null && perUseCost === null) {
+    if (hourlyRateMode === "manual" && hourlyRate === null) {
       return jsonResponse(
-        { ok: false, message: "At least one of hourly rate or per-use cost must be set." },
+        { ok: false, message: "Hourly override rate is required when hourly override is enabled." },
+        { status: 400 },
+      );
+    }
+    if (perUseCostMode === "manual" && perUseCost === null) {
+      return jsonResponse(
+        { ok: false, message: "Per-use override cost is required when per-use override is enabled." },
+        { status: 400 },
+      );
+    }
+
+    const hasManualOverride = hourlyRateMode === "manual" || perUseCostMode === "manual";
+    const hasCalculatedComponent = acquisitionCost !== null || consumables.length > 0 || wattsPerOperatingHour !== null;
+    if (!hasManualOverride && !hasCalculatedComponent) {
+      return jsonResponse(
+        { ok: false, message: "Add at least one equipment cost component or enable a manual override." },
         { status: 400 },
       );
     }
@@ -108,9 +236,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       shopId,
       name,
       hourlyRate,
+      hourlyRateMode,
       perUseCost,
+      perUseCostMode,
+      usageBasis,
       purchaseLink,
-      equipmentCost,
+      equipmentCost: acquisitionCost,
+      acquisitionCost,
+      expectedLifespanHours,
+      expectedLifespanUnit,
+      salvageValue,
+      wattsPerOperatingHour,
+      electricityCostPerKwhOverride,
       notes,
     };
 
@@ -120,9 +257,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           shopId,
           input: {
             name,
+            hourlyRateMode,
             hourlyRate: hourlyRateStr ?? "",
+            perUseCostMode,
             perUseCost: perUseCostStr ?? "",
-            equipmentCost: equipmentCostStr ?? "",
+            usageBasis,
+            acquisitionCost: acquisitionCostStr ?? "",
+            expectedLifespanHours: expectedLifespanHoursStr ?? "",
+            expectedLifespanUnit,
+            salvageValue: salvageValueStr ?? "",
+            wattsPerOperatingHour: wattsPerOperatingHourStr ?? "",
+            electricityCostPerKwhOverride: electricityCostPerKwhOverrideStr ?? "",
+            consumables: formData.get("consumables")?.toString() ?? "[]",
             purchaseLink: parsed.data.purchaseLink,
             notes: notes ?? "",
           },
@@ -136,16 +282,40 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       return jsonResponse({ ok: true, message: "Equipment created." });
     }
 
-    const id = formData.get("id")?.toString() ?? "";
-    await prisma.equipmentLibraryItem.update({ where: { id, shopId }, data });
-    await prisma.auditLog.create({
-      data: {
-        shopId,
-        entity: "EquipmentLibraryItem",
-        entityId: id,
-        action: "EQUIPMENT_UPDATED",
-        actor: "merchant",
-      },
+    const parsedId = equipmentIdSchema.safeParse({ id: formData.get("id")?.toString() ?? "" });
+    if (!parsedId.success) {
+      return jsonResponse({ ok: false, message: parsedId.error.issues[0]?.message ?? "Invalid equipment." }, { status: 400 });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      await tx.equipmentLibraryItem.update({ where: { id: parsedId.data.id, shopId }, data });
+      await tx.equipmentConsumable.deleteMany({ where: { shopId, equipmentId: parsedId.data.id } });
+      if (consumables.length > 0) {
+        await tx.equipmentConsumable.createMany({
+          data: consumables.map((consumable) => ({
+            shopId,
+            equipmentId: parsedId.data.id,
+            name: consumable.name,
+            replacementCost: consumable.replacementCost,
+            lifespanQuantity: consumable.lifespanQuantity,
+            lifespanUnit: consumable.lifespanUnit,
+            sku: consumable.sku,
+            purchaseLink: consumable.purchaseLink,
+            notes: consumable.notes,
+            sortOrder: consumable.sortOrder,
+            status: consumable.status,
+          })),
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "EquipmentLibraryItem",
+          entityId: parsedId.data.id,
+          action: "EQUIPMENT_UPDATED",
+          actor: "merchant",
+        },
+      });
     });
     return jsonResponse({ ok: true, message: "Equipment updated." });
   }
@@ -221,22 +391,55 @@ type EquipmentItem = {
   id: string;
   name: string;
   hourlyRate: string | null;
+  effectiveHourlyRate: string | null;
+  hourlyRateMode: string;
   perUseCost: string | null;
+  effectivePerUseCost: string | null;
+  perUseCostMode: string;
+  usageBasis: string;
   purchaseLink: string;
   equipmentCost: string;
+  acquisitionCost: string;
+  expectedLifespanHours: string;
+  expectedLifespanUnit: string;
+  salvageValue: string;
+  wattsPerOperatingHour: string;
+  electricityCostPerKwhOverride: string;
   status: string;
   notes: string;
   templateCount: number;
   variantCount: number;
+  consumables: EquipmentConsumableFormRow[];
+};
+
+type EquipmentConsumableFormRow = {
+  id?: string;
+  name: string;
+  replacementCost: string;
+  lifespanQuantity: string;
+  lifespanUnit: "hours" | "uses";
+  sku: string;
+  purchaseLink: string;
+  notes: string;
 };
 
 const EMPTY_FORM = {
   id: "",
   name: "",
+  hourlyRateMode: "calculated",
   hourlyRate: "",
+  perUseCostMode: "calculated",
   perUseCost: "",
+  usageBasis: "time_and_unit",
   purchaseLink: "",
   equipmentCost: "",
+  acquisitionCost: "",
+  expectedLifespanHours: "",
+  expectedLifespanUnit: "hours",
+  salvageValue: "",
+  wattsPerOperatingHour: "",
+  electricityCostPerKwhOverride: "",
+  consumables: [] as EquipmentConsumableFormRow[],
   notes: "",
 };
 
@@ -321,6 +524,44 @@ export default function EquipmentPage() {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
+  function addConsumable() {
+    setForm((current) => ({
+      ...current,
+      consumables: [
+        ...current.consumables,
+        {
+          name: "",
+          replacementCost: "",
+          lifespanQuantity: "",
+          lifespanUnit: "hours",
+          sku: "",
+          purchaseLink: "",
+          notes: "",
+        },
+      ],
+    }));
+  }
+
+  function updateConsumable<K extends keyof EquipmentConsumableFormRow>(
+    index: number,
+    key: K,
+    value: EquipmentConsumableFormRow[K],
+  ) {
+    setForm((current) => ({
+      ...current,
+      consumables: current.consumables.map((consumable, currentIndex) =>
+        currentIndex === index ? { ...consumable, [key]: value } : consumable,
+      ),
+    }));
+  }
+
+  function removeConsumable(index: number) {
+    setForm((current) => ({
+      ...current,
+      consumables: current.consumables.filter((_, currentIndex) => currentIndex !== index),
+    }));
+  }
+
   function openCreate() {
     setForm(EMPTY_FORM);
     setEquipmentDialogOpen(true);
@@ -330,10 +571,29 @@ export default function EquipmentPage() {
     setForm({
       id: item.id,
       name: item.name,
+      hourlyRateMode: item.hourlyRateMode,
       hourlyRate: item.hourlyRate ?? "",
+      perUseCostMode: item.perUseCostMode,
       perUseCost: item.perUseCost ?? "",
+      usageBasis: item.usageBasis,
       purchaseLink: item.purchaseLink,
       equipmentCost: normalizeFixedDecimalInput(item.equipmentCost),
+      acquisitionCost: normalizeFixedDecimalInput(item.acquisitionCost || item.equipmentCost),
+      expectedLifespanHours: item.expectedLifespanHours,
+      expectedLifespanUnit: item.expectedLifespanUnit,
+      salvageValue: normalizeFixedDecimalInput(item.salvageValue),
+      wattsPerOperatingHour: item.wattsPerOperatingHour,
+      electricityCostPerKwhOverride: item.electricityCostPerKwhOverride,
+      consumables: item.consumables.map((consumable) => ({
+        id: consumable.id,
+        name: consumable.name,
+        replacementCost: normalizeFixedDecimalInput(consumable.replacementCost),
+        lifespanQuantity: consumable.lifespanQuantity,
+        lifespanUnit: consumable.lifespanUnit === "uses" ? "uses" : "hours",
+        sku: consumable.sku,
+        purchaseLink: consumable.purchaseLink,
+        notes: consumable.notes,
+      })),
       notes: item.notes,
     });
     setEquipmentDialogOpen(true);
@@ -435,7 +695,8 @@ export default function EquipmentPage() {
                 <s-table-header listSlot="primary">Name</s-table-header>
                 <s-table-header listSlot="labeled" format="currency">Hourly rate</s-table-header>
                 <s-table-header listSlot="labeled" format="currency">Per-use cost</s-table-header>
-                <s-table-header listSlot="labeled" format="currency">Equipment cost</s-table-header>
+                <s-table-header listSlot="secondary">Usage basis</s-table-header>
+                <s-table-header listSlot="labeled" format="currency">Acquisition cost</s-table-header>
                 <s-table-header listSlot="secondary">Purchase link</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Used by</s-table-header>
                 <s-table-header listSlot="inline">Status</s-table-header>
@@ -446,9 +707,10 @@ export default function EquipmentPage() {
                 {equipment.map((item: EquipmentItem) => (
                   <s-table-row key={item.id}>
                     <s-table-cell>{item.name}</s-table-cell>
-                    <s-table-cell>{item.hourlyRate ? `${formatMoney(item.hourlyRate)}/hr` : "—"}</s-table-cell>
-                    <s-table-cell>{item.perUseCost ? `${formatMoney(item.perUseCost)}/use` : "—"}</s-table-cell>
-                    <s-table-cell>{item.equipmentCost ? formatMoney(item.equipmentCost) : "—"}</s-table-cell>
+                    <s-table-cell>{item.effectiveHourlyRate ? `${formatMoney(item.effectiveHourlyRate)}/hr` : "—"}</s-table-cell>
+                    <s-table-cell>{item.effectivePerUseCost ? `${formatMoney(item.effectivePerUseCost)}/use` : "—"}</s-table-cell>
+                    <s-table-cell>{usageBasisLabel(item.usageBasis)}</s-table-cell>
+                    <s-table-cell>{item.acquisitionCost || item.equipmentCost ? formatMoney(item.acquisitionCost || item.equipmentCost) : "—"}</s-table-cell>
                     <s-table-cell>
                       {item.purchaseLink ? (
                         <a href={item.purchaseLink} target="_blank" rel="noreferrer">
@@ -540,7 +802,32 @@ export default function EquipmentPage() {
             onChange={(event) => updateForm("name", (event.target as HTMLInputElement | null)?.value ?? "")}
           />
 
-          <s-text color="subdued">Set at least one of the following rate fields.</s-text>
+          <s-text color="subdued">
+            Equipment components are included automatically. Enable an override only when a known rate should replace the calculated value.
+          </s-text>
+
+          <div style={{ display: "grid", gap: "0.35rem" }}>
+            <label htmlFor="usage-basis">Usage basis</label>
+            <select
+              id="usage-basis"
+              value={form.usageBasis}
+              onChange={(event) => {
+                const nextUsageBasis = event.currentTarget.value;
+                setForm((current) => ({
+                  ...current,
+                  usageBasis: nextUsageBasis,
+                  expectedLifespanUnit:
+                    nextUsageBasis === "time" ? "hours" : nextUsageBasis === "unit" ? "uses" : current.expectedLifespanUnit,
+                }));
+              }}
+              style={dialogFieldStyle}
+            >
+              {EQUIPMENT_USAGE_BASIS_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+            <s-text color="subdued">Controls which usage inputs appear when adding this equipment to templates and variants.</s-text>
+          </div>
 
           <div
             style={{
@@ -549,33 +836,69 @@ export default function EquipmentPage() {
               gap: "1rem",
             }}
           >
+            <div style={{ display: "grid", gap: "0.5rem", alignContent: "start" }}>
+              <label
+                htmlFor="hourly-rate-override"
+                style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}
+              >
+                <input
+                  id="hourly-rate-override"
+                  type="checkbox"
+                  checked={form.hourlyRateMode === "manual"}
+                  onChange={(event) =>
+                    updateForm("hourlyRateMode", event.currentTarget.checked ? "manual" : "calculated")
+                  }
+                />
+                <span>Override hourly rate</span>
+              </label>
+              <s-text color="subdued">Calculated hourly rates include hour-based lifespan reserve, electricity, and hourly consumables.</s-text>
+            </div>
             <s-text-field
-              label={`Hourly rate (${getCurrencySymbol()})`}
+              label={`Hourly override (${getCurrencySymbol()}/hr)`}
               type="number"
               min={0}
               step={0.01}
               value={form.hourlyRate}
+              disabled={form.hourlyRateMode !== "manual"}
               onChange={(event) =>
                 updateForm("hourlyRate", (event.target as HTMLInputElement | null)?.value ?? "")
               }
               onBlur={(event) =>
                 updateForm("hourlyRate", normalizeFixedDecimalInput((event.target as HTMLInputElement | null)?.value ?? ""))
               }
-              details="Cost per hour of use."
+              details="Replaces the calculated hourly rate when enabled."
             />
+            <div style={{ display: "grid", gap: "0.5rem", alignContent: "start" }}>
+              <label
+                htmlFor="per-use-cost-override"
+                style={{ display: "flex", alignItems: "center", gap: "0.5rem", cursor: "pointer" }}
+              >
+                <input
+                  id="per-use-cost-override"
+                  type="checkbox"
+                  checked={form.perUseCostMode === "manual"}
+                  onChange={(event) =>
+                    updateForm("perUseCostMode", event.currentTarget.checked ? "manual" : "calculated")
+                  }
+                />
+                <span>Override per-use cost</span>
+              </label>
+              <s-text color="subdued">Calculated per-use costs include use-based lifespan reserve and consumables.</s-text>
+            </div>
             <s-text-field
-              label={`Per-use cost (${getCurrencySymbol()})`}
+              label={`Per-use override (${getCurrencySymbol()})`}
               type="number"
               min={0}
               step={0.01}
               value={form.perUseCost}
+              disabled={form.perUseCostMode !== "manual"}
               onChange={(event) =>
                 updateForm("perUseCost", (event.target as HTMLInputElement | null)?.value ?? "")
               }
               onBlur={(event) =>
                 updateForm("perUseCost", normalizeFixedDecimalInput((event.target as HTMLInputElement | null)?.value ?? ""))
               }
-              details="Fixed cost per use, e.g. consumable wear."
+              details="Replaces the calculated per-use cost when enabled."
             />
           </div>
 
@@ -587,21 +910,60 @@ export default function EquipmentPage() {
             }}
           >
             <s-text-field
-              label={`Equipment cost (${getCurrencySymbol()})`}
+              label={`Acquisition cost (${getCurrencySymbol()})`}
               type="number"
               min={0}
               step={0.01}
-              value={form.equipmentCost}
+              value={form.acquisitionCost}
               onChange={(event) =>
-                updateForm("equipmentCost", (event.target as HTMLInputElement | null)?.value ?? "")
+                updateForm("acquisitionCost", (event.target as HTMLInputElement | null)?.value ?? "")
               }
               onBlur={(event) =>
                 updateForm(
-                  "equipmentCost",
+                  "acquisitionCost",
                   normalizeFixedDecimalInput((event.target as HTMLInputElement | null)?.value ?? ""),
                 )
               }
-              details="Reference purchase cost for the equipment itself."
+              details="Used with lifespan to calculate replacement reserve."
+            />
+            <s-text-field
+              label="Expected lifespan"
+              type="number"
+              min={0}
+              step={0.0001}
+              value={form.expectedLifespanHours}
+              onChange={(event) =>
+                updateForm("expectedLifespanHours", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              details={form.expectedLifespanUnit === "uses" ? "Example: 10000 uses." : "Example: 5000 hours."}
+            />
+            <div style={{ display: "grid", gap: "0.35rem" }}>
+              <label htmlFor="expected-lifespan-unit">Lifespan unit</label>
+              <select
+                id="expected-lifespan-unit"
+                value={form.expectedLifespanUnit}
+                onChange={(event) => updateForm("expectedLifespanUnit", event.currentTarget.value)}
+                style={dialogFieldStyle}
+              >
+                <option value="hours">Hours</option>
+                <option value="uses">Uses</option>
+              </select>
+              <s-text color="subdued">
+                Determines whether acquisition cost is allocated per operating hour or per equipment use.
+              </s-text>
+            </div>
+            <s-text-field
+              label={`Salvage value (${getCurrencySymbol()})`}
+              type="number"
+              min={0}
+              step={0.01}
+              value={form.salvageValue}
+              onChange={(event) =>
+                updateForm("salvageValue", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              onBlur={(event) =>
+                updateForm("salvageValue", normalizeFixedDecimalInput((event.target as HTMLInputElement | null)?.value ?? ""))
+              }
             />
             <s-text-field
               label="Equipment purchase link"
@@ -612,6 +974,149 @@ export default function EquipmentPage() {
               }
               details="Optional vendor or catalog URL for reordering or reference."
             />
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: "1rem",
+            }}
+          >
+            <s-text-field
+              label="Watts per operating hour"
+              type="number"
+              min={0}
+              step={0.0001}
+              value={form.wattsPerOperatingHour}
+              onChange={(event) =>
+                updateForm("wattsPerOperatingHour", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              details="Average active draw in watts."
+            />
+            <s-text-field
+              label={`Electricity override (${getCurrencySymbol()}/kWh)`}
+              type="number"
+              min={0}
+              step={0.000001}
+              value={form.electricityCostPerKwhOverride}
+              onChange={(event) =>
+                updateForm("electricityCostPerKwhOverride", (event.target as HTMLInputElement | null)?.value ?? "")
+              }
+              details="Leave blank to use the shop default."
+            />
+          </div>
+
+          <div style={{ display: "grid", gap: "0.75rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center" }}>
+              <strong>Consumables</strong>
+              <s-button variant="secondary" onClick={addConsumable}>Add consumable</s-button>
+            </div>
+            {form.consumables.length === 0 ? (
+              <s-text color="subdued">Add filters, blades, nozzles, mats, or other equipment-specific consumables.</s-text>
+            ) : (
+              form.consumables.map((consumable, index) => (
+                <div
+                  key={consumable.id ?? index}
+                  style={{
+                    display: "grid",
+                    gap: "0.75rem",
+                    padding: "0.75rem",
+                    border: "1px solid var(--p-color-border, #d2d5d8)",
+                    borderRadius: "0.5rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <s-text-field
+                      label="Name"
+                      value={consumable.name}
+                      onChange={(event) =>
+                        updateConsumable(index, "name", (event.target as HTMLInputElement | null)?.value ?? "")
+                      }
+                    />
+                    <s-text-field
+                      label={`Replacement cost (${getCurrencySymbol()})`}
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={consumable.replacementCost}
+                      onChange={(event) =>
+                        updateConsumable(index, "replacementCost", (event.target as HTMLInputElement | null)?.value ?? "")
+                      }
+                      onBlur={(event) =>
+                        updateConsumable(
+                          index,
+                          "replacementCost",
+                          normalizeFixedDecimalInput((event.target as HTMLInputElement | null)?.value ?? ""),
+                        )
+                      }
+                    />
+                    <s-text-field
+                      label="Lifespan"
+                      type="number"
+                      min={0}
+                      step={0.0001}
+                      value={consumable.lifespanQuantity}
+                      onChange={(event) =>
+                        updateConsumable(index, "lifespanQuantity", (event.target as HTMLInputElement | null)?.value ?? "")
+                      }
+                    />
+                    <div style={{ display: "grid", gap: "0.35rem" }}>
+                      <label htmlFor={`consumable-unit-${index}`}>Lifespan unit</label>
+                      <select
+                        id={`consumable-unit-${index}`}
+                        value={consumable.lifespanUnit}
+                        onChange={(event) =>
+                          updateConsumable(
+                            index,
+                            "lifespanUnit",
+                            event.currentTarget.value === "uses" ? "uses" : "hours",
+                          )
+                        }
+                        style={dialogFieldStyle}
+                      >
+                        <option value="hours">Hours</option>
+                        <option value="uses">Uses</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                      gap: "0.75rem",
+                    }}
+                  >
+                    <s-text-field
+                      label="SKU"
+                      value={consumable.sku}
+                      onChange={(event) =>
+                        updateConsumable(index, "sku", (event.target as HTMLInputElement | null)?.value ?? "")
+                      }
+                    />
+                    <s-text-field
+                      label="Purchase link"
+                      type="url"
+                      value={consumable.purchaseLink}
+                      onChange={(event) =>
+                        updateConsumable(index, "purchaseLink", (event.target as HTMLInputElement | null)?.value ?? "")
+                      }
+                    />
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <s-button tone="critical" variant="secondary" onClick={() => removeConsumable(index)}>
+                      Remove
+                    </s-button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
 
           <div style={{ display: "grid", gap: "0.35rem" }}>
@@ -638,10 +1143,21 @@ export default function EquipmentPage() {
                 fd.append("intent", form.id ? "update" : "create");
                 if (form.id) fd.append("id", form.id);
                 fd.append("name", form.name);
+                fd.append("hourlyRateMode", form.hourlyRateMode);
                 if (form.hourlyRate) fd.append("hourlyRate", form.hourlyRate);
+                fd.append("perUseCostMode", form.perUseCostMode);
                 if (form.perUseCost) fd.append("perUseCost", form.perUseCost);
+                fd.append("usageBasis", form.usageBasis);
                 fd.append("purchaseLink", form.purchaseLink);
-                if (form.equipmentCost) fd.append("equipmentCost", form.equipmentCost);
+                if (form.acquisitionCost) fd.append("acquisitionCost", form.acquisitionCost);
+                if (form.expectedLifespanHours) fd.append("expectedLifespanHours", form.expectedLifespanHours);
+                fd.append("expectedLifespanUnit", form.expectedLifespanUnit);
+                if (form.salvageValue) fd.append("salvageValue", form.salvageValue);
+                if (form.wattsPerOperatingHour) fd.append("wattsPerOperatingHour", form.wattsPerOperatingHour);
+                if (form.electricityCostPerKwhOverride) {
+                  fd.append("electricityCostPerKwhOverride", form.electricityCostPerKwhOverride);
+                }
+                fd.append("consumables", JSON.stringify(form.consumables));
                 fd.append("notes", form.notes);
                 setLastSubmittedIntent(form.id ? "update" : "create");
                 fetcher.submit(fd, { method: "post" });

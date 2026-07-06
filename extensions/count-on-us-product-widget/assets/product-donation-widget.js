@@ -163,6 +163,17 @@
       return {
         ...line,
         lineCost: nextLineCost.toFixed(2),
+        componentCosts: line.componentCosts
+          ? Object.fromEntries(
+              Object.entries(line.componentCosts).map(([key, value]) => [key, (money(value) * nextQuantity).toFixed(2)]),
+            )
+          : line.componentCosts,
+        consumableLines: Array.isArray(line.consumableLines)
+          ? line.consumableLines.map((consumableLine) => ({
+              ...consumableLine,
+              lineCost: (money(consumableLine.lineCost) * nextQuantity).toFixed(2),
+            }))
+          : [],
         quantityValue: nextQuantityValue == null ? line.quantityValue : nextQuantityValue.toFixed(4),
         quantity: nextQuantityParts.length
           ? nextQuantityParts.join(" + ")
@@ -249,14 +260,46 @@
     const rows = lines
       .filter((line) => Math.abs(money(line.lineCost)) >= 0.01)
       .map(
-        (line) =>
-          `<tr><td>${lineNameMarkup(line)}</td><td>${escapeHtml(line.quantity || "-")}</td><td>${rateMarkup(line)}</td><td>${formatMoney(money(line.lineCost), currencyCode)}</td></tr>`,
+        (line) => {
+          const componentRows = buildEquipmentComponentRows(line, currencyCode);
+          return `<tr><td>${lineNameMarkup(line)}</td><td>${escapeHtml(line.quantity || "-")}</td><td>${rateMarkup(line)}</td><td>${formatMoney(money(line.lineCost), currencyCode)}</td></tr>${componentRows}`;
+        },
       )
       .join("");
 
     if (!rows) return "";
 
     return `<table class="count-on-us-widget__line-table"><thead><tr><th scope="col">Line item</th><th scope="col">Qty</th><th scope="col">Rate</th><th scope="col">Total</th></tr></thead><tbody>${rows}</tbody></table>`;
+  };
+  const buildEquipmentComponentRows = (line, currencyCode) => {
+    const componentCosts = line.componentCosts || null;
+    const consumableLines = Array.isArray(line.consumableLines) ? line.consumableLines : [];
+    if (!componentCosts && consumableLines.length === 0) return "";
+
+    const components = [
+      { label: "Electricity", value: money(componentCosts?.electricity) },
+      { label: "Depreciation reserve", value: money(componentCosts?.depreciation) },
+      { label: "Consumables", value: money(componentCosts?.consumables) },
+      { label: "Maintenance", value: money(componentCosts?.maintenance) },
+      { label: "Manual rate", value: money(componentCosts?.manualOverride) },
+    ].filter((component) => Math.abs(component.value) >= 0.01);
+    const componentMarkup = components
+      .map(
+        (component) =>
+          `<div class="count-on-us-widget__component-row"><span>${escapeHtml(component.label)}</span><strong>${formatMoney(component.value, currencyCode)}</strong></div>`,
+      )
+      .join("");
+    const consumableMarkup = consumableLines
+      .filter((consumableLine) => Math.abs(money(consumableLine.lineCost)) >= 0.01)
+      .map(
+        (consumableLine) =>
+          `<div class="count-on-us-widget__component-row count-on-us-widget__component-row--nested"><span>${escapeHtml(consumableLine.name)} (${escapeHtml(consumableLine.lifespanUnit)})</span><strong>${formatMoney(money(consumableLine.lineCost), currencyCode)}</strong></div>`,
+      )
+      .join("");
+
+    if (!componentMarkup && !consumableMarkup) return "";
+
+    return `<tr class="count-on-us-widget__component-detail-row"><td colspan="4"><div class="count-on-us-widget__component-detail">${componentMarkup}${consumableMarkup}</div></td></tr>`;
   };
   const buildLineItemDetailButton = (title, lines, currencyCode) => {
     const rows = buildLineItemRows(lines || [], currencyCode);

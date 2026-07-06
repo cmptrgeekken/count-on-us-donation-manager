@@ -25,6 +25,22 @@ The core accounting requirement remains unchanged: equipment costs are Track 1 d
 
 The app will support component-based equipment costing while preserving the existing simple equipment-rate workflow.
 
+The first implementation should ship a focused generic MVP:
+
+- shop default electricity cost per kWh
+- equipment electricity cost per kWh override
+- equipment watts used per operating hour
+- acquisition cost
+- expected lifespan quantity and unit
+- salvage value
+- consumable component rows
+- calculated hourly and per-use totals
+- manual hourly and per-use override modes
+- equipment usage basis for time-based, use-based, or mixed equipment
+- compact equipment component breakdowns in order snapshots
+
+The first implementation should not include equipment replacement-date tracking, installed consumable tracking, location-specific electricity rates, machine-type presets, or automatic warmup/cooldown allocation.
+
 ### Equipment keeps explicit resolved rates
 
 `EquipmentLibraryItem` should continue to expose effective hourly and per-use rates because cost templates and variant cost resolution need stable, simple inputs.
@@ -34,9 +50,20 @@ Component fields will calculate suggested hourly and per-use costs. Merchants ca
 - use the calculated rates directly
 - override the calculated hourly rate
 - override the calculated per-use cost
-- continue using only manual hourly and per-use rates
+- continue using manual hourly and per-use rates by enabling both overrides
 
-The UI should show whether a rate is calculated, manually overridden, or incomplete.
+Each rate should have an explicit mode:
+
+- `calculated`
+- `manual`
+
+In `calculated` mode, the effective rate is the sum of the applicable equipment components. In `manual` mode, the effective rate is the merchant-entered value for that rate.
+
+Manual rates should not be added on top of calculated components. This avoids accidental double counting when a merchant has already included depreciation, consumables, or electricity in a historical manual rate.
+
+The UI should present calculated rates as the default behavior and manual rates as explicit override toggles. New equipment should default to calculated rates. Existing equipment and compatibility create flows may preserve manual overrides when a merchant has already provided manual hourly or per-use values.
+
+The UI should show whether each rate is calculated, manually overridden, or incomplete.
 
 ### Add shop-level electricity default
 
@@ -59,9 +86,6 @@ If no equipment override exists, equipment electricity cost uses the shop defaul
 Equipment should support:
 
 - `wattsPerOperatingHour` - average watts used while actively operating
-- `idleWatts` - optional average watts used while powered on but not actively producing
-- `warmupMinutes` - optional typical warmup time before production
-- `cooldownMinutes` - optional typical cooldown or post-run machine time
 - `electricityCostPerKwhOverride` - optional equipment-specific electricity rate
 
 The base active electricity hourly cost is:
@@ -70,25 +94,25 @@ The base active electricity hourly cost is:
 (wattsPerOperatingHour / 1000) * effectiveCostPerKwh
 ```
 
-Warmup, cooldown, and idle electricity should not silently inflate every minute of active use unless the equipment line has a way to allocate those minutes. Near term, the model should either:
-
-- include warmup/cooldown only when a template or variant equipment line explicitly supplies batch or setup allocation data, or
-- expose them as informational fields until batch/setup cost support is implemented.
+Warmup, cooldown, and idle electricity should be deferred until batch/setup allocation exists. They should not silently inflate every minute of active use without knowing how many finished units share the setup time.
 
 ### Add equipment lifespan and depreciation reserve
 
 Equipment should support:
 
 - `acquisitionCost`
-- `expectedLifespanHours`
+- `expectedLifespanQuantity`
+- `expectedLifespanUnit` - `hours` or `uses`
 - `salvageValue`
 - `replacementReserveEnabled`
 
-The hourly depreciation or replacement reserve is:
+The depreciation or replacement reserve is:
 
 ```text
-max(acquisitionCost - salvageValue, 0) / expectedLifespanHours
+max(acquisitionCost - salvageValue, 0) / expectedLifespanQuantity
 ```
+
+When `expectedLifespanUnit = "hours"`, the reserve contributes to the calculated hourly rate. When `expectedLifespanUnit = "uses"`, the reserve contributes to the calculated per-use cost. This supports equipment like button makers that are primarily limited by cycle count instead of run time.
 
 The existing `equipmentCost` field can remain as purchase metadata during migration, but the product model should converge on `acquisitionCost` for rate calculation. If both exist during transition, implementation should define one canonical calculation source to avoid double counting.
 
@@ -106,7 +130,6 @@ Each consumable should include:
 - `lifespanUnit` - `hours` or `uses`
 - optional `sku`
 - optional `purchaseLink`
-- optional `replacementReminderThreshold`
 - optional `notes`
 - `status`
 
@@ -137,6 +160,20 @@ Examples:
 - UV printer maintenance tank: `$18 / 20 cleaning cycles`
 
 Consumables are equipment-level defaults. Template and variant equipment lines should initially consume the equipment's resolved hourly and per-use rates; line-level consumable overrides can be deferred until there is a concrete need.
+
+Consumables are for cost modeling only. Count On Us should not track installed filter dates, maintenance schedules, or replacement reminders in the first implementation because the app is not intended to become an equipment maintenance manager.
+
+### Add equipment usage basis
+
+Equipment should define how merchants normally measure production usage:
+
+- `time` for equipment measured by run duration, such as 3D printers, lasers, CNC machines, and embroidery machines
+- `unit` for equipment measured by cycle, print, pass, or use count, such as many 2D printers and heat presses
+- `time_and_unit` for equipment that legitimately accrues both time-based and per-use cost
+
+Template and variant equipment-line UIs should use this basis to limit available usage modes. Time-based equipment should not offer use-yield inputs. Use-based equipment should not offer duration-yield inputs. Mixed equipment may expose both.
+
+Existing equipment should default to `time_and_unit` to preserve current behavior until a merchant narrows the equipment definition.
 
 ### Add maintenance and service reserves
 
@@ -188,20 +225,23 @@ Machine-specific presets can make this approachable, but the storage model shoul
 
 ### Cost calculation
 
-The resolved equipment hourly rate should be the sum of:
+When hourly rate mode is `calculated`, the resolved equipment hourly rate should be the sum of:
 
-- manual hourly base rate or calculated component hourly rate
 - depreciation/replacement reserve per hour
 - active electricity per hour
 - hourly consumables
 - hourly maintenance reserve
 - optional allocated auxiliary equipment costs
 
-The resolved equipment per-use cost should be the sum of:
+When hourly rate mode is `manual`, the resolved equipment hourly rate should be the merchant-entered hourly rate.
 
-- manual per-use base cost or calculated component per-use cost
+When per-use cost mode is `calculated`, the resolved equipment per-use cost should be the sum of:
+
 - use-based consumables
+- use-based depreciation/replacement reserve
 - use-based maintenance, test, calibration, or metered print costs
+
+When per-use cost mode is `manual`, the resolved equipment per-use cost should be the merchant-entered per-use cost.
 
 Template and variant equipment usage should continue to calculate line cost through ADR-003 semantics:
 
@@ -223,7 +263,7 @@ At minimum, snapshots should preserve:
 - usage mode and quantities
 - final equipment line cost
 
-If component costing is implemented, snapshots should also consider preserving a compact component breakdown:
+Component costing should preserve a compact component breakdown in snapshots:
 
 - electricity cost
 - depreciation cost
@@ -231,7 +271,43 @@ If component costing is implemented, snapshots should also consider preserving a
 - maintenance cost
 - manual override amount
 
+Consumable snapshot detail should preserve the consumable identity and resolved cost contribution when practical:
+
+- consumable name
+- consumable id, when available
+- lifespan unit
+- resolved cost contribution for the order line
+
+This keeps future reporting fast and historically accurate when consumable prices, names, or lifespan assumptions change later. Reports may still aggregate on the fly from snapshot detail, but they should not need to join back to mutable current equipment configuration to explain historical order costs.
+
 Mutations to equipment component fields affect financial configuration and require `auditLog` entries.
+
+### Future accrued-cost reporting
+
+Snapshot component breakdowns should support future reporting that estimates what orders are accruing against materials and equipment over time.
+
+The reporting goal is not inventory, maintenance, or replacement scheduling. It is a planning view that answers questions like:
+
+- how much filter cost has this laser accrued from fulfilled orders?
+- how much depreciation reserve has this printer accrued this quarter?
+- which equipment items contribute the most production cost?
+- which materials are driving the most direct cost across sold variants?
+
+For equipment, the report should be able to group order snapshot costs by equipment item and component type:
+
+- electricity
+- depreciation or replacement reserve
+- consumables
+- maintenance
+- manual override
+
+The report should also support drilling into consumables within an equipment item. For example, a CO2 laser should be able to show accrued cost by pre-filter, medium-efficiency filter, high-efficiency filter, carbon filter, and any other configured consumable.
+
+For materials, the report should be able to group order snapshot costs by material item and cost line type.
+
+Because this report is based on immutable order snapshots, it should describe estimated accrued production cost, not current on-hand inventory, cash already spent, or actual replacement dates.
+
+This report should live under the Reporting section, not under Equipment or Materials. Equipment and Materials remain configuration surfaces; Reporting is where merchants analyze accrued production cost across placed orders.
 
 ### UI behavior
 
@@ -242,7 +318,7 @@ Recommended UI:
 - keep name, rate, purchase link, cost, and notes visible in the primary form
 - add an "Advanced cost breakdown" disclosure
 - show calculated hourly and per-use totals in a compact summary
-- let merchants override calculated totals
+- let merchants override calculated totals with explicit hourly and per-use override toggles
 - show incomplete components with clear missing-field messages
 - support adding, editing, deactivating, and reordering consumables
 - add equipment-type presets only after the generic model works
@@ -292,12 +368,9 @@ Presets should create editable starter fields, not lock merchants into machine-s
 
 ## Open questions
 
-1. Should equipment-level `warmupMinutes` and `cooldownMinutes` be allocated automatically per equipment line, or only when templates gain explicit batch/setup quantity fields?
-2. Should consumables support both expected lifespan and current installed-date tracking for replacement reminders, or is cost calculation enough for the first release?
-3. Should electricity defaults be global per shop only, or should the app support location-specific rates for merchants with multiple production locations?
-4. Should `failureRatePercent` live on equipment, materials, templates, or variants so it does not overlap confusingly with the existing mistake buffer?
-5. Should the first implementation add generic fields only, or include machine-type presets for lasers, 3D printers, CNC machines, cutters, and printers?
-6. How much component detail should be copied into immutable order snapshots versus retained as admin-only library history?
+1. Should `failureRatePercent` live on equipment, materials, templates, or variants so it does not overlap confusingly with the existing mistake buffer?
+2. Should machine-type presets be added after the generic model ships, and if so, which presets should come first?
+3. Should consumable-level snapshot detail store one row per consumable contribution or a compact JSON breakdown on the equipment snapshot line?
 
 ## Follow-up implications
 
@@ -305,7 +378,8 @@ Presets should create editable starter fields, not lock merchants into machine-s
 - Add equipment component schema, validation, and Decimal parsing.
 - Add consumable child records for equipment.
 - Update CostEngine to resolve equipment rates from manual and calculated components.
-- Update snapshot persistence and public/admin cost displays to preserve and present resolved equipment costs.
+- Update snapshot persistence and public/admin cost displays to preserve and present resolved equipment costs and compact component breakdowns.
+- Add future reporting for estimated accrued equipment and material costs from order snapshots.
 - Add regression tests for electricity, depreciation, consumables, override precedence, and snapshot immutability.
 - Update ADR-018 if this ADR is accepted, marking equipment-rate breakdowns as covered by ADR-022.
 

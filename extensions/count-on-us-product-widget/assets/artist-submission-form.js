@@ -81,13 +81,17 @@
 
     function normalizePublicUrl(value) {
       const trimmed = String(value || "").trim();
-      if (!trimmed || /[\u0000-\u001f\u007f]|\s/.test(trimmed)) return null;
+      const hasUnsafeCharacters = Array.from(trimmed).some((character) => {
+        const code = character.charCodeAt(0);
+        return code <= 31 || code === 127 || /\s/.test(character);
+      });
+      if (!trimmed || hasUnsafeCharacters) return null;
 
       const withProtocol = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
       let parsed;
       try {
         parsed = new URL(withProtocol);
-      } catch (_error) {
+      } catch {
         return null;
       }
 

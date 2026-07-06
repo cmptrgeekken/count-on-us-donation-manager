@@ -697,22 +697,43 @@ export async function createSnapshot(
         }
 
         if (line.finalCosts.equipmentLines.length > 0) {
-          await tx.orderSnapshotEquipmentLine.createMany({
-            data: line.finalCosts.equipmentLines.map((equipmentLine) => ({
-              snapshotLineId: snapshotLine.id,
-              equipmentId: equipmentLine.equipmentId,
-              equipmentName: equipmentLine.name,
-              hourlyRate: equipmentLine.hourlyRate,
-              perUseCost: equipmentLine.perUseCost,
-              usageMode: equipmentLine.usageMode,
-              minutes: scaleDecimal(equipmentLine.minutes, line.quantity),
-              uses: scaleDecimal(equipmentLine.uses, line.quantity),
-              yieldDurationMinutes: equipmentLine.yieldDurationMinutes,
-              yieldUses: equipmentLine.yieldUses,
-              yieldQuantity: equipmentLine.yieldQuantity,
-              lineCost: equipmentLine.lineCost.mul(line.quantity),
-            })),
-          });
+          for (const equipmentLine of line.finalCosts.equipmentLines) {
+            const snapshotEquipmentLine = await tx.orderSnapshotEquipmentLine.create({
+              data: {
+                snapshotLineId: snapshotLine.id,
+                equipmentId: equipmentLine.equipmentId,
+                equipmentName: equipmentLine.name,
+                hourlyRate: equipmentLine.hourlyRate,
+                perUseCost: equipmentLine.perUseCost,
+                hourlyRateMode: equipmentLine.hourlyRateMode ?? "manual",
+                perUseCostMode: equipmentLine.perUseCostMode ?? "manual",
+                usageMode: equipmentLine.usageMode,
+                minutes: scaleDecimal(equipmentLine.minutes, line.quantity),
+                uses: scaleDecimal(equipmentLine.uses, line.quantity),
+                yieldDurationMinutes: equipmentLine.yieldDurationMinutes,
+                yieldUses: equipmentLine.yieldUses,
+                yieldQuantity: equipmentLine.yieldQuantity,
+                electricityCost: (equipmentLine.componentCosts?.electricityCost ?? ZERO).mul(line.quantity),
+                depreciationCost: (equipmentLine.componentCosts?.depreciationCost ?? ZERO).mul(line.quantity),
+                consumablesCost: (equipmentLine.componentCosts?.consumablesCost ?? ZERO).mul(line.quantity),
+                maintenanceCost: (equipmentLine.componentCosts?.maintenanceCost ?? ZERO).mul(line.quantity),
+                manualOverrideCost: (equipmentLine.componentCosts?.manualOverrideCost ?? equipmentLine.lineCost).mul(line.quantity),
+                lineCost: equipmentLine.lineCost.mul(line.quantity),
+              },
+            });
+
+            if ((equipmentLine.consumableLines ?? []).length > 0) {
+              await tx.orderSnapshotEquipmentConsumableLine.createMany({
+                data: (equipmentLine.consumableLines ?? []).map((consumableLine) => ({
+                  snapshotEquipmentLineId: snapshotEquipmentLine.id,
+                  consumableId: consumableLine.consumableId,
+                  consumableName: consumableLine.name,
+                  lifespanUnit: consumableLine.lifespanUnit,
+                  lineCost: consumableLine.lineCost.mul(line.quantity),
+                })),
+              });
+            }
+          }
         }
 
         if (line.finalCosts.podLines.length > 0) {

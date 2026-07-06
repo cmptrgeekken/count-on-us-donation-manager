@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: June 2026
-- Depends on: ADR-001, ADR-003, ADR-017
+- Depends on: ADR-001, ADR-003, ADR-017, ADR-022
 
 ## Context
 
@@ -18,13 +18,15 @@ Equipment currently supports hourly and per-use rates. In current merchant pract
 
 That means the current implementation is not obviously missing those costs, but future merchant workflows may benefit from more explicit modeling if equipment or overhead costs become materially significant or hard to reason about.
 
+ADR-022 now promotes equipment component costing from this general candidate list into a concrete proposal. This ADR remains the umbrella for the surrounding production-cost expansion areas: scrap/waste, batch/setup costs, indirect supplies, and optional overhead allocation.
+
 ## Decision
 
 The app will treat the following production cost areas as future expansion candidates, not immediate scope.
 
 ### Equipment cost components
 
-The current equipment hourly/per-use fields remain the recommended near-term way to capture:
+Superseded for detailed planning by ADR-022. The current equipment hourly/per-use fields remain the recommended baseline way to capture:
 
 - equipment depreciation or replacement reserve
 - consumable machine parts such as blades, mats, nozzles, filters, belts, and lenses
@@ -32,16 +34,16 @@ The current equipment hourly/per-use fields remain the recommended near-term way
 - electricity or other machine utility usage
 - calibration, warmup, cooldown, and routine machine-prep overhead when the merchant chooses to spread it into an hourly rate
 
-Future versions may split these into explicit subcomponents if merchants need clearer auditability or if equipment rates become hard to maintain manually.
+ADR-022 proposes splitting these into explicit subcomponents while preserving the existing simple hourly/per-use workflow.
 
-Possible future fields include:
+Fields now covered by ADR-022 include:
 
 - acquisition cost
 - expected useful life or replacement cycle
 - maintenance reserve
 - consumables reserve
 - electricity rate or watts/kWh estimate
-- setup/warmup/cooldown cost
+- setup/warmup/cooldown cost considerations
 - notes explaining what is included in the rate
 
 ### Scrap and waste
@@ -146,7 +148,7 @@ Possible allocation options:
 
 ## Alternatives considered
 
-**Add explicit equipment depreciation, electricity, maintenance, and consumables now** - Rejected for immediate scope. The current merchant can roll these into hourly or per-use equipment rates, and adding separate fields now would increase UI complexity before there is clear operational need.
+**Add explicit equipment depreciation, electricity, maintenance, and consumables immediately in the original ADR-018 scope** - Rejected at the time. ADR-022 revisits this after the equipment use case became concrete and proposes a focused component-costing model that still preserves manual hourly/per-use rates.
 
 **Treat all overhead as business expenses only** - Rejected as a universal rule. Some overhead-like costs, such as machine maintenance or consumables, may be direct enough to belong in product cost when the merchant chooses to allocate them.
 
@@ -156,8 +158,7 @@ Possible allocation options:
 
 ## Follow-up implications
 
-- Add help text to Equipment explaining that hourly/per-use rates may include consumables, electricity, maintenance, and depreciation.
-- Consider a future equipment-rate breakdown UI that calculates an hourly/per-use rate from optional components while still storing a simple resolved rate.
+- Follow ADR-022 for equipment-rate breakdown UI, electricity, depreciation, consumables, maintenance, and resolved-rate behavior.
 - Consider material waste fields if acrylic/sheet usage, 3D printing supports, or failed production runs become material.
 - Consider batch/setup cost support alongside ADR-017 outsourced production implementation.
 - Consider a future overhead allocation feature only after the admin cost model is stable enough to explain the accounting implications.
@@ -167,3 +168,4 @@ Possible allocation options:
 - [ADR-001](adr-001-immutable-snapshot-architecture.md)
 - [ADR-003](adr-003-cost-resolution-strategy.md)
 - [ADR-017](adr-017-outsourced-production-costs.md)
+- [ADR-022](adr-022-equipment-component-costing.md)

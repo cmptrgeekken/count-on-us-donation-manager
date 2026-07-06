@@ -14,6 +14,7 @@ export type TemplateDraftEquipmentLine = {
   id: string;
   equipmentId: string;
   equipmentName: string;
+  usageBasis: string;
   hourlyRate: string | null;
   perUseCost: string | null;
   usageMode: string;
@@ -49,6 +50,7 @@ export type TemplateCatalogEquipmentLine = {
   templateLineId: string;
   equipmentId: string;
   equipmentName: string;
+  usageBasis: string;
   usageMode: string;
   minutes: string | null;
   uses: string | null;
@@ -101,6 +103,7 @@ export type VariantAdditionalEquipmentDraftLine = {
   id: string;
   equipmentId: string;
   equipmentName: string;
+  usageBasis: string;
   hourlyRate: string | null;
   perUseCost: string | null;
   usageMode: string;

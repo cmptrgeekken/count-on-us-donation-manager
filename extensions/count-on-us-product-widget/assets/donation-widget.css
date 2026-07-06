@@ -515,6 +515,30 @@
   text-underline-offset: 0.14em;
 }
 
+.count-on-us-widget__component-detail-row td {
+  background: rgba(17, 24, 39, 0.025);
+  padding: 0;
+}
+
+.count-on-us-widget__component-detail {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.55rem 0.7rem;
+}
+
+.count-on-us-widget__component-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #4b5563;
+  font-size: 0.86rem;
+}
+
+.count-on-us-widget__component-row--nested {
+  padding-left: 0.85rem;
+  color: #6b7280;
+}
+
 .count-on-us-widget__line-link {
   color: inherit;
   text-decoration-line: underline;

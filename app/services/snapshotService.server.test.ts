@@ -46,7 +46,8 @@ function createDb({
     : vi.fn().mockResolvedValue({ id: "snapshot-1" });
   const orderSnapshotLineCreate = vi.fn().mockResolvedValue({ id: "snapshot-line-1" });
   const materialLineCreateMany = vi.fn().mockResolvedValue(undefined);
-  const equipmentLineCreateMany = vi.fn().mockResolvedValue(undefined);
+  const equipmentLineCreate = vi.fn().mockResolvedValue({ id: "snapshot-equipment-line-1" });
+  const equipmentConsumableLineCreateMany = vi.fn().mockResolvedValue(undefined);
   const podLineCreateMany = vi.fn().mockResolvedValue(undefined);
   const causeAllocationCreateMany = vi.fn().mockResolvedValue(undefined);
   const auditLogCreate = vi.fn().mockResolvedValue(undefined);
@@ -59,7 +60,8 @@ function createDb({
     orderSnapshot: { create: orderSnapshotCreate },
     orderSnapshotLine: { create: orderSnapshotLineCreate },
     orderSnapshotMaterialLine: { createMany: materialLineCreateMany },
-    orderSnapshotEquipmentLine: { createMany: equipmentLineCreateMany },
+    orderSnapshotEquipmentLine: { create: equipmentLineCreate },
+    orderSnapshotEquipmentConsumableLine: { createMany: equipmentConsumableLineCreateMany },
     orderSnapshotPODLine: { createMany: podLineCreateMany },
     lineCauseAllocation: { createMany: causeAllocationCreateMany },
     variantCostConfig: { findFirst: variantCostConfigFindFirst },
@@ -110,7 +112,8 @@ function createDb({
       orderSnapshotCreate,
       orderSnapshotLineCreate,
       materialLineCreateMany,
-      equipmentLineCreateMany,
+      equipmentLineCreate,
+      equipmentConsumableLineCreateMany,
       podLineCreateMany,
       causeAllocationCreateMany,
       auditLogCreate,
@@ -177,6 +180,23 @@ describe("createSnapshot", () => {
             lineCost: decimal("3"),
             hourlyRate: decimal("36"),
             perUseCost: null,
+            hourlyRateMode: "calculated",
+            perUseCostMode: "manual",
+            componentCosts: {
+              electricityCost: decimal("0.25"),
+              depreciationCost: decimal("1"),
+              consumablesCost: decimal("1.75"),
+              maintenanceCost: decimal("0"),
+              manualOverrideCost: decimal("0"),
+            },
+            consumableLines: [
+              {
+                consumableId: "filter-1",
+                name: "Pre-filter",
+                lifespanUnit: "hours",
+                lineCost: decimal("1.75"),
+              },
+            ],
           },
         ],
       })
@@ -216,6 +236,23 @@ describe("createSnapshot", () => {
             lineCost: decimal("3"),
             hourlyRate: decimal("36"),
             perUseCost: null,
+            hourlyRateMode: "calculated",
+            perUseCostMode: "manual",
+            componentCosts: {
+              electricityCost: decimal("0.25"),
+              depreciationCost: decimal("1"),
+              consumablesCost: decimal("1.75"),
+              maintenanceCost: decimal("0"),
+              manualOverrideCost: decimal("0"),
+            },
+            consumableLines: [
+              {
+                consumableId: "filter-1",
+                name: "Pre-filter",
+                lifespanUnit: "hours",
+                lineCost: decimal("1.75"),
+              },
+            ],
           },
         ],
       });
@@ -274,6 +311,31 @@ describe("createSnapshot", () => {
           expect.objectContaining({
             quantity: decimal("4"),
             lineCost: decimal("40"),
+          }),
+        ],
+      }),
+    );
+    expect(db.__spies.equipmentLineCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          hourlyRateMode: "calculated",
+          perUseCostMode: "manual",
+          electricityCost: decimal("0.5"),
+          depreciationCost: decimal("2"),
+          consumablesCost: decimal("3.5"),
+          manualOverrideCost: decimal("0"),
+          lineCost: decimal("6"),
+        }),
+      }),
+    );
+    expect(db.__spies.equipmentConsumableLineCreateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            consumableId: "filter-1",
+            consumableName: "Pre-filter",
+            lifespanUnit: "hours",
+            lineCost: decimal("3.5"),
           }),
         ],
       }),

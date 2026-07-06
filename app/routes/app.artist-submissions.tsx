@@ -165,9 +165,16 @@ function isPreviewableImage(contentType: string) {
   return ["image/png", "image/webp", "image/svg+xml"].includes(contentType);
 }
 
+function hasUnsafeUrlCharacters(value: string) {
+  return Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127 || /\s/.test(character);
+  });
+}
+
 function safeExternalUrl(value: string) {
   const trimmed = value.trim();
-  if (!trimmed || /[\u0000-\u001f\u007f]|\s/.test(trimmed)) return null;
+  if (!trimmed || hasUnsafeUrlCharacters(trimmed)) return null;
 
   const withProtocol = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
   try {
