@@ -342,7 +342,13 @@ export async function createSnapshot(
   db: any = prisma,
   origin: "webhook" | "reconciliation" | "historical_import" = "webhook",
   fetchImpl: typeof fetch = fetch,
-  metadata: { importBatchId?: string | null; importedAt?: Date | null; periodId?: string | null } = {},
+  metadata: {
+    importBatchId?: string | null;
+    importedAt?: Date | null;
+    periodId?: string | null;
+    replaceExistingSnapshotId?: string | null;
+    replacementReason?: string | null;
+  } = {},
 ): Promise<{ created: boolean; snapshotId?: string }> {
   const shopifyOrderId = order.admin_graphql_api_id ?? null;
   if (!shopifyOrderId) {
@@ -354,7 +360,10 @@ export async function createSnapshot(
     select: { id: true, salesTaxCollected: true },
   });
 
-  if (existing) {
+  const replacementSnapshotId = metadata.replaceExistingSnapshotId ?? null;
+  const isReplacing = Boolean(replacementSnapshotId && existing?.id === replacementSnapshotId);
+
+  if (existing && !isReplacing) {
     const salesTaxCollected = getOrderSalesTax(order);
     if (
       salesTaxCollected.greaterThan(ZERO) &&
@@ -608,6 +617,12 @@ export async function createSnapshot(
 
   try {
     const result = await db.$transaction(async (tx: any) => {
+      if (isReplacing && replacementSnapshotId) {
+        await tx.orderSnapshot.delete({
+          where: { id: replacementSnapshotId },
+        });
+      }
+
       const snapshot = await tx.orderSnapshot.create({
         data: {
           shopId,
@@ -802,6 +817,8 @@ export async function createSnapshot(
             shopifyOrderId,
             lineCount: withFinalCosts.length,
             origin,
+            replacedSnapshotId: replacementSnapshotId,
+            replacementReason: metadata.replacementReason ?? null,
           },
         },
       });

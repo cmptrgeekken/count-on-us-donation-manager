@@ -28,6 +28,7 @@ This directory contains Architecture Decision Records (ADRs) for the Shopify Don
 | [ADR-020](adr-020-contextual-creation-and-template-promotion.md) | Contextual creation and template promotion | Proposed | June 2026 |
 | [ADR-021](adr-021-shop-capability-feature-flags.md) | Shop capability feature flags | Proposed | July 2026 |
 | [ADR-022](adr-022-equipment-component-costing.md) | Equipment component costing | Proposed | July 2026 |
+| [ADR-023](adr-023-external-marketplace-settlements.md) | External marketplace settlement review | Proposed | July 2026 |
 
 ## Dependencies
 
@@ -52,6 +53,7 @@ ADR-019 (Merchant-triggered historical backfill) - extends ADR-001, ADR-002, ADR
 ADR-020 (Contextual creation and template promotion) - extends ADR-003, ADR-008, ADR-013, ADR-015, and ADR-018 for inline creation of related library/configuration records and creating reusable templates from effective variant cost configuration
 ADR-021 (Shop capability feature flags) - extends ADR-003, ADR-010, ADR-015, ADR-018, and ADR-020 for merchant-facing shop capability toggles that suppress optional package/provider workflows without deleting historical data
 ADR-022 (Equipment component costing) - extends ADR-001, ADR-003, ADR-008, ADR-018, and ADR-020 for calculated equipment hourly/per-use rates from electricity, depreciation, consumables, maintenance, and manual overrides
+ADR-023 (External marketplace settlement review) - extends ADR-002, ADR-006, ADR-009, ADR-012, and ADR-019 for orders paid outside Shopify, merchant-reviewed external payouts, marketplace fee treatment, and period close safeguards
 ```
 
 ## Conventions

@@ -63,8 +63,24 @@ type ResolvedImportVariant = {
   };
 };
 
+type ReplacementSnapshotSummary = {
+  row: number;
+  shopifyOrderId: string;
+  orderNumber: string | null;
+  existingSnapshotId: string | null;
+  replacementSnapshotId?: string | null;
+  origin?: string | null;
+  periodId?: string | null;
+  periodStatus?: string | null;
+  requiresForce: boolean;
+  lineCount: number;
+  totalCost: string;
+  netContribution: string;
+  status: "would_replace" | "replaced" | "skipped" | "blocked";
+};
+
 type ImportSummary = {
-  kind: ImportKind | "rebuild";
+  kind: ImportKind | "rebuild" | "snapshot_replacement";
   totalRows: number;
   created: number;
   updated: number;
@@ -72,6 +88,7 @@ type ImportSummary = {
   warnings: ImportIssue[];
   errors: ImportIssue[];
   lineMappingRequests?: LineMappingRequest[];
+  replacementResults?: ReplacementSnapshotSummary[];
 };
 
 const ZERO_SUMMARY = {
@@ -905,6 +922,161 @@ export async function importHistoricalOrders(input: {
         importBatchId: batch.id,
         db,
       });
+    }
+  }
+
+  return summary;
+}
+
+export async function replaceOrderSnapshots(input: {
+  shopId: string;
+  rows: unknown[];
+  dryRun?: boolean;
+  forceClosed?: boolean;
+  replacementReason: string;
+  sourceName?: string | null;
+  mappingOverrides?: Record<string, string>;
+  db?: DbClient;
+  fetchImpl?: typeof fetch;
+}) {
+  const db = input.db ?? prisma;
+  const dryRun = input.dryRun ?? true;
+  const forceClosed = input.forceClosed ?? false;
+  const replacementReason = input.replacementReason.trim();
+  const summary = createEmptySummary("snapshot_replacement", input.rows.length);
+  summary.replacementResults = [];
+
+  if (!dryRun && replacementReason.length < 8) {
+    throw new Error("Snapshot replacement requires a reason of at least 8 characters.");
+  }
+
+  for (const [index, rawRow] of input.rows.entries()) {
+    const rowNumber = index + 1;
+    const order = rawRow as ShopifyOrderPayload;
+    try {
+      const shopifyOrderId = getOrderId(order);
+      if (!shopifyOrderId) {
+        throw new Error("Order admin_graphql_api_id is required.");
+      }
+
+      const existing = await db.orderSnapshot.findUnique({
+        where: { shopId_shopifyOrderId: { shopId: input.shopId, shopifyOrderId } },
+        select: {
+          id: true,
+          orderNumber: true,
+          origin: true,
+          periodId: true,
+          period: { select: { status: true } },
+          lines: { select: { totalCost: true, netContribution: true } },
+        },
+      });
+
+      if (!existing) {
+        summary.skipped += 1;
+        summary.replacementResults.push({
+          row: rowNumber,
+          shopifyOrderId,
+          orderNumber: order.name ?? order.order_number?.toString() ?? null,
+          existingSnapshotId: null,
+          requiresForce: false,
+          lineCount: 0,
+          totalCost: "0",
+          netContribution: "0",
+          status: "skipped",
+        });
+        summary.warnings.push({ row: rowNumber, message: "No existing snapshot found for this order." });
+        continue;
+      }
+
+      const enrichment = await enrichHistoricalOrderRows(input.shopId, order, db, input.mappingOverrides ?? {});
+      for (const warning of enrichment.warnings) {
+        summary.warnings.push({ row: rowNumber, message: warning });
+      }
+      addLineMappingRequests(summary, enrichment.lineMappingRequests);
+      if (enrichment.lineMappingRequests.length > 0) {
+        summary.errors.push({ row: rowNumber, message: "Resolve line item mappings before replacing this snapshot." });
+        continue;
+      }
+
+      const warnings = await validateOrderRow(input.shopId, order, db);
+      for (const warning of warnings) {
+        summary.warnings.push({ row: rowNumber, message: warning });
+      }
+
+      const requiresForce = existing.period?.status === "CLOSED";
+      const totalCost = sumDecimals(existing.lines.map((line) => line.totalCost));
+      const netContribution = sumDecimals(existing.lines.map((line) => line.netContribution));
+      const baseResult = {
+        row: rowNumber,
+        shopifyOrderId,
+        orderNumber: existing.orderNumber ?? order.name ?? order.order_number?.toString() ?? null,
+        existingSnapshotId: existing.id,
+        origin: existing.origin,
+        periodId: existing.periodId,
+        periodStatus: existing.period?.status ?? null,
+        requiresForce,
+        lineCount: existing.lines.length,
+        totalCost: totalCost.toString(),
+        netContribution: netContribution.toString(),
+      };
+
+      if (requiresForce && !forceClosed) {
+        summary.skipped += 1;
+        summary.replacementResults.push({ ...baseResult, status: "blocked" });
+        summary.errors.push({ row: rowNumber, message: "Snapshot belongs to a closed period. Enable force replacement to replace it." });
+        continue;
+      }
+
+      if (dryRun) {
+        summary.updated += 1;
+        summary.replacementResults.push({ ...baseResult, status: "would_replace" });
+        continue;
+      }
+
+      const replacement = await createSnapshot(
+        input.shopId,
+        order,
+        db,
+        existing.origin === "historical_import" || existing.origin === "reconciliation" ? existing.origin : "webhook",
+        input.fetchImpl ?? fetch,
+        {
+          periodId: existing.periodId,
+          replaceExistingSnapshotId: existing.id,
+          replacementReason,
+        },
+      );
+
+      await db.auditLog.create({
+        data: {
+          shopId: input.shopId,
+          entity: "OrderSnapshot",
+          entityId: replacement.snapshotId ?? existing.id,
+          action: "ORDER_SNAPSHOT_REPLACED",
+          actor: "merchant",
+          payload: {
+            oldSnapshotId: existing.id,
+            newSnapshotId: replacement.snapshotId ?? null,
+            shopifyOrderId,
+            forceClosed,
+            periodId: existing.periodId,
+            periodStatus: existing.period?.status ?? null,
+            reason: replacementReason,
+            sourceName: input.sourceName ?? null,
+            oldTotalCost: totalCost.toString(),
+            oldNetContribution: netContribution.toString(),
+            oldLineCount: existing.lines.length,
+          },
+        },
+      });
+
+      summary.updated += 1;
+      summary.replacementResults.push({
+        ...baseResult,
+        replacementSnapshotId: replacement.snapshotId ?? null,
+        status: "replaced",
+      });
+    } catch (error) {
+      summary.errors.push({ row: rowNumber, message: error instanceof Error ? error.message : "Invalid order row." });
     }
   }
 

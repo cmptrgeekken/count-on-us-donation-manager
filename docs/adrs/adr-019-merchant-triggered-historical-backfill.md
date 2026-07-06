@@ -62,6 +62,7 @@ The first backfill workflow should support:
 - dry-run validation before writing
 - full reporting-history regeneration
 - single-period reporting regeneration
+- explicit order snapshot replacement dry runs and controlled replacement
 
 The workflow should be UI-accessible, likely under Reporting as an "Imports and rebuild" or similar operational page.
 
@@ -111,10 +112,68 @@ The dedupe key remains:
 
 Duplicate orders should be skipped by default.
 
-An explicit replacement mode may be added later, but the first version should avoid overwriting existing snapshots unless the merchant chooses a rebuild/reset workflow that clearly explains the consequences.
+An explicit replacement mode should be available for merchant-controlled correction workflows, but it must not be the default import behavior.
 
-Replacement of an existing snapshot should be forbidden when that snapshot is associated with a closed reporting period, payment applications, tax true-ups, public disclosure exports, or other records that have already been treated as operational evidence.
-Those cases require a separate destructive reset workflow with explicit confirmation and audit logging.
+Replacement is useful when:
+
+- a merchant imported historical orders before finishing Count On Us configuration
+- a beta or early production shop created webhook snapshots before newer cost-model fields existed
+- equipment, consumable, material, package, Cause, or Artist configuration was intentionally corrected and the merchant wants selected snapshots recomputed
+- a merchant uploads or refetches original order payloads to backfill richer snapshot line detail
+
+Replacement may apply to both `historical_import` and `webhook` snapshots. Webhook-created snapshots should require stronger confirmation because they represent live operational records, not merely imported bootstrap history.
+
+Replacement should be implemented as a separate operation from ordinary reporting rebuild. Reporting rebuild refreshes period membership and derived allocations. Snapshot replacement recomputes order financial truth and child detail records.
+
+Replacement of an existing snapshot in an open reporting period may be allowed after dry-run review and confirmation.
+
+Replacement of an existing snapshot in a closed reporting period should be blocked by default, but it must be overridable through an explicit force-replace workflow for owner-controlled cleanup. This supports cases where a merchant intentionally wants to recompute a whole site after beta rollout, configuration repair, or newly-added cost model support.
+
+The force-replace workflow should require stronger confirmation than ordinary replacement:
+
+- a dry-run summary for the selected scope
+- a clear statement that closed-period donation obligations may change
+- typed confirmation or an equivalent deliberate acknowledgement
+- a required replacement reason
+- an option to rebuild affected reporting periods after replacement
+- audit logging for the run and each replaced snapshot
+
+Snapshots associated with payment applications, tax true-ups, public disclosure exports, receipt evidence, or other records that have already been treated as external operational evidence should require an additional destructive reset checklist. These cases are still overridable by the shop owner, but the workflow must make the affected evidence explicit and must not silently discard or orphan payment, receipt, tax, or public disclosure records.
+
+Replacement should require order payload availability. Because `OrderSnapshot` does not currently store the complete Shopify order payload, replacement must either:
+
+- refetch the order from Shopify Admin API
+- use a merchant-uploaded order payload
+- use a retained import payload if the implementation later stores one
+
+The dry run should compare old and proposed replacement data before writing:
+
+- line count and line mapping status
+- old and new material, labor, packaging, equipment, consumable, POD, and mistake-buffer costs
+- old and new net contribution
+- old and new Cause and Artist allocation basis
+- whether the order belongs to an open or closed reporting period
+- whether force replacement would be required
+- whether payment, receipt, tax, or public disclosure evidence exists
+- whether replacement would change reporting totals
+
+The write path should be transactional. It may either:
+
+- create a replacement snapshot and mark the old snapshot as replaced, if the schema supports historical replacement links
+- delete and recreate the snapshot under the same `shopId + shopifyOrderId`, if replacement history is captured through audit logs and the current unique constraint makes parallel snapshots impractical
+
+In either case, the operation must write an audit log containing at least:
+
+- old snapshot id
+- new snapshot id, when different
+- Shopify order id
+- replacement reason
+- replacement source: Shopify refetch, uploaded payload, or retained import payload
+- old and new total cost and net contribution
+- old and new line counts
+- actor
+
+Replacement should not silently rematerialize period allocations. After replacement, the relevant reporting period should be marked for rebuild or rebuilt explicitly through the reporting rebuild workflow so the merchant can review changed donation and payout obligations.
 
 When a historical order references an unknown product or variant, import should not invent hidden cost or donation configuration.
 
@@ -144,6 +203,8 @@ The app should support:
 - rebuild one reporting period
 
 Rebuild should delete and recreate derived reporting data, not raw imported source records.
+
+Reporting rebuild must not replace order snapshots or recompute order line cost metadata. Snapshot replacement is a separate workflow because it changes the source records that reporting derives from.
 
 For a normal rebuild, preserve:
 
@@ -197,6 +258,7 @@ Historical backfill assumes the destination shop's Count On Us configuration has
 - avoids bespoke prior-store historical cost/cause import logic
 - gives merchants an explicit dry-run and confirmation flow
 - lets reporting history be rebuilt after payouts, charges, or orders are imported
+- lets merchants deliberately replace incomplete or stale order snapshots after configuration improves
 - preserves immutable snapshots as the source of reporting history
 - preserves real payment evidence during ordinary rebuilds
 
@@ -205,6 +267,7 @@ Historical backfill assumes the destination shop's Count On Us configuration has
 - imported historical snapshots may not reflect true order-time configuration
 - backfill requires careful warnings so merchants understand the import-time configuration assumption
 - rebuild workflows can become dangerous if they interact with logged disbursements, artist payments, receipts, or audit history
+- snapshot replacement can change donation obligations and must be presented as a controlled correction, not a routine refresh
 - import parsing, dedupe, dry-run previews, and batch tracking add significant operational surface area
 - historical order import may still require Shopify data access that depends on how the merchant exports the data
 - first-version period import may require stable payout IDs even when some merchant exports omit them
@@ -221,6 +284,10 @@ Historical backfill assumes the destination shop's Count On Us configuration has
 
 **Delete raw data during reporting rebuild** - Rejected. Rebuild should operate on derived reporting records. Raw imported orders, charges, and reporting period definitions are source data and should only be deleted through explicit import-batch rollback or destructive reset workflows.
 
+**Treat snapshot replacement as ordinary reporting rebuild** - Rejected. Reporting rebuild operates on derived records. Snapshot replacement changes order-level financial truth and needs stricter dry-run, confirmation, and audit semantics.
+
+**Forbid replacing webhook-created snapshots forever** - Rejected. Webhook snapshots should be more protected than imported snapshots, but beta deployments, configuration repairs, and newly-added cost components can produce legitimate merchant-controlled correction needs.
+
 **Allow rebuild to cascade-delete allocation applications** - Rejected. Application records connect real payments to payable obligations. Losing them during a rebuild would destroy operational evidence and could make already-recorded payments appear unpaid.
 
 **Treat tax true-ups as rebuildable derived data** - Rejected for normal rebuilds. True-ups are merchant-entered filing facts and should survive ordinary report regeneration.
@@ -234,6 +301,7 @@ Historical backfill assumes the destination shop's Count On Us configuration has
 - Define accepted file formats for payouts, Shopify charges, and orders.
 - Build dry-run validators with duplicate and missing-configuration summaries.
 - Add historical order snapshot creation using current configuration and `origin = "historical_import"`.
+- Add explicit snapshot replacement dry-run and replacement services with safeguards and override paths for webhook snapshots, closed periods, and externally evidenced records.
 - Add period and full-history reporting rebuild services with safeguards around payments, payment applications, tax true-ups, and receipts.
 - Decide and document how rebuild assigns `OrderSnapshot.periodId`.
 - Decide whether import-batch rollback is needed and how it interacts with payment records.
