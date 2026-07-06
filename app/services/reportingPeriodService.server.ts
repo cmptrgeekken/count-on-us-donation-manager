@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.server";
+import { countUnresolvedSettlementsForPeriod } from "./orderSettlement.server";
 
 const ZERO = new Prisma.Decimal(0);
 const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
@@ -427,6 +428,17 @@ export async function closeReportingPeriod(
       return { closed: false, period, allocations, artistAllocations };
     }
 
+    const unresolvedSettlementCount = await countUnresolvedSettlementsForPeriod({
+      shopId,
+      periodId,
+      periodStartDate: period.startDate,
+      periodEndDate: period.endDate,
+      db: tx as never,
+    });
+    if (unresolvedSettlementCount > 0) {
+      throw new Error(`Resolve ${unresolvedSettlementCount} external settlement review${unresolvedSettlementCount === 1 ? "" : "s"} before closing this reporting period.`);
+    }
+
     const closingPeriod = await tx.reportingPeriod.update({
       where: {
         id: period.id,
@@ -441,6 +453,19 @@ export async function closeReportingPeriod(
         createdAt: {
           gte: closingPeriod.startDate,
           lt: closingPeriod.endDate,
+        },
+      },
+      data: { periodId: closingPeriod.id },
+    });
+
+    await tx.orderSettlement.updateMany({
+      where: {
+        shopId,
+        snapshot: {
+          createdAt: {
+            gte: closingPeriod.startDate,
+            lt: closingPeriod.endDate,
+          },
         },
       },
       data: { periodId: closingPeriod.id },

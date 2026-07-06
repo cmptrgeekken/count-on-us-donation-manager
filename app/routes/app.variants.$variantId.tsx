@@ -22,9 +22,16 @@ import {
 import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
+import { resolveEquipmentEffectiveRates, type EquipmentForCosting } from "../services/costEngine.server";
+import { createEquipmentLibraryItem, createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { buildAdminVariantEstimate, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
+import {
+  defaultUsageModeForBasis,
+  usageModeAllowedForBasis,
+  usageModeOptionsForBasis,
+} from "../utils/equipment-usage";
 import {
   parseOptionalNonNegativeMoney,
   parseOptionalPercentInputToRate,
@@ -69,6 +76,7 @@ type SerializedEquipmentLine = {
   id: string;
   equipmentId: string;
   equipmentName: string;
+  usageBasis: string;
   hourlyRate: string | null;
   perUseCost: string | null;
   usageMode: string;
@@ -99,6 +107,7 @@ type TemplateEquipmentOverrideLine = {
   templateLineId: string;
   equipmentId: string;
   equipmentName: string;
+  usageBasis: string;
   usageMode: string;
   minutes: string | null;
   uses: string | null;
@@ -173,7 +182,7 @@ function serializeVariantEquipmentLine(
   line: {
     id: string;
     equipmentId: string;
-    equipment: { name: string; hourlyRate: { toString(): string } | null; perUseCost: { toString(): string } | null };
+    equipment: EquipmentForCosting & { name: string; usageBasis: string };
     usageMode: string;
     minutes: { toString(): string } | null;
     uses: { toString(): string } | null;
@@ -181,13 +190,16 @@ function serializeVariantEquipmentLine(
     yieldUses: { toString(): string } | null;
     yieldQuantity: { toString(): string } | null;
   },
+  defaultElectricityCostPerKwh?: Prisma.Decimal | null,
 ): SerializedEquipmentLine {
+  const rates = resolveEquipmentEffectiveRates(line.equipment, defaultElectricityCostPerKwh);
   return {
     id: line.id,
     equipmentId: line.equipmentId,
     equipmentName: line.equipment.name,
-    hourlyRate: line.equipment.hourlyRate?.toString() ?? null,
-    perUseCost: line.equipment.perUseCost?.toString() ?? null,
+    usageBasis: line.equipment.usageBasis ?? "time_and_unit",
+    hourlyRate: rates.hourlyRate?.toString() ?? null,
+    perUseCost: rates.perUseCost?.toString() ?? null,
     usageMode: line.usageMode ?? "direct",
     minutes: line.minutes?.toString() ?? null,
     uses: line.uses?.toString() ?? null,
@@ -203,6 +215,14 @@ function sortSerializedMaterialLines(lines: SerializedMaterialLine[]) {
 
 function sortSerializedEquipmentLines(lines: SerializedEquipmentLine[]) {
   return [...lines].sort((a, b) => a.equipmentName.localeCompare(b.equipmentName));
+}
+
+function sortAvailableMaterials(lines: AvailableMaterial[]) {
+  return [...lines].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function sortAvailableEquipment(lines: AvailableEquipment[]) {
+  return [...lines].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function formatProviderName(provider: string) {
@@ -261,6 +281,27 @@ const copyVariantConfigSchema = z.object({
   sourceVariantId: z.string().min(1),
 });
 
+const promoteTemplateSchema = z.object({
+  name: z.string().trim().min(1, "Template name is required."),
+  description: z.string().trim().optional(),
+  includeMaterials: z.boolean(),
+  includeEquipment: z.boolean(),
+  includeLabor: z.boolean(),
+  freezeShopLaborRate: z.boolean(),
+  includeDefaultShippingTemplate: z.boolean(),
+  assignBack: z.boolean(),
+  materialLineKeys: z.array(z.string()),
+  equipmentLineKeys: z.array(z.string()),
+});
+
+const promoteShippingTemplateSchema = z.object({
+  name: z.string().trim().min(1, "Template name is required."),
+  description: z.string().trim().optional(),
+  assignBack: z.boolean(),
+  setAsProductionDefault: z.boolean(),
+  materialLineKeys: z.array(z.string()).min(1, "Choose at least one shipping material line to include."),
+});
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -268,8 +309,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
   const shop = await prisma.shop.findUnique({
     where: { shopId },
-    select: { mistakeBuffer: true, defaultLaborRate: true },
+    select: { mistakeBuffer: true, defaultLaborRate: true, defaultElectricityCostPerKwh: true },
   });
+  const defaultElectricityCostPerKwh = shop?.defaultElectricityCostPerKwh ?? null;
 
   const variant = await prisma.variant.findFirst({
     where: { id: variantId, shopId },
@@ -293,11 +335,11 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           productionTemplate: {
             include: {
               materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
-              equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
+              equipmentLines: { include: { equipment: { include: { consumables: true } } }, orderBy: { equipment: { name: "asc" } } },
             },
           },
           materialLines: { include: { material: true, templateLine: true }, orderBy: { material: { name: "asc" } } },
-          equipmentLines: { include: { equipment: true, templateLine: true }, orderBy: { equipment: { name: "asc" } } },
+          equipmentLines: { include: { equipment: { include: { consumables: true } }, templateLine: true }, orderBy: { equipment: { name: "asc" } } },
         },
       },
     },
@@ -313,7 +355,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       orderBy: { name: "asc" },
       include: {
         materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
-        equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
+        equipmentLines: { include: { equipment: { include: { consumables: true } } }, orderBy: { equipment: { name: "asc" } } },
       },
     }),
     prisma.materialLibraryItem.findMany({
@@ -324,7 +366,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     prisma.equipmentLibraryItem.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, hourlyRate: true, perUseCost: true },
+      include: { consumables: true },
     }),
     prisma.shippingPackage.findMany({
       where: { shopId, status: "active" },
@@ -443,6 +485,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         templateLineId: line.id,
         equipmentId: line.equipmentId,
         equipmentName: line.equipment.name,
+        usageBasis: line.equipment.usageBasis ?? "time_and_unit",
         usageMode: line.usageMode ?? "direct",
         minutes: line.minutes?.toString() ?? null,
         uses: line.uses?.toString() ?? null,
@@ -462,7 +505,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
     additionalEquipmentLines = config.equipmentLines
       .filter((line) => !line.templateLineId && !consumedEquipmentLineIds.has(line.id))
-      .map(serializeVariantEquipmentLine);
+      .map((line) => serializeVariantEquipmentLine(line, defaultElectricityCostPerKwh));
     additionalEquipmentLines = sortSerializedEquipmentLines(additionalEquipmentLines);
   }
 
@@ -534,6 +577,8 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       name: template.name,
       type: template.type,
       defaultShippingTemplateId: template.defaultShippingTemplateId,
+      defaultLaborMinutes: template.defaultLaborMinutes?.toString() ?? null,
+      defaultLaborRate: template.defaultLaborRate?.toString() ?? null,
       materialLines: template.materialLines.map((line) => ({
         templateLineId: line.id,
         materialId: line.materialId,
@@ -548,6 +593,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         templateLineId: line.id,
         equipmentId: line.equipmentId,
         equipmentName: line.equipment.name,
+        usageBasis: line.equipment.usageBasis ?? "time_and_unit",
         usageMode: line.usageMode ?? "direct",
         minutes: line.minutes?.toString() ?? null,
         uses: line.uses?.toString() ?? null,
@@ -564,12 +610,16 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       perUnitCost: material.perUnitCost.toString(),
       totalUsesPerUnit: material.totalUsesPerUnit?.toString() ?? null,
     })),
-    availableEquipment: equipment.map((item) => ({
-      id: item.id,
-      name: item.name,
-      hourlyRate: item.hourlyRate?.toString() ?? null,
-      perUseCost: item.perUseCost?.toString() ?? null,
-    })),
+    availableEquipment: equipment.map((item) => {
+      const rates = resolveEquipmentEffectiveRates(item, defaultElectricityCostPerKwh);
+      return {
+        id: item.id,
+        name: item.name,
+        usageBasis: item.usageBasis,
+        hourlyRate: rates.hourlyRate?.toString() ?? null,
+        perUseCost: rates.perUseCost?.toString() ?? null,
+      };
+    }),
     packages: packages.map((pkg) => ({
       id: pkg.id,
       name: pkg.name,
@@ -601,6 +651,65 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
+
+  if (intent === "quick-create-material") {
+    let material: Awaited<ReturnType<typeof createMaterialLibraryItem>>;
+    try {
+      const materialType = formData.get("type")?.toString();
+      const costingModel = formData.get("costingModel")?.toString();
+      const normalizedType = materialType === "shipping" ? "shipping" : "production";
+      const normalizedCostingModel =
+        costingModel === "yield" || costingModel === "uses" || costingModel === "counted"
+          ? costingModel
+          : "counted";
+      material = await createMaterialLibraryItem({
+        shopId,
+        input: {
+          name: formData.get("name")?.toString() ?? "",
+          type: normalizedType,
+          costingModel: normalizedCostingModel,
+          purchasePrice: formData.get("purchasePrice")?.toString() ?? "",
+          purchaseQty: formData.get("purchaseQty")?.toString() ?? "",
+          totalUsesPerUnit: formData.get("totalUsesPerUnit")?.toString() ?? "",
+          purchaseLink: formData.get("purchaseLink")?.toString() ?? "",
+          weightGrams: formData.get("weightGrams")?.toString() ?? "",
+          unitDescription: formData.get("unitDescription")?.toString() ?? "",
+          notes: formData.get("notes")?.toString() ?? "",
+        },
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return jsonResponse({ ok: false, message: await error.text(), actionKind: "quick-create-material" }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return jsonResponse({ ok: true, message: "Material created.", actionKind: "quick-create-material", material });
+  }
+
+  if (intent === "quick-create-equipment") {
+    let equipment: Awaited<ReturnType<typeof createEquipmentLibraryItem>>;
+    try {
+      equipment = await createEquipmentLibraryItem({
+        shopId,
+        input: {
+          name: formData.get("name")?.toString() ?? "",
+          hourlyRate: formData.get("hourlyRate")?.toString() ?? "",
+          perUseCost: formData.get("perUseCost")?.toString() ?? "",
+          equipmentCost: formData.get("equipmentCost")?.toString() ?? "",
+          purchaseLink: formData.get("purchaseLink")?.toString() ?? "",
+          notes: formData.get("notes")?.toString() ?? "",
+        },
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return jsonResponse({ ok: false, message: await error.text(), actionKind: "quick-create-equipment" }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return jsonResponse({ ok: true, message: "Equipment created.", actionKind: "quick-create-equipment", equipment });
+  }
 
   async function ensureConfig() {
     const existing = await prisma.variantCostConfig.findFirst({ where: { variantId, shopId } });
@@ -753,7 +862,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           where: { id: normalizedProductionTemplateId, shopId },
           include: {
             materialLines: { select: { id: true, materialId: true } },
-            equipmentLines: { select: { id: true, equipmentId: true } },
+            equipmentLines: { select: { id: true, equipmentId: true, equipment: { select: { usageBasis: true } } } },
           },
         })
       : null;
@@ -793,6 +902,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     const materialMap = new Map((selectedTemplate?.materialLines ?? []).map((line) => [line.id, line.materialId]));
     const equipmentMap = new Map((selectedTemplate?.equipmentLines ?? []).map((line) => [line.id, line.equipmentId]));
+    const equipmentUsageBasisById = new Map(
+      (selectedTemplate?.equipmentLines ?? []).map((line) => [line.equipmentId, line.equipment.usageBasis ?? "time_and_unit"]),
+    );
 
     for (const line of draft.templateMaterialLines) {
       if (!materialMap.has(line.templateLineId) || materialMap.get(line.templateLineId) !== line.materialId) {
@@ -819,7 +931,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     const [materialsFound, equipmentFound, existingConfig] = await Promise.all([
       prisma.materialLibraryItem.findMany({ where: { id: { in: additionalMaterialIds }, shopId }, select: { id: true } }),
-      prisma.equipmentLibraryItem.findMany({ where: { id: { in: additionalEquipmentIds }, shopId }, select: { id: true } }),
+      prisma.equipmentLibraryItem.findMany({ where: { id: { in: additionalEquipmentIds }, shopId }, select: { id: true, usageBasis: true } }),
       prisma.variantCostConfig.findFirst({ where: { variantId, shopId }, select: { id: true } }),
     ]);
 
@@ -829,6 +941,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     if (equipmentFound.length !== additionalEquipmentIds.length) {
       return jsonResponse({ ok: false, message: "One or more additional equipment items could not be found." }, { status: 404 });
+    }
+    for (const equipment of equipmentFound) {
+      equipmentUsageBasisById.set(equipment.id, equipment.usageBasis);
     }
 
     const hasMeaningfulDraft = Boolean(
@@ -885,13 +1000,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       .filter((line) => line.hasOverride)
       .map((line) => {
         const usageMode = line.overrideUsageMode || "direct";
+        const usageBasis = equipmentUsageBasisById.get(line.equipmentId);
+        if (!usageModeAllowedForBasis(usageMode, usageBasis)) {
+          throw new Response("Selected equipment usage mode is not allowed for this equipment's usage basis.", { status: 400 });
+        }
         const data = {
           shopId,
           templateLineId: line.templateLineId,
           equipmentId: line.equipmentId,
           usageMode,
-          minutes: usageMode === "direct" ? parseOptionalNonNegativeNumber(line.overrideMinutes, "Equipment minutes") : null,
-          uses: usageMode === "direct" ? parseOptionalNonNegativeWholeNumber(line.overrideUses, "Equipment uses") : null,
+          minutes: usageMode === "direct" && usageBasis !== "unit" ? parseOptionalNonNegativeNumber(line.overrideMinutes, "Equipment minutes") : null,
+          uses: usageMode === "direct" && usageBasis !== "time" ? parseOptionalNonNegativeWholeNumber(line.overrideUses, "Equipment uses") : null,
           yieldDurationMinutes: usageMode === "duration_yield" ? parseOptionalPositiveNumber(line.overrideYieldDurationMinutes, "Equipment yield duration") : null,
           yieldUses: usageMode === "use_yield" ? parseOptionalPositiveWholeNumber(line.overrideYieldUses, "Equipment yield uses") : null,
           yieldQuantity: usageMode !== "direct" ? parseOptionalPositiveWholeNumber(line.overrideYieldQuantity, "Products yielded") : null,
@@ -920,12 +1039,16 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     const additionalEquipmentLines = draft.equipmentLines.map((line) => {
       const usageMode = line.usageMode || "direct";
+      const usageBasis = equipmentUsageBasisById.get(line.equipmentId);
+      if (!usageModeAllowedForBasis(usageMode, usageBasis)) {
+        throw new Response("Selected equipment usage mode is not allowed for this equipment's usage basis.", { status: 400 });
+      }
       const data = {
         shopId,
         equipmentId: line.equipmentId,
         usageMode,
-        minutes: usageMode === "direct" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
-        uses: usageMode === "direct" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
+        minutes: usageMode === "direct" && usageBasis !== "unit" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
+        uses: usageMode === "direct" && usageBasis !== "time" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
         yieldDurationMinutes: usageMode === "duration_yield" ? parseOptionalPositiveNumber(line.yieldDurationMinutes, "Equipment yield duration") : null,
         yieldUses: usageMode === "use_yield" ? parseOptionalPositiveWholeNumber(line.yieldUses, "Equipment yield uses") : null,
         yieldQuantity: usageMode !== "direct" ? parseOptionalPositiveWholeNumber(line.yieldQuantity, "Products yielded") : null,
@@ -1147,6 +1270,634 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       ok: true,
       message: "Variant configuration copied.",
       savedAt: new Date().toISOString(),
+    });
+  }
+
+  if (intent === "promote-template") {
+    const parsed = promoteTemplateSchema.safeParse({
+      name: formData.get("name")?.toString() ?? "",
+      description: formData.get("description")?.toString() ?? "",
+      includeMaterials: formData.get("includeMaterials") === "on",
+      includeEquipment: formData.get("includeEquipment") === "on",
+      includeLabor: formData.get("includeLabor") === "on",
+      freezeShopLaborRate: formData.get("freezeShopLaborRate") === "on",
+      includeDefaultShippingTemplate: formData.get("includeDefaultShippingTemplate") === "on",
+      assignBack: formData.get("assignBack") === "on",
+      materialLineKeys: formData.getAll("materialLineKey").map((value) => value.toString()),
+      equipmentLineKeys: formData.getAll("equipmentLineKey").map((value) => value.toString()),
+    });
+
+    if (!parsed.success) {
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid template." }, { status: 400 });
+    }
+
+    const promotion = parsed.data;
+    const selectedMaterialLineKeys = new Set(promotion.materialLineKeys);
+    const selectedEquipmentLineKeys = new Set(promotion.equipmentLineKeys);
+    if (!promotion.includeMaterials && !promotion.includeEquipment && !promotion.includeLabor) {
+      return jsonResponse(
+        { ok: false, message: "Choose at least one cost area to include in the template." },
+        { status: 400 },
+      );
+    }
+
+    const [sourceConfig, shop] = await Promise.all([
+      prisma.variantCostConfig.findFirst({
+        where: { variantId, shopId },
+        include: {
+          productionTemplate: {
+            include: {
+              materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+              equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
+            },
+          },
+          shippingTemplate: { select: { id: true, type: true } },
+          materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+          equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
+        },
+      }),
+      prisma.shop.findUnique({
+        where: { shopId },
+        select: { defaultLaborRate: true },
+      }),
+    ]);
+
+    if (!sourceConfig) {
+      return jsonResponse({ ok: false, message: "Save a variant configuration before creating a template from it." }, { status: 400 });
+    }
+
+    const promotedMaterialLines: Array<{
+      materialId: string;
+      materialName: string;
+      quantity: Prisma.Decimal;
+      yield: Prisma.Decimal | null;
+      usesPerVariant: Prisma.Decimal | null;
+    }> = [];
+    const retainedTemplateMaterialLines: Array<{
+      materialId: string;
+      quantity: Prisma.Decimal;
+      yield: Prisma.Decimal | null;
+      usesPerVariant: Prisma.Decimal | null;
+    }> = [];
+    const promotedEquipmentLines: Array<{
+      equipmentId: string;
+      equipmentName: string;
+      usageMode: string;
+      minutes: Prisma.Decimal | null;
+      uses: Prisma.Decimal | null;
+      yieldDurationMinutes: Prisma.Decimal | null;
+      yieldUses: Prisma.Decimal | null;
+      yieldQuantity: Prisma.Decimal | null;
+    }> = [];
+    const retainedTemplateEquipmentLines: Array<{
+      equipmentId: string;
+      usageMode: string;
+      minutes: Prisma.Decimal | null;
+      uses: Prisma.Decimal | null;
+      yieldDurationMinutes: Prisma.Decimal | null;
+      yieldUses: Prisma.Decimal | null;
+      yieldQuantity: Prisma.Decimal | null;
+    }> = [];
+
+    if (promotion.includeMaterials || promotion.assignBack) {
+      if (promotion.includeMaterials && selectedMaterialLineKeys.size === 0) {
+        return jsonResponse({ ok: false, message: "Choose at least one material line to include." }, { status: 400 });
+      }
+
+      const templateMaterialSource = sourceConfig.productionTemplate?.materialLines ?? [];
+      const explicitMaterialOverrides = new Map(
+        sourceConfig.materialLines
+          .filter((line) => line.templateLineId)
+          .map((line) => [line.templateLineId as string, line]),
+      );
+      const materialIdTemplateCounts = buildCountMap(templateMaterialSource.map((line) => line.materialId));
+      const legacyMaterialOverrides = new Map(
+        sourceConfig.materialLines
+          .filter(
+            (line) =>
+              !line.templateLineId &&
+              line.material.type === "production" &&
+              (materialIdTemplateCounts.get(line.materialId) ?? 0) === 1,
+          )
+          .map((line) => [line.materialId, line]),
+      );
+      const consumedMaterialLineIds = new Set<string>();
+
+      for (const line of templateMaterialSource) {
+        const override = explicitMaterialOverrides.get(line.id) ?? legacyMaterialOverrides.get(line.materialId) ?? null;
+        if (override) consumedMaterialLineIds.add(override.id);
+        const effectiveLine = {
+          materialId: line.materialId,
+          quantity: override?.quantity ?? line.quantity,
+          yield: override?.yield ?? line.yield,
+          usesPerVariant: override?.usesPerVariant ?? line.usesPerVariant,
+        };
+        if (promotion.includeMaterials && selectedMaterialLineKeys.has(`template:${line.id}`)) {
+          promotedMaterialLines.push({
+            ...effectiveLine,
+            materialName: line.material.name,
+          });
+        } else {
+          retainedTemplateMaterialLines.push(effectiveLine);
+        }
+      }
+
+      if (promotion.includeMaterials) {
+        for (const line of sourceConfig.materialLines) {
+          if (
+            line.templateLineId ||
+            consumedMaterialLineIds.has(line.id) ||
+            line.material.type !== "production" ||
+            !selectedMaterialLineKeys.has(`variant:${line.id}`)
+          ) continue;
+          promotedMaterialLines.push({
+            materialId: line.materialId,
+            materialName: line.material.name,
+            quantity: line.quantity,
+            yield: line.yield,
+            usesPerVariant: line.usesPerVariant,
+          });
+        }
+      }
+
+      if (promotion.includeMaterials) {
+        const duplicateMaterialNames = promotedMaterialLines
+          .filter((line, index, lines) => lines.findIndex((candidate) => candidate.materialId === line.materialId) !== index)
+          .map((line) => line.materialName);
+        if (duplicateMaterialNames.length > 0) {
+          return jsonResponse(
+            {
+              ok: false,
+              message: `Cannot create a template from duplicate production materials yet: ${[...new Set(duplicateMaterialNames)].join(", ")}.`,
+            },
+            { status: 400 },
+          );
+        }
+      }
+    }
+
+    if (promotion.includeEquipment || promotion.assignBack) {
+      if (promotion.includeEquipment && selectedEquipmentLineKeys.size === 0) {
+        return jsonResponse({ ok: false, message: "Choose at least one equipment line to include." }, { status: 400 });
+      }
+
+      const templateEquipmentSource = sourceConfig.productionTemplate?.equipmentLines ?? [];
+      const explicitEquipmentOverrides = new Map(
+        sourceConfig.equipmentLines
+          .filter((line) => line.templateLineId)
+          .map((line) => [line.templateLineId as string, line]),
+      );
+      const equipmentIdTemplateCounts = buildCountMap(templateEquipmentSource.map((line) => line.equipmentId));
+      const legacyEquipmentOverrides = new Map(
+        sourceConfig.equipmentLines
+          .filter(
+            (line) =>
+              !line.templateLineId &&
+              (equipmentIdTemplateCounts.get(line.equipmentId) ?? 0) === 1,
+          )
+          .map((line) => [line.equipmentId, line]),
+      );
+      const consumedEquipmentLineIds = new Set<string>();
+
+      for (const line of templateEquipmentSource) {
+        const override = explicitEquipmentOverrides.get(line.id) ?? legacyEquipmentOverrides.get(line.equipmentId) ?? null;
+        if (override) consumedEquipmentLineIds.add(override.id);
+        const effectiveLine = {
+          equipmentId: line.equipmentId,
+          usageMode: override?.usageMode ?? line.usageMode ?? "direct",
+          minutes: override?.minutes ?? line.minutes,
+          uses: override?.uses ?? line.uses,
+          yieldDurationMinutes: override?.yieldDurationMinutes ?? line.yieldDurationMinutes,
+          yieldUses: override?.yieldUses ?? line.yieldUses,
+          yieldQuantity: override?.yieldQuantity ?? line.yieldQuantity,
+        };
+        if (promotion.includeEquipment && selectedEquipmentLineKeys.has(`template:${line.id}`)) {
+          promotedEquipmentLines.push({
+            ...effectiveLine,
+            equipmentName: line.equipment.name,
+          });
+        } else {
+          retainedTemplateEquipmentLines.push(effectiveLine);
+        }
+      }
+
+      if (promotion.includeEquipment) {
+        for (const line of sourceConfig.equipmentLines) {
+          if (line.templateLineId || consumedEquipmentLineIds.has(line.id) || !selectedEquipmentLineKeys.has(`variant:${line.id}`)) continue;
+          promotedEquipmentLines.push({
+            equipmentId: line.equipmentId,
+            equipmentName: line.equipment.name,
+            usageMode: line.usageMode ?? "direct",
+            minutes: line.minutes,
+            uses: line.uses,
+            yieldDurationMinutes: line.yieldDurationMinutes,
+            yieldUses: line.yieldUses,
+            yieldQuantity: line.yieldQuantity,
+          });
+        }
+      }
+
+      if (promotion.includeEquipment) {
+        const duplicateEquipmentNames = promotedEquipmentLines
+          .filter((line, index, lines) => lines.findIndex((candidate) => candidate.equipmentId === line.equipmentId) !== index)
+          .map((line) => line.equipmentName);
+        if (duplicateEquipmentNames.length > 0) {
+          return jsonResponse(
+            {
+              ok: false,
+              message: `Cannot create a template from duplicate equipment items yet: ${[...new Set(duplicateEquipmentNames)].join(", ")}.`,
+            },
+            { status: 400 },
+          );
+        }
+      }
+    }
+
+    const defaultLaborMinutes = promotion.includeLabor
+      ? sourceConfig.laborMinutes ?? sourceConfig.productionTemplate?.defaultLaborMinutes ?? null
+      : null;
+    const defaultLaborRate = promotion.includeLabor
+      ? sourceConfig.laborRate ?? sourceConfig.productionTemplate?.defaultLaborRate ?? (promotion.freezeShopLaborRate ? shop?.defaultLaborRate ?? null : null)
+      : null;
+
+    const exactPromotedVariantMaterialLineIds = sourceConfig.materialLines
+      .filter((line) => promotion.includeMaterials && !line.templateLineId && line.material.type === "production" && selectedMaterialLineKeys.has(`variant:${line.id}`))
+      .map((line) => line.id);
+    const exactPromotedVariantEquipmentLineIds = sourceConfig.equipmentLines
+      .filter((line) => promotion.includeEquipment && !line.templateLineId && selectedEquipmentLineKeys.has(`variant:${line.id}`))
+      .map((line) => line.id);
+    const staleMaterialOverrideCount = sourceConfig.materialLines.filter((line) => line.templateLineId).length;
+    const staleEquipmentOverrideCount = sourceConfig.equipmentLines.filter((line) => line.templateLineId).length;
+    const retainedMaterialLineCount = promotion.assignBack
+      ? sourceConfig.materialLines.filter((line) => !line.templateLineId && !exactPromotedVariantMaterialLineIds.includes(line.id)).length +
+        retainedTemplateMaterialLines.length
+      : sourceConfig.materialLines.filter((line) => !line.templateLineId).length;
+    const retainedEquipmentLineCount = promotion.assignBack
+      ? sourceConfig.equipmentLines.filter((line) => !line.templateLineId && !exactPromotedVariantEquipmentLineIds.includes(line.id)).length +
+        retainedTemplateEquipmentLines.length
+      : sourceConfig.equipmentLines.filter((line) => !line.templateLineId).length;
+
+    const template = await prisma.$transaction(async (tx) => {
+      const createdTemplate = await tx.costTemplate.create({
+        data: {
+          shopId,
+          name: promotion.name,
+          type: "production",
+          description: promotion.description || null,
+          defaultLaborMinutes,
+          defaultLaborRate,
+          defaultShippingTemplateId:
+            promotion.includeDefaultShippingTemplate && sourceConfig.shippingTemplate?.type === "shipping"
+              ? sourceConfig.shippingTemplate.id
+              : null,
+        },
+      });
+
+      if (promotedMaterialLines.length > 0) {
+        await tx.costTemplateMaterialLine.createMany({
+          data: promotedMaterialLines.map((line) => ({
+            templateId: createdTemplate.id,
+            materialId: line.materialId,
+            quantity: line.quantity,
+            yield: line.yield,
+            usesPerVariant: line.usesPerVariant,
+          })),
+        });
+      }
+
+      if (promotedEquipmentLines.length > 0) {
+        await tx.costTemplateEquipmentLine.createMany({
+          data: promotedEquipmentLines.map((line) => ({
+            templateId: createdTemplate.id,
+            equipmentId: line.equipmentId,
+            usageMode: line.usageMode,
+            minutes: line.minutes,
+            uses: line.uses,
+            yieldDurationMinutes: line.yieldDurationMinutes,
+            yieldUses: line.yieldUses,
+            yieldQuantity: line.yieldQuantity,
+          })),
+        });
+      }
+
+      if (promotion.assignBack) {
+        await tx.variantCostConfig.updateMany({
+          where: { id: sourceConfig.id, shopId },
+          data: {
+            productionTemplateId: createdTemplate.id,
+            lineItemCount: retainedMaterialLineCount + retainedEquipmentLineCount,
+          },
+        });
+
+        await tx.variantMaterialLine.deleteMany({
+          where: {
+            configId: sourceConfig.id,
+            shopId,
+            OR: [
+              { templateLineId: { not: null } },
+              { id: { in: exactPromotedVariantMaterialLineIds } },
+            ],
+          },
+        });
+        await tx.variantEquipmentLine.deleteMany({
+          where: {
+            configId: sourceConfig.id,
+            shopId,
+            OR: [
+              { templateLineId: { not: null } },
+              { id: { in: exactPromotedVariantEquipmentLineIds } },
+            ],
+          },
+        });
+
+        if (retainedTemplateMaterialLines.length > 0) {
+          await tx.variantMaterialLine.createMany({
+            data: retainedTemplateMaterialLines.map((line) => ({
+              shopId,
+              configId: sourceConfig.id,
+              materialId: line.materialId,
+              quantity: line.quantity,
+              yield: line.yield,
+              usesPerVariant: line.usesPerVariant,
+            })),
+          });
+        }
+
+        if (retainedTemplateEquipmentLines.length > 0) {
+          await tx.variantEquipmentLine.createMany({
+            data: retainedTemplateEquipmentLines.map((line) => ({
+              shopId,
+              configId: sourceConfig.id,
+              equipmentId: line.equipmentId,
+              usageMode: line.usageMode,
+              minutes: line.minutes,
+              uses: line.uses,
+              yieldDurationMinutes: line.yieldDurationMinutes,
+              yieldUses: line.yieldUses,
+              yieldQuantity: line.yieldQuantity,
+            })),
+          });
+        }
+      }
+
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "CostTemplate",
+          entityId: createdTemplate.id,
+          action: "TEMPLATE_CREATED_FROM_VARIANT",
+          actor: "merchant",
+          payload: {
+            variantId,
+            materialLineCount: promotedMaterialLines.length,
+            equipmentLineCount: promotedEquipmentLines.length,
+            assignedBack: promotion.assignBack,
+          },
+        },
+      });
+
+      if (promotion.assignBack) {
+        await tx.auditLog.create({
+          data: {
+            shopId,
+            entity: "VariantCostConfig",
+            entityId: sourceConfig.id,
+            action: "TEMPLATE_ASSIGNED_FROM_VARIANT_PROMOTION",
+            actor: "merchant",
+            payload: {
+              templateId: createdTemplate.id,
+              removedMaterialLineCount: exactPromotedVariantMaterialLineIds.length + staleMaterialOverrideCount,
+              removedEquipmentLineCount: exactPromotedVariantEquipmentLineIds.length + staleEquipmentOverrideCount,
+            },
+          },
+        });
+      }
+
+      return createdTemplate;
+    });
+
+    const cleanupMessage = promotion.assignBack
+      ? ` Assigned to this variant and cleaned up ${exactPromotedVariantMaterialLineIds.length + staleMaterialOverrideCount} material row(s) and ${exactPromotedVariantEquipmentLineIds.length + staleEquipmentOverrideCount} equipment row(s).`
+      : "";
+    const retainedMessage =
+      promotion.assignBack && retainedMaterialLineCount + retainedEquipmentLineCount > 0
+        ? ` ${retainedMaterialLineCount + retainedEquipmentLineCount} variant-specific row(s) remain for review.`
+        : "";
+
+    return jsonResponse({
+      ok: true,
+      message: `Template "${template.name}" created.${cleanupMessage}${retainedMessage}`,
+      savedAt: new Date().toISOString(),
+      templateId: template.id,
+    });
+  }
+
+  if (intent === "promote-shipping-template") {
+    const parsed = promoteShippingTemplateSchema.safeParse({
+      name: formData.get("name")?.toString() ?? "",
+      description: formData.get("description")?.toString() ?? "",
+      assignBack: formData.get("assignBack") === "on",
+      setAsProductionDefault: formData.get("setAsProductionDefault") === "on",
+      materialLineKeys: formData.getAll("materialLineKey").map((value) => value.toString()),
+    });
+
+    if (!parsed.success) {
+      return jsonResponse({ ok: false, message: parsed.error.issues[0]?.message ?? "Invalid shipping template." }, { status: 400 });
+    }
+
+    const promotion = parsed.data;
+    const selectedMaterialLineKeys = new Set(promotion.materialLineKeys);
+    const sourceConfig = await prisma.variantCostConfig.findFirst({
+      where: { variantId, shopId },
+      include: {
+        productionTemplate: { select: { id: true, type: true } },
+        shippingTemplate: {
+          include: {
+            materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+          },
+        },
+        materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
+        equipmentLines: { select: { id: true } },
+      },
+    });
+
+    if (!sourceConfig) {
+      return jsonResponse({ ok: false, message: "Save a variant configuration before creating a shipping template from it." }, { status: 400 });
+    }
+
+    const promotedShippingLines: Array<{
+      materialId: string;
+      materialName: string;
+      quantity: Prisma.Decimal;
+      yield: Prisma.Decimal | null;
+      usesPerVariant: Prisma.Decimal | null;
+    }> = [];
+    const retainedTemplateShippingLines: Array<{
+      materialId: string;
+      quantity: Prisma.Decimal;
+      yield: Prisma.Decimal | null;
+      usesPerVariant: Prisma.Decimal | null;
+    }> = [];
+
+    for (const line of sourceConfig.shippingTemplate?.materialLines ?? []) {
+      const effectiveLine = {
+        materialId: line.materialId,
+        quantity: line.quantity,
+        yield: line.yield,
+        usesPerVariant: line.usesPerVariant,
+      };
+      if (selectedMaterialLineKeys.has(`template:${line.id}`)) {
+        promotedShippingLines.push({
+          ...effectiveLine,
+          materialName: line.material.name,
+        });
+      } else {
+        retainedTemplateShippingLines.push(effectiveLine);
+      }
+    }
+
+    for (const line of sourceConfig.materialLines) {
+      if (line.templateLineId || line.material.type !== "shipping" || !selectedMaterialLineKeys.has(`variant:${line.id}`)) continue;
+      promotedShippingLines.push({
+        materialId: line.materialId,
+        materialName: line.material.name,
+        quantity: line.quantity,
+        yield: line.yield,
+        usesPerVariant: line.usesPerVariant,
+      });
+    }
+
+    const duplicateMaterialNames = promotedShippingLines
+      .filter((line, index, lines) => lines.findIndex((candidate) => candidate.materialId === line.materialId) !== index)
+      .map((line) => line.materialName);
+    if (duplicateMaterialNames.length > 0) {
+      return jsonResponse(
+        {
+          ok: false,
+          message: `Cannot create a shipping template from duplicate shipping materials yet: ${[...new Set(duplicateMaterialNames)].join(", ")}.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    const promotedVariantShippingLineIds = sourceConfig.materialLines
+      .filter((line) => !line.templateLineId && line.material.type === "shipping" && selectedMaterialLineKeys.has(`variant:${line.id}`))
+      .map((line) => line.id);
+    const retainedMaterialLineCount = promotion.assignBack
+      ? sourceConfig.materialLines.filter((line) => !promotedVariantShippingLineIds.includes(line.id)).length +
+        retainedTemplateShippingLines.length
+      : sourceConfig.materialLines.length;
+    const retainedEquipmentLineCount = sourceConfig.equipmentLines.length;
+
+    const template = await prisma.$transaction(async (tx) => {
+      const createdTemplate = await tx.costTemplate.create({
+        data: {
+          shopId,
+          name: promotion.name,
+          type: "shipping",
+          description: promotion.description || null,
+        },
+      });
+
+      await tx.costTemplateMaterialLine.createMany({
+        data: promotedShippingLines.map((line) => ({
+          templateId: createdTemplate.id,
+          materialId: line.materialId,
+          quantity: line.quantity,
+          yield: line.yield,
+          usesPerVariant: line.usesPerVariant,
+        })),
+      });
+
+      if (promotion.assignBack) {
+        await tx.variantCostConfig.updateMany({
+          where: { id: sourceConfig.id, shopId },
+          data: {
+            shippingTemplateId: createdTemplate.id,
+            lineItemCount: retainedMaterialLineCount + retainedEquipmentLineCount,
+          },
+        });
+
+        await tx.variantMaterialLine.deleteMany({
+          where: {
+            configId: sourceConfig.id,
+            shopId,
+            id: { in: promotedVariantShippingLineIds },
+          },
+        });
+
+        if (retainedTemplateShippingLines.length > 0) {
+          await tx.variantMaterialLine.createMany({
+            data: retainedTemplateShippingLines.map((line) => ({
+              shopId,
+              configId: sourceConfig.id,
+              materialId: line.materialId,
+              quantity: line.quantity,
+              yield: line.yield,
+              usesPerVariant: line.usesPerVariant,
+            })),
+          });
+        }
+      }
+
+      if (promotion.setAsProductionDefault && sourceConfig.productionTemplateId) {
+        await tx.costTemplate.updateMany({
+          where: { id: sourceConfig.productionTemplateId, shopId, type: { not: "shipping" } },
+          data: { defaultShippingTemplateId: createdTemplate.id },
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "CostTemplate",
+          entityId: createdTemplate.id,
+          action: "SHIPPING_TEMPLATE_CREATED_FROM_VARIANT",
+          actor: "merchant",
+          payload: {
+            variantId,
+            materialLineCount: promotedShippingLines.length,
+            assignedBack: promotion.assignBack,
+            setAsProductionDefault: promotion.setAsProductionDefault,
+          },
+        },
+      });
+
+      if (promotion.assignBack || promotion.setAsProductionDefault) {
+        await tx.auditLog.create({
+          data: {
+            shopId,
+            entity: "VariantCostConfig",
+            entityId: sourceConfig.id,
+            action: "SHIPPING_TEMPLATE_PROMOTION_APPLIED",
+            actor: "merchant",
+            payload: {
+              templateId: createdTemplate.id,
+              assignedBack: promotion.assignBack,
+              setAsProductionDefault: promotion.setAsProductionDefault,
+              removedMaterialLineCount: promotedVariantShippingLineIds.length,
+            },
+          },
+        });
+      }
+
+      return createdTemplate;
+    });
+
+    const cleanupMessage = promotion.assignBack
+      ? ` Assigned to this variant and cleaned up ${promotedVariantShippingLineIds.length} shipping material row(s).`
+      : "";
+    const defaultMessage = promotion.setAsProductionDefault ? " Set as the current production template's default shipping template." : "";
+    const retainedMessage =
+      promotion.assignBack && retainedMaterialLineCount + retainedEquipmentLineCount > 0
+        ? ` ${retainedMaterialLineCount + retainedEquipmentLineCount} variant-specific row(s) remain for review.`
+        : "";
+
+    return jsonResponse({
+      ok: true,
+      message: `Shipping template "${template.name}" created.${cleanupMessage}${defaultMessage}${retainedMessage}`,
+      savedAt: new Date().toISOString(),
+      templateId: template.id,
     });
   }
 
@@ -1601,14 +2352,9 @@ type AvailableMaterial = {
 type AvailableEquipment = {
   id: string;
   name: string;
+  usageBasis: string;
   hourlyRate: string | null;
   perUseCost: string | null;
-};
-
-type AvailablePackage = {
-  id: string;
-  name: string;
-  dimensions: string;
 };
 
 type CopySourceVariant = {
@@ -1697,10 +2443,25 @@ function serializeVariantDraftState(draft: VariantDraft) {
 }
 
 export default function VariantDetailPage() {
-  const { variant, config, shopDefaults, templates, availableMaterials, availableEquipment, packages, copySourceVariants } =
-    useLoaderData<typeof loader>();
+	  const {
+	    variant,
+	    config,
+	    shopDefaults,
+	    templates,
+	    availableMaterials: loadedMaterials,
+	    availableEquipment: loadedEquipment,
+	    copySourceVariants,
+	  } = useLoaderData<typeof loader>();
   const saveFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
   const copyFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
+  const promoteFetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string; templateId?: string }>();
+  const quickCreateFetcher = useFetcher<{
+    ok: boolean;
+    message: string;
+    actionKind?: "quick-create-material" | "quick-create-equipment";
+    material?: AvailableMaterial;
+    equipment?: AvailableEquipment;
+  }>();
   const previewFetcher = useFetcher<{
     ok: boolean;
     message: string;
@@ -1729,6 +2490,16 @@ export default function VariantDetailPage() {
   const [matQty, setMatQty] = useState("1");
   const [matYield, setMatYield] = useState("1");
   const [matUses, setMatUses] = useState("");
+  const [quickMaterialOpen, setQuickMaterialOpen] = useState(false);
+  const [quickMaterialForm, setQuickMaterialForm] = useState({
+    name: "",
+    type: "production",
+    costingModel: "counted",
+    purchasePrice: "",
+    purchaseQty: "1",
+    totalUsesPerUnit: "",
+    purchaseLink: "",
+  });
 
   const [materialOverrideTargetId, setMaterialOverrideTargetId] = useState<string | null>(null);
   const [overrideMatQty, setOverrideMatQty] = useState("1");
@@ -1744,6 +2515,14 @@ export default function VariantDetailPage() {
   const [eqYieldDurationMinutes, setEqYieldDurationMinutes] = useState("");
   const [eqYieldUses, setEqYieldUses] = useState("");
   const [eqYieldQuantity, setEqYieldQuantity] = useState("");
+  const [quickEquipmentOpen, setQuickEquipmentOpen] = useState(false);
+  const [quickEquipmentForm, setQuickEquipmentForm] = useState({
+    name: "",
+    hourlyRate: "",
+    perUseCost: "",
+    equipmentCost: "",
+    purchaseLink: "",
+  });
 
   const [equipmentOverrideTargetId, setEquipmentOverrideTargetId] = useState<string | null>(null);
   const [overrideEqUsageMode, setOverrideEqUsageMode] = useState("direct");
@@ -1756,21 +2535,41 @@ export default function VariantDetailPage() {
   const [copyDialogOpen, setCopyDialogOpen] = useState(false);
   const [selectedCopySourceId, setSelectedCopySourceId] = useState("");
   const [copySourceSearchValue, setCopySourceSearchValue] = useState("");
+  const [promoteDialogOpen, setPromoteDialogOpen] = useState(false);
+  const [promoteForm, setPromoteForm] = useState({
+    name: `${variant.productTitle} - ${variant.title}`,
+    description: "",
+    includeMaterials: true,
+    includeEquipment: true,
+    includeLabor: true,
+    freezeShopLaborRate: false,
+    includeDefaultShippingTemplate: true,
+    assignBack: false,
+    materialLineKeys: [] as string[],
+    equipmentLineKeys: [] as string[],
+  });
+  const [promoteShippingDialogOpen, setPromoteShippingDialogOpen] = useState(false);
+  const [promoteShippingForm, setPromoteShippingForm] = useState({
+    name: `${variant.productTitle} - ${variant.title} Shipping`,
+    description: "",
+    assignBack: false,
+    setAsProductionDefault: false,
+    materialLineKeys: [] as string[],
+  });
 
   const [baseDraft, setBaseDraft] = useState(() => buildVariantDraft(config));
   const [draft, setDraft] = useState(() => buildVariantDraft(config));
+  const [availableMaterials, setAvailableMaterials] = useState<AvailableMaterial[]>(() => loadedMaterials);
+  const [availableEquipment, setAvailableEquipment] = useState<AvailableEquipment[]>(() => loadedEquipment);
   const handledSaveRef = useRef<string | null>(null);
   const handledCopyRef = useRef<string | null>(null);
+  const handledPromoteRef = useRef<string | null>(null);
   const preCopyDraftStateRef = useRef<string | null>(null);
 
-  const isSaving = saveFetcher.state !== "idle";
-  const isCopying = copyFetcher.state !== "idle";
-  const productionTemplates = templates.filter((template: TemplateCatalogEntry) => template.type !== "shipping");
-  const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
-  const packageOptions = [
-    { label: "No preferred package", value: "" },
-    ...packages.map((pkg: AvailablePackage) => ({ label: `${pkg.name} (${pkg.dimensions})`, value: pkg.id })),
-  ];
+	  const isSaving = saveFetcher.state !== "idle";
+	  const isCopying = copyFetcher.state !== "idle";
+	  const productionTemplates = templates.filter((template: TemplateCatalogEntry) => template.type !== "shipping");
+	  const shippingTemplates = templates.filter((template: TemplateCatalogEntry) => template.type === "shipping");
   const effectiveTemplateSelection = resolveEffectiveTemplateSelection(
     {
       productionTemplateId: draft.productionTemplateId ?? null,
@@ -1786,6 +2585,12 @@ export default function VariantDetailPage() {
   const preview = previewFetcher.data?.preview;
   const selectedMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === selectedMaterialId);
   const selectedEquipment = availableEquipment.find((equipment: AvailableEquipment) => equipment.id === selectedEquipmentId);
+  const selectedEquipmentUsageBasis = selectedEquipment?.usageBasis ?? "time_and_unit";
+  const equipmentUsageModeOptions = usageModeOptionsForBasis(selectedEquipmentUsageBasis);
+  const equipmentOverrideTarget =
+    draft.templateEquipmentLines.find((line: VariantTemplateEquipmentDraftLine) => line.templateLineId === equipmentOverrideTargetId) ?? null;
+  const equipmentOverrideUsageBasis = equipmentOverrideTarget?.usageBasis ?? "time_and_unit";
+  const equipmentOverrideUsageModeOptions = usageModeOptionsForBasis(equipmentOverrideUsageBasis);
   const unavailableMaterialIds = new Set(draft.materialLines.map((line: SerializedMaterialLine) => line.materialId));
   const unavailableEquipmentIds = new Set(draft.equipmentLines.map((line: SerializedEquipmentLine) => line.equipmentId));
   const filteredMaterialOptions = availableMaterials
@@ -1823,24 +2628,98 @@ export default function VariantDetailPage() {
   const additionalShippingMaterialLines = draft.materialLines.filter(
     (line: SerializedMaterialLine) => line.materialType === "shipping",
   );
+  const productionTemplateMaterialIds = new Set(
+    draft.templateMaterialLines.map((line: VariantTemplateMaterialDraftLine) => line.materialId),
+  );
+  const shippingTemplateMaterialIds = new Set(
+    shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => line.materialId),
+  );
+  const productionTemplateEquipmentIds = new Set(
+    draft.templateEquipmentLines.map((line: VariantTemplateEquipmentDraftLine) => line.equipmentId),
+  );
   const materialOverrideTarget =
     draft.templateMaterialLines.find((line) => line.templateLineId === materialOverrideTargetId) ?? null;
-  const equipmentOverrideTarget =
-    draft.templateEquipmentLines.find((line) => line.templateLineId === equipmentOverrideTargetId) ?? null;
   const isDirty = serializeVariantDraftState(draft) !== serializeVariantDraftState(baseDraft);
   const { confirmThenNavigate } = useUnsavedChangesGuard(isDirty);
   const shopDefaultLaborRate = shopDefaults.defaultLaborRate;
+  const selectedProductionTemplate =
+    templates.find((template: TemplateCatalogEntry) => template.id === draft.productionTemplateId) ?? null;
+  const templateDefaultLaborMinutes = selectedProductionTemplate?.defaultLaborMinutes ?? "";
+  const templateDefaultLaborRate = selectedProductionTemplate?.defaultLaborRate ?? "";
   const effectiveLaborRateLabel = draft.laborRate
     ? `${formatMoney(draft.laborRate)}/hr (Variant override)`
-    : shopDefaultLaborRate
-      ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
-      : "No labor rate set";
+    : templateDefaultLaborRate
+      ? `${formatMoney(templateDefaultLaborRate)}/hr (Template default)`
+      : shopDefaultLaborRate
+        ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
+        : "No labor rate set";
   const laborRateHelpText = shopDefaultLaborRate
-    ? `Leave blank to use the shop default of ${formatMoney(shopDefaultLaborRate)}/hr.`
-    : "Leave blank to avoid a variant override. Set a shop default in Settings to make variants inherit one.";
+    ? `Leave blank to use the template default rate, or the shop default of ${formatMoney(shopDefaultLaborRate)}/hr.`
+    : "Leave blank to use the template default rate when one is configured.";
+  const effectiveLaborMinutesLabel = draft.laborMinutes
+    ? `${draft.laborMinutes} min (Variant override)`
+    : templateDefaultLaborMinutes
+      ? `${templateDefaultLaborMinutes} min (Template default)`
+      : "No labor minutes set";
   const loadedVariantDraftState = serializeVariantDraftState(buildVariantDraft(config));
   const selectedCopySource =
     copySourceVariants.find((sourceVariant: CopySourceVariant) => sourceVariant.id === selectedCopySourceId) ?? null;
+  const promotableMaterialLines = [
+    ...draft.templateMaterialLines.map((line: VariantTemplateMaterialDraftLine) => ({
+      key: `template:${line.templateLineId}`,
+      name: line.materialName,
+      source: "Template",
+      description: describeMaterialLine({
+        costingModel: line.costingModel,
+        quantity: line.hasOverride ? line.overrideQuantity : line.quantity,
+        yield: line.hasOverride ? line.overrideYield : line.yield,
+        usesPerVariant: line.hasOverride ? line.overrideUsesPerVariant : line.usesPerVariant,
+      }),
+    })),
+    ...draft.materialLines
+      .filter((line: SerializedMaterialLine) => line.materialType === "production")
+      .map((line: SerializedMaterialLine) => ({
+        key: `variant:${line.id}`,
+        name: line.materialName,
+        source: "Variant",
+        description: describeMaterialLine(line),
+      })),
+  ];
+  const promotableEquipmentLines = [
+    ...draft.templateEquipmentLines.map((line: VariantTemplateEquipmentDraftLine) => ({
+      key: `template:${line.templateLineId}`,
+      name: line.equipmentName,
+      source: "Template",
+      description: describeEquipmentLine({
+        usageMode: line.hasOverride ? line.overrideUsageMode : line.usageMode,
+        minutes: line.hasOverride ? line.overrideMinutes : line.minutes,
+        uses: line.hasOverride ? line.overrideUses : line.uses,
+        yieldDurationMinutes: line.hasOverride ? line.overrideYieldDurationMinutes : line.yieldDurationMinutes,
+        yieldUses: line.hasOverride ? line.overrideYieldUses : line.yieldUses,
+        yieldQuantity: line.hasOverride ? line.overrideYieldQuantity : line.yieldQuantity,
+      }),
+    })),
+    ...draft.equipmentLines.map((line: SerializedEquipmentLine) => ({
+      key: `variant:${line.id}`,
+      name: line.equipmentName,
+      source: "Variant",
+      description: describeEquipmentLine(line),
+    })),
+  ];
+  const promotableShippingMaterialLines = [
+    ...shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => ({
+      key: `template:${line.templateLineId}`,
+      name: line.materialName,
+      source: "Shipping template",
+      description: describeMaterialLine(line),
+    })),
+    ...additionalShippingMaterialLines.map((line: SerializedMaterialLine) => ({
+      key: `variant:${line.id}`,
+      name: line.materialName,
+      source: "Variant",
+      description: describeMaterialLine(line),
+    })),
+  ];
 
   useEffect(() => {
     if (!saveFetcher.data?.ok || !saveFetcher.data.savedAt || saveFetcher.data.savedAt === handledSaveRef.current) return;
@@ -1856,10 +2735,63 @@ export default function VariantDetailPage() {
     handledCopyRef.current = copyFetcher.data.savedAt;
     preCopyDraftStateRef.current = loadedVariantDraftState;
     setCopyDialogOpen(false);
+    setPromoteDialogOpen(false);
+    setPromoteShippingDialogOpen(false);
     setSelectedCopySourceId("");
     setCopySourceSearchValue("");
     revalidator.revalidate();
   }, [copyFetcher.data, loadedVariantDraftState, revalidator]);
+
+  useEffect(() => {
+    if (!promoteFetcher.data?.ok || !promoteFetcher.data.savedAt || promoteFetcher.data.savedAt === handledPromoteRef.current) return;
+    handledPromoteRef.current = promoteFetcher.data.savedAt;
+    preCopyDraftStateRef.current = loadedVariantDraftState;
+    setPromoteDialogOpen(false);
+    setPromoteShippingDialogOpen(false);
+    revalidator.revalidate();
+  }, [loadedVariantDraftState, promoteFetcher.data, revalidator]);
+
+  useEffect(() => {
+    setAvailableMaterials(loadedMaterials);
+  }, [loadedMaterials]);
+
+  useEffect(() => {
+    setAvailableEquipment(loadedEquipment);
+  }, [loadedEquipment]);
+
+  useEffect(() => {
+    if (!quickCreateFetcher.data?.ok) return;
+
+    if (quickCreateFetcher.data.actionKind === "quick-create-material" && quickCreateFetcher.data.material) {
+      const material = quickCreateFetcher.data.material;
+      setAvailableMaterials((current) =>
+        sortAvailableMaterials([
+          ...current.filter((item) => item.id !== material.id),
+          material,
+        ]),
+      );
+      setSelectedMaterialId(material.id);
+      setMaterialSearchValue(material.name);
+      setMatQty("1");
+      setMatYield(material.costingModel === "yield" ? "1" : "");
+      setMatUses("");
+      setQuickMaterialOpen(false);
+    }
+
+    if (quickCreateFetcher.data.actionKind === "quick-create-equipment" && quickCreateFetcher.data.equipment) {
+      const equipment = quickCreateFetcher.data.equipment;
+      setAvailableEquipment((current) =>
+        sortAvailableEquipment([
+          ...current.filter((item) => item.id !== equipment.id),
+          equipment,
+        ]),
+      );
+      setSelectedEquipmentId(equipment.id);
+      setEquipmentSearchValue(equipment.name);
+      setEqUsageMode(defaultUsageModeForBasis(equipment.usageBasis));
+      setQuickEquipmentOpen(false);
+    }
+  }, [quickCreateFetcher.data]);
 
   useEffect(() => {
     if (!preCopyDraftStateRef.current || preCopyDraftStateRef.current === loadedVariantDraftState) return;
@@ -1903,8 +2835,9 @@ export default function VariantDetailPage() {
   }
 
   function openEquipmentOverride(line: VariantTemplateEquipmentDraftLine) {
+    const nextUsageMode = line.overrideUsageMode ?? line.usageMode ?? defaultUsageModeForBasis(line.usageBasis);
     setEquipmentOverrideTargetId(line.templateLineId);
-    setOverrideEqUsageMode(line.overrideUsageMode ?? line.usageMode ?? "direct");
+    setOverrideEqUsageMode(usageModeAllowedForBasis(nextUsageMode, line.usageBasis) ? nextUsageMode : defaultUsageModeForBasis(line.usageBasis));
     setOverrideEqMinutes(line.overrideMinutes ?? line.minutes ?? "");
     setOverrideEqUses(line.overrideUses ?? line.uses ?? "");
     setOverrideEqYieldDurationMinutes(line.overrideYieldDurationMinutes ?? line.yieldDurationMinutes ?? "");
@@ -1927,12 +2860,16 @@ export default function VariantDetailPage() {
     setAssignTemplateOpen(false);
     setAssignShippingTemplateOpen(false);
     setCopyDialogOpen(false);
+    setPromoteDialogOpen(false);
+    setPromoteShippingDialogOpen(false);
     setSelectedCopySourceId("");
     setCopySourceSearchValue("");
     setMaterialOverrideTargetId(null);
     setEquipmentOverrideTargetId(null);
     setAddMaterialOpen(false);
     setAddEquipmentOpen(false);
+    setQuickMaterialOpen(false);
+    setQuickEquipmentOpen(false);
     resetAdditionalMaterialModal();
     resetAdditionalEquipmentModal();
     closeMaterialOverride();
@@ -1952,6 +2889,92 @@ export default function VariantDetailPage() {
     formData.append("intent", "copy-variant-config");
     formData.append("sourceVariantId", selectedCopySourceId);
     copyFetcher.submit(formData, { method: "post" });
+  }
+
+  function promoteVariantToTemplate() {
+    if (isDirty) return;
+    const formData = new FormData();
+    formData.append("intent", "promote-template");
+    formData.append("name", promoteForm.name);
+    formData.append("description", promoteForm.description);
+    if (promoteForm.includeMaterials) formData.append("includeMaterials", "on");
+    if (promoteForm.includeEquipment) formData.append("includeEquipment", "on");
+    if (promoteForm.includeLabor) formData.append("includeLabor", "on");
+    if (promoteForm.freezeShopLaborRate) formData.append("freezeShopLaborRate", "on");
+    if (promoteForm.includeDefaultShippingTemplate) formData.append("includeDefaultShippingTemplate", "on");
+    if (promoteForm.assignBack) formData.append("assignBack", "on");
+    for (const key of promoteForm.materialLineKeys) {
+      formData.append("materialLineKey", key);
+    }
+    for (const key of promoteForm.equipmentLineKeys) {
+      formData.append("equipmentLineKey", key);
+    }
+    promoteFetcher.submit(formData, { method: "post" });
+  }
+
+  function promoteVariantToShippingTemplate() {
+    if (isDirty) return;
+    const formData = new FormData();
+    formData.append("intent", "promote-shipping-template");
+    formData.append("name", promoteShippingForm.name);
+    formData.append("description", promoteShippingForm.description);
+    if (promoteShippingForm.assignBack) formData.append("assignBack", "on");
+    if (promoteShippingForm.setAsProductionDefault) formData.append("setAsProductionDefault", "on");
+    for (const key of promoteShippingForm.materialLineKeys) {
+      formData.append("materialLineKey", key);
+    }
+    promoteFetcher.submit(formData, { method: "post" });
+  }
+
+  function togglePromoteMaterialLine(key: string) {
+    setPromoteForm((current) => ({
+      ...current,
+      materialLineKeys: current.materialLineKeys.includes(key)
+        ? current.materialLineKeys.filter((item) => item !== key)
+        : [...current.materialLineKeys, key],
+    }));
+  }
+
+  function togglePromoteEquipmentLine(key: string) {
+    setPromoteForm((current) => ({
+      ...current,
+      equipmentLineKeys: current.equipmentLineKeys.includes(key)
+        ? current.equipmentLineKeys.filter((item) => item !== key)
+        : [...current.equipmentLineKeys, key],
+    }));
+  }
+
+  function togglePromoteShippingMaterialLine(key: string) {
+    setPromoteShippingForm((current) => ({
+      ...current,
+      materialLineKeys: current.materialLineKeys.includes(key)
+        ? current.materialLineKeys.filter((item) => item !== key)
+        : [...current.materialLineKeys, key],
+    }));
+  }
+
+  function submitQuickMaterial() {
+    const formData = new FormData();
+    formData.append("intent", "quick-create-material");
+    formData.append("name", quickMaterialForm.name);
+    formData.append("type", quickMaterialForm.type);
+    formData.append("costingModel", quickMaterialForm.costingModel);
+    formData.append("purchasePrice", quickMaterialForm.purchasePrice);
+    formData.append("purchaseQty", quickMaterialForm.purchaseQty);
+    formData.append("totalUsesPerUnit", quickMaterialForm.totalUsesPerUnit);
+    formData.append("purchaseLink", quickMaterialForm.purchaseLink);
+    quickCreateFetcher.submit(formData, { method: "post" });
+  }
+
+  function submitQuickEquipment() {
+    const formData = new FormData();
+    formData.append("intent", "quick-create-equipment");
+    formData.append("name", quickEquipmentForm.name);
+    formData.append("hourlyRate", quickEquipmentForm.hourlyRate);
+    formData.append("perUseCost", quickEquipmentForm.perUseCost);
+    formData.append("equipmentCost", quickEquipmentForm.equipmentCost);
+    formData.append("purchaseLink", quickEquipmentForm.purchaseLink);
+    quickCreateFetcher.submit(formData, { method: "post" });
   }
 
   function applySelectedTemplate() {
@@ -2012,11 +3035,12 @@ export default function VariantDetailPage() {
       id: createClientId("draft-equipment"),
       equipmentId: selectedEquipment.id,
       equipmentName: selectedEquipment.name,
+      usageBasis: selectedEquipment.usageBasis,
       hourlyRate: selectedEquipment.hourlyRate,
       perUseCost: selectedEquipment.perUseCost,
       usageMode: eqUsageMode,
-      minutes: eqUsageMode === "direct" ? (eqMinutes || null) : null,
-      uses: eqUsageMode === "direct" ? (eqUses || null) : null,
+      minutes: eqUsageMode === "direct" && selectedEquipment.usageBasis !== "unit" ? (eqMinutes || null) : null,
+      uses: eqUsageMode === "direct" && selectedEquipment.usageBasis !== "time" ? (eqUses || null) : null,
       yieldDurationMinutes: eqUsageMode === "duration_yield" ? (eqYieldDurationMinutes || null) : null,
       yieldUses: eqUsageMode === "use_yield" ? (eqYieldUses || null) : null,
       yieldQuantity: eqUsageMode !== "direct" ? (eqYieldQuantity || null) : null,
@@ -2085,8 +3109,8 @@ export default function VariantDetailPage() {
               ...line,
               hasOverride: true,
               overrideUsageMode: overrideEqUsageMode,
-              overrideMinutes: overrideEqUsageMode === "direct" ? (overrideEqMinutes || null) : null,
-              overrideUses: overrideEqUsageMode === "direct" ? (overrideEqUses || null) : null,
+              overrideMinutes: overrideEqUsageMode === "direct" && line.usageBasis !== "unit" ? (overrideEqMinutes || null) : null,
+              overrideUses: overrideEqUsageMode === "direct" && line.usageBasis !== "time" ? (overrideEqUses || null) : null,
               overrideYieldDurationMinutes: overrideEqUsageMode === "duration_yield" ? (overrideEqYieldDurationMinutes || null) : null,
               overrideYieldUses: overrideEqUsageMode === "use_yield" ? (overrideEqYieldUses || null) : null,
               overrideYieldQuantity: overrideEqUsageMode !== "direct" ? (overrideEqYieldQuantity || null) : null,
@@ -2136,7 +3160,7 @@ export default function VariantDetailPage() {
         aria-atomic="true"
         style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap" }}
       >
-        {saveFetcher.data?.message ?? copyFetcher.data?.message ?? previewFetcher.data?.message ?? ""}
+        {saveFetcher.data?.message ?? copyFetcher.data?.message ?? promoteFetcher.data?.message ?? previewFetcher.data?.message ?? ""}
       </div>
 
       <BlockStack gap="600">
@@ -2150,38 +3174,99 @@ export default function VariantDetailPage() {
         </Card>
 
         <Card>
-          <BlockStack gap="300">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Copy configuration</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Overwrite this variant with settings from another configured variant.
-                </Text>
+          <details>
+            <summary style={{ cursor: "pointer", fontWeight: 650 }}>Actions & automation</summary>
+            <div style={{ marginTop: "1rem" }}>
+              <BlockStack gap="400">
+                <InlineStack align="space-between" blockAlign="center">
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">Copy configuration</Text>
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      Overwrite this variant with settings from another configured variant.
+                    </Text>
+                  </BlockStack>
+                  <Button
+                    onClick={() => {
+                      setSelectedCopySourceId("");
+                      setCopySourceSearchValue("");
+                      setCopyDialogOpen(true);
+                    }}
+                    disabled={copySourceVariants.length === 0 || isDirty}
+                  >
+                    Copy from variant
+                  </Button>
+                </InlineStack>
+                {isDirty ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Save or discard your staged changes before copying another variant configuration.
+                  </Text>
+                ) : null}
+                {copySourceVariants.length === 0 ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    No other configured variants are available to copy from.
+                  </Text>
+                ) : null}
+                <Divider />
+                <InlineStack align="space-between" blockAlign="center">
+                  <BlockStack gap="100">
+                    <Text as="h3" variant="headingSm">Create template from variant</Text>
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      Save this setup as a production or shipping template.
+                    </Text>
+                  </BlockStack>
+                  <InlineStack gap="200">
+                    <Button
+                      onClick={() => {
+                        setPromoteForm((current) => ({
+                          ...current,
+                          name: `${variant.productTitle} - ${variant.title}`,
+                          includeDefaultShippingTemplate: Boolean(effectiveTemplateSelection.shippingTemplateId),
+                          materialLineKeys: promotableMaterialLines.map((line) => line.key),
+                          equipmentLineKeys: promotableEquipmentLines.map((line) => line.key),
+                        }));
+                        setPromoteDialogOpen(true);
+                      }}
+                      disabled={!config || isDirty}
+                    >
+                      Production template
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        setPromoteShippingForm((current) => ({
+                          ...current,
+                          name: `${variant.productTitle} - ${variant.title} Shipping`,
+                          setAsProductionDefault: Boolean(effectiveTemplateSelection.productionTemplateId),
+                          materialLineKeys: promotableShippingMaterialLines.map((line) => line.key),
+                        }));
+                        setPromoteShippingDialogOpen(true);
+                      }}
+                      disabled={!config || isDirty || promotableShippingMaterialLines.length === 0}
+                    >
+                      Shipping template
+                    </Button>
+                  </InlineStack>
+                </InlineStack>
+                {!config ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Save a variant configuration before creating a template from it.
+                  </Text>
+                ) : null}
+                {isDirty ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">
+                    Save or discard your staged changes before promoting this variant.
+                  </Text>
+                ) : null}
+                {promoteFetcher.data ? (
+                  <Banner tone={promoteFetcher.data.ok ? "success" : "critical"}>
+                    <Text as="p" variant="bodyMd">{promoteFetcher.data.message}</Text>
+                  </Banner>
+                ) : null}
               </BlockStack>
-              <Button
-                onClick={() => {
-                  setSelectedCopySourceId("");
-                  setCopySourceSearchValue("");
-                  setCopyDialogOpen(true);
-                }}
-                disabled={copySourceVariants.length === 0 || isDirty}
-              >
-                Copy from variant
-              </Button>
-            </InlineStack>
-            {isDirty ? (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Save or discard your staged changes before copying another variant configuration.
-              </Text>
-            ) : null}
-            {copySourceVariants.length === 0 ? (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                No other configured variants are available to copy from.
-              </Text>
-            ) : null}
-          </BlockStack>
+            </div>
+          </details>
         </Card>
 
+        {variant.providerMappings.length > 0 ? (
         <Card>
           <BlockStack gap="400">
             <BlockStack gap="100">
@@ -2199,66 +3284,259 @@ export default function VariantDetailPage() {
               </Text>
             </BlockStack>
             <Divider />
-            {variant.providerMappings.length === 0 ? (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                No provider mapping is saved for this variant yet. Manual cost configuration remains in effect unless you
-                choose to map this variant through a POD provider.
-              </Text>
+            <BlockStack gap="400">
+              {variant.providerMappings.map((mapping: SerializedProviderMapping) => (
+                <BlockStack key={mapping.id} gap="200">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <InlineStack gap="200" blockAlign="center">
+                      <Text as="p" variant="bodyMd" fontWeight="semibold">{formatProviderName(mapping.provider)}</Text>
+                      <Badge tone={mapping.status === "mapped" ? "success" : "warning"}>
+                        {mapping.status === "mapped" ? "Mapped" : mapping.status}
+                      </Badge>
+                      <Badge tone={mapping.connectionStatus === "validated" ? "info" : "warning"}>
+                        {mapping.connectionStatus === "validated" ? "Connection healthy" : "Connection needs review"}
+                      </Badge>
+                    </InlineStack>
+                    <Text as="p" variant="bodySm" tone="subdued">
+                      {mapping.lastCostSyncedAt
+                        ? `Costs synced ${new Date(mapping.lastCostSyncedAt).toLocaleString()}`
+                        : "No cached provider costs yet"}
+                    </Text>
+                  </InlineStack>
+
+                  <BlockStack gap="100">
+                    {mapping.providerProductTitle ? (
+                      <Text as="p" variant="bodyMd">Provider product: {mapping.providerProductTitle}</Text>
+                    ) : null}
+                    {mapping.providerVariantTitle ? (
+                      <Text as="p" variant="bodyMd">Provider variant: {mapping.providerVariantTitle}</Text>
+                    ) : null}
+                    {mapping.providerSku ? (
+                      <Text as="p" variant="bodyMd">Provider SKU: {mapping.providerSku}</Text>
+                    ) : null}
+                    {mapping.matchMethod ? (
+                      <Text as="p" variant="bodyMd" tone="subdued">
+                        Match method: {mapping.matchMethod === "sku" ? "Unique SKU match" : mapping.matchMethod}
+                      </Text>
+                    ) : null}
+                  </BlockStack>
+
+                  {mapping.latestCostLines.length > 0 ? (
+                    <BlockStack gap="100">
+                      <Text as="h3" variant="headingSm">Latest cached POD costs</Text>
+                      {mapping.latestCostLines.map((line) => (
+                        <InlineStack key={`${mapping.id}-${line.costLineType}-${line.description ?? "line"}`} align="space-between">
+                          <Text as="p" variant="bodyMd">
+                            {line.description ?? line.costLineType}
+                          </Text>
+                          <Text as="p" variant="bodyMd">{formatMoney(line.amount)}</Text>
+                        </InlineStack>
+                      ))}
+                    </BlockStack>
+                  ) : (
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      No cached POD costs have been stored for this mapping yet.
+                    </Text>
+                  )}
+                </BlockStack>
+              ))}
+            </BlockStack>
+          </BlockStack>
+        </Card>
+        ) : null}
+
+        <Card>
+          <BlockStack gap="400">
+            <Text as="h2" variant="headingMd">Templates</Text>
+            <Divider />
+            <InlineStack gap="400" blockAlign="start">
+              <div style={{ flex: 1 }}>
+                <BlockStack gap="200">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="h3" variant="headingSm">Production</Text>
+                    <InlineStack gap="200">
+                      {assignedProductionTemplate ? (
+                        <Button variant="plain" tone="critical" onClick={removeSelectedTemplate}>
+                          Remove
+                        </Button>
+                      ) : null}
+                      <Button
+                        onClick={() => {
+                          setSelectedTemplateId(draft.productionTemplateId ?? productionTemplates[0]?.id ?? "");
+                          setAssignTemplateOpen(true);
+                        }}
+                        disabled={productionTemplates.length === 0}
+                      >
+                        {assignedProductionTemplate ? "Change" : "Assign"}
+                      </Button>
+                    </InlineStack>
+                  </InlineStack>
+                  <Text as="p" variant="bodyMd" tone={assignedProductionTemplate ? undefined : "subdued"}>
+                    {assignedProductionTemplate?.name ?? "No production template assigned"}
+                  </Text>
+                </BlockStack>
+              </div>
+              <div style={{ flex: 1 }}>
+                <BlockStack gap="200">
+                  <InlineStack align="space-between" blockAlign="center">
+                    <InlineStack gap="200" blockAlign="center">
+                      <Text as="h3" variant="headingSm">Shipping</Text>
+                      <Badge tone={effectiveTemplateSelection.shippingSource === "explicit" ? "attention" : "info"}>
+                        {effectiveTemplateSelection.shippingSource === "explicit"
+                          ? "Override"
+                          : effectiveTemplateSelection.shippingSource === "production-default"
+                            ? "Inherited"
+                            : "Unassigned"}
+                      </Badge>
+                    </InlineStack>
+                    <InlineStack gap="200">
+                      {draft.shippingTemplateId ? (
+                        <Button variant="plain" tone="critical" onClick={removeSelectedShippingTemplate}>
+                          Remove
+                        </Button>
+                      ) : null}
+                      <Button
+                        onClick={() => {
+                          setSelectedShippingTemplateId(draft.shippingTemplateId ?? effectiveShippingTemplate?.id ?? shippingTemplates[0]?.id ?? "");
+                          setAssignShippingTemplateOpen(true);
+                        }}
+                        disabled={shippingTemplates.length === 0}
+                      >
+                        {draft.shippingTemplateId ? "Change" : "Set override"}
+                      </Button>
+                    </InlineStack>
+                  </InlineStack>
+                  <Text as="p" variant="bodyMd" tone={effectiveShippingTemplate ? undefined : "subdued"}>
+                    {effectiveShippingTemplate?.name ?? "No effective shipping template"}
+                  </Text>
+                </BlockStack>
+              </div>
+            </InlineStack>
+          </BlockStack>
+        </Card>
+
+        <Card>
+          <BlockStack gap="400">
+            <InlineStack align="space-between" blockAlign="center">
+              <BlockStack gap="100">
+                <InlineStack gap="200" blockAlign="center">
+                  <Text as="h2" variant="headingMd">Materials</Text>
+                  {draft.templateMaterialLines.length + shippingTemplateMaterialLines.length + draft.materialLines.length > 0 && (
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {draft.templateMaterialLines.length + shippingTemplateMaterialLines.length + draft.materialLines.length}
+                    </Text>
+                  )}
+                </InlineStack>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Template, shipping template, and variant-specific material costs in calculation order.
+                </Text>
+              </BlockStack>
+              <Button onClick={() => setAddMaterialOpen(true)} disabled={availableMaterials.length === draft.materialLines.length}>
+                Add material
+              </Button>
+            </InlineStack>
+            <Divider />
+            {draft.templateMaterialLines.length + shippingTemplateMaterialLines.length + draft.materialLines.length === 0 ? (
+              <Text as="p" variant="bodyMd" tone="subdued">No materials configured yet.</Text>
             ) : (
               <BlockStack gap="400">
-                {variant.providerMappings.map((mapping: SerializedProviderMapping) => (
-                  <BlockStack key={mapping.id} gap="200">
-                    <InlineStack align="space-between" blockAlign="center">
-                      <InlineStack gap="200" blockAlign="center">
-                        <Text as="p" variant="bodyMd" fontWeight="semibold">{formatProviderName(mapping.provider)}</Text>
-                        <Badge tone={mapping.status === "mapped" ? "success" : "warning"}>
-                          {mapping.status === "mapped" ? "Mapped" : mapping.status}
-                        </Badge>
-                        <Badge tone={mapping.connectionStatus === "validated" ? "info" : "warning"}>
-                          {mapping.connectionStatus === "validated" ? "Connection healthy" : "Connection needs review"}
-                        </Badge>
-                      </InlineStack>
-                      <Text as="p" variant="bodySm" tone="subdued">
-                        {mapping.lastCostSyncedAt
-                          ? `Costs synced ${new Date(mapping.lastCostSyncedAt).toLocaleString()}`
-                          : "No cached provider costs yet"}
-                      </Text>
-                    </InlineStack>
-
-                    <BlockStack gap="100">
-                      {mapping.providerProductTitle ? (
-                        <Text as="p" variant="bodyMd">Provider product: {mapping.providerProductTitle}</Text>
-                      ) : null}
-                      {mapping.providerVariantTitle ? (
-                        <Text as="p" variant="bodyMd">Provider variant: {mapping.providerVariantTitle}</Text>
-                      ) : null}
-                      {mapping.providerSku ? (
-                        <Text as="p" variant="bodyMd">Provider SKU: {mapping.providerSku}</Text>
-                      ) : null}
-                      {mapping.matchMethod ? (
-                        <Text as="p" variant="bodyMd" tone="subdued">
-                          Match method: {mapping.matchMethod === "sku" ? "Unique SKU match" : mapping.matchMethod}
-                        </Text>
-                      ) : null}
-                    </BlockStack>
-
-                    {mapping.latestCostLines.length > 0 ? (
-                      <BlockStack gap="100">
-                        <Text as="h3" variant="headingSm">Latest cached POD costs</Text>
-                        {mapping.latestCostLines.map((line) => (
-                          <InlineStack key={`${mapping.id}-${line.costLineType}-${line.description ?? "line"}`} align="space-between">
-                            <Text as="p" variant="bodyMd">
-                              {line.description ?? line.costLineType}
-                            </Text>
-                            <Text as="p" variant="bodyMd">{formatMoney(line.amount)}</Text>
+                {draft.templateMaterialLines.length > 0 ? (
+                  <BlockStack gap="300">
+                    <Text as="h3" variant="headingSm">Production template</Text>
+                    {draft.templateMaterialLines.map((line) => (
+                      <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
+                        <BlockStack gap="100">
+                          <InlineStack gap="200" blockAlign="center">
+                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
+                            <Badge tone="info">Template</Badge>
+                            <Badge tone={line.materialType === "shipping" ? "info" : "success"}>
+                              {line.materialType === "shipping" ? "Shipping" : "Production"}
+                            </Badge>
+                            {line.hasOverride ? <Badge tone="attention">Override active</Badge> : null}
                           </InlineStack>
-                        ))}
+                          <Text as="p" variant="bodyMd" tone="subdued">
+                            Default: {describeMaterialLine(line)}
+                          </Text>
+                          {line.hasOverride ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              Override: {describeMaterialLine({
+                                costingModel: line.costingModel,
+                                quantity: line.overrideQuantity,
+                                yield: line.overrideYield,
+                                usesPerVariant: line.overrideUsesPerVariant,
+                              })}
+                            </Text>
+                          ) : null}
+                        </BlockStack>
+                        <InlineStack gap="200">
+                          <Button variant="plain" onClick={() => openMaterialOverride(line)}>
+                            {line.hasOverride ? "Edit override" : "Override"}
+                          </Button>
+                          {line.hasOverride ? (
+                            <Button variant="plain" onClick={() => resetMaterialOverride(line.templateLineId)}>
+                              Reset
+                            </Button>
+                          ) : null}
+                        </InlineStack>
+                      </InlineStack>
+                    ))}
+                  </BlockStack>
+                ) : assignedProductionTemplate ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">The assigned production template has no material lines.</Text>
+                ) : null}
+
+                {shippingTemplateMaterialLines.length > 0 ? (
+                  <BlockStack gap="300">
+                    <Text as="h3" variant="headingSm">Shipping template</Text>
+                    {shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => (
+                      <BlockStack key={line.templateLineId} gap="100">
+                        <InlineStack gap="200" blockAlign="center">
+                          <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
+                          <Badge tone="info">Shipping template</Badge>
+                          <Badge tone="info">Shipping</Badge>
+                        </InlineStack>
+                        <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
                       </BlockStack>
-                    ) : (
-                      <Text as="p" variant="bodyMd" tone="subdued">
-                        No cached POD costs have been stored for this mapping yet.
-                      </Text>
-                    )}
+                    ))}
+                  </BlockStack>
+                ) : effectiveShippingTemplate ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">The effective shipping template has no material lines.</Text>
+                ) : null}
+
+                {[
+                  {
+                    heading: "Variant-specific production",
+                    lines: additionalProductionMaterialLines,
+                  },
+                  {
+                    heading: "Variant-specific shipping",
+                    lines: additionalShippingMaterialLines,
+                  },
+                ].filter((section) => section.lines.length > 0).map((section) => (
+                  <BlockStack key={section.heading} gap="300">
+                    <Text as="h3" variant="headingSm">{section.heading}</Text>
+                    {section.lines.map((line: SerializedMaterialLine) => {
+                      const alsoInTemplate =
+                        productionTemplateMaterialIds.has(line.materialId) || shippingTemplateMaterialIds.has(line.materialId);
+                      return (
+                        <InlineStack key={line.id} align="space-between" blockAlign="center">
+                          <BlockStack gap="100">
+                            <InlineStack gap="200" blockAlign="center">
+                              <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
+                              <Badge tone="attention">Variant-specific</Badge>
+                              <Badge tone={line.materialType === "shipping" ? "info" : "success"}>
+                                {line.materialType === "shipping" ? "Shipping" : "Production"}
+                              </Badge>
+                              {alsoInTemplate ? <Badge tone="warning">Also in template</Badge> : null}
+                            </InlineStack>
+                            <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
+                          </BlockStack>
+                          <Button variant="plain" tone="critical" onClick={() => removeAdditionalMaterialLine(line.id)}>
+                            Remove
+                          </Button>
+                        </InlineStack>
+                      );
+                    })}
                   </BlockStack>
                 ))}
               </BlockStack>
@@ -2269,183 +3547,96 @@ export default function VariantDetailPage() {
         <Card>
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
-              <Text as="h2" variant="headingMd">Production Template</Text>
-              <InlineStack gap="200">
-                {assignedProductionTemplate && (
-                  <Button variant="plain" tone="critical" onClick={removeSelectedTemplate}>
-                    Remove
-                  </Button>
-                )}
-                <Button
-                  onClick={() => {
-                    setSelectedTemplateId(draft.productionTemplateId ?? productionTemplates[0]?.id ?? "");
-                    setAssignTemplateOpen(true);
-                  }}
-                  disabled={productionTemplates.length === 0}
-                >
-                  {assignedProductionTemplate ? "Change production template" : "Assign production template"}
-                </Button>
-              </InlineStack>
-            </InlineStack>
-            <Divider />
-            {assignedProductionTemplate ? (
-              <Text as="p" variant="bodyMd">
-                {assignedProductionTemplate.name}
-              </Text>
-            ) : (
-              <Text as="p" variant="bodyMd" tone="subdued">No production template assigned - configure lines manually below.</Text>
-            )}
-          </BlockStack>
-        </Card>
-
-        <Card>
-          <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <Text as="h2" variant="headingMd">Shipping Template</Text>
-              <InlineStack gap="200" blockAlign="center">
-                <Badge tone={effectiveTemplateSelection.shippingSource === "explicit" ? "attention" : "info"}>
-                  {effectiveTemplateSelection.shippingSource === "explicit"
-                    ? "Explicit override"
-                    : effectiveTemplateSelection.shippingSource === "production-default"
-                      ? "Inherited from production template"
-                      : "Unassigned"}
-                </Badge>
-                {draft.shippingTemplateId && (
-                  <Button variant="plain" tone="critical" onClick={removeSelectedShippingTemplate}>
-                    Remove override
-                  </Button>
-                )}
-                <Button
-                  onClick={() => {
-                    setSelectedShippingTemplateId(draft.shippingTemplateId ?? effectiveShippingTemplate?.id ?? shippingTemplates[0]?.id ?? "");
-                    setAssignShippingTemplateOpen(true);
-                  }}
-                  disabled={shippingTemplates.length === 0}
-                >
-                  {draft.shippingTemplateId ? "Change override" : "Set override"}
-                </Button>
-              </InlineStack>
-            </InlineStack>
-            <Divider />
-            {effectiveShippingTemplate ? (
-              <BlockStack gap="300">
-                <Text as="p" variant="bodyMd">{effectiveShippingTemplate.name}</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  {effectiveTemplateSelection.shippingSource === "explicit"
-                    ? "This variant uses an explicit shipping override."
-                    : effectiveTemplateSelection.shippingSource === "production-default"
-                      ? "This shipping template is inherited from the assigned production template."
-                      : "No active shipping templates are available yet."}
-                </Text>
-                <BlockStack gap="200">
-                  <Text as="h3" variant="headingSm">Shipping material lines</Text>
-                  {shippingTemplateMaterialLines.length === 0 ? (
-                    <Text as="p" variant="bodyMd" tone="subdued">
-                      This Shipping template has no material lines.
+              <BlockStack gap="100">
+                <InlineStack gap="200" blockAlign="center">
+                  <Text as="h2" variant="headingMd">Equipment</Text>
+                  {draft.templateEquipmentLines.length + draft.equipmentLines.length > 0 && (
+                    <Text as="span" variant="bodySm" tone="subdued">
+                      {draft.templateEquipmentLines.length + draft.equipmentLines.length}
                     </Text>
-                  ) : (
-                    <BlockStack gap="200">
-                      {shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => (
-                        <BlockStack key={line.templateLineId} gap="100">
+                  )}
+                </InlineStack>
+                <Text as="p" variant="bodyMd" tone="subdued">
+                  Template and variant-specific equipment usage in calculation order.
+                </Text>
+              </BlockStack>
+              <Button onClick={() => setAddEquipmentOpen(true)} disabled={availableEquipment.length === draft.equipmentLines.length}>
+                Add equipment
+              </Button>
+            </InlineStack>
+            <Divider />
+            {draft.templateEquipmentLines.length + draft.equipmentLines.length === 0 ? (
+              <Text as="p" variant="bodyMd" tone="subdued">No equipment configured yet.</Text>
+            ) : (
+              <BlockStack gap="400">
+                {draft.templateEquipmentLines.length > 0 ? (
+                  <BlockStack gap="300">
+                    <Text as="h3" variant="headingSm">Production template</Text>
+                    {draft.templateEquipmentLines.map((line) => (
+                      <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
+                        <BlockStack gap="100">
                           <InlineStack gap="200" blockAlign="center">
-                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                            <Badge tone="info">Shipping</Badge>
+                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
+                            <Badge tone="info">Template</Badge>
+                            {line.hasOverride ? <Badge tone="attention">Override active</Badge> : null}
                           </InlineStack>
                           <Text as="p" variant="bodyMd" tone="subdued">
-                            {describeMaterialLine(line)}
+                            Default: {describeEquipmentLine(line)}
                           </Text>
+                          {line.hasOverride ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              Override: {describeEquipmentLine({
+                                usageMode: line.overrideUsageMode,
+                                minutes: line.overrideMinutes,
+                                uses: line.overrideUses,
+                                yieldDurationMinutes: line.overrideYieldDurationMinutes,
+                                yieldUses: line.overrideYieldUses,
+                                yieldQuantity: line.overrideYieldQuantity,
+                              })}
+                            </Text>
+                          ) : null}
                         </BlockStack>
-                      ))}
-                    </BlockStack>
-                  )}
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    Edit these line items on the Shipping template itself. Use variant-only Shipping materials below for one-off additions.
-                  </Text>
-                </BlockStack>
-              </BlockStack>
-            ) : (
-              <Text as="p" variant="bodyMd" tone="subdued">
-                No shipping template is currently effective for this variant.
-              </Text>
-            )}
-          </BlockStack>
-        </Card>
+                        <InlineStack gap="200">
+                          <Button variant="plain" onClick={() => openEquipmentOverride(line)}>
+                            {line.hasOverride ? "Edit override" : "Override"}
+                          </Button>
+                          {line.hasOverride ? (
+                            <Button variant="plain" onClick={() => resetEquipmentOverride(line.templateLineId)}>
+                              Reset
+                            </Button>
+                          ) : null}
+                        </InlineStack>
+                      </InlineStack>
+                    ))}
+                  </BlockStack>
+                ) : assignedProductionTemplate ? (
+                  <Text as="p" variant="bodyMd" tone="subdued">The assigned production template has no equipment lines.</Text>
+                ) : null}
 
-        <Card>
-          <BlockStack gap="400">
-            <BlockStack gap="100">
-              <Text as="h2" variant="headingMd">Package Profile</Text>
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Used by automatic cartonization for future order snapshots. Shipping templates remain estimate-only.
-              </Text>
-            </BlockStack>
-            <Divider />
-            <BlockStack gap="400">
-              <Select
-                label="Preferred package"
-                options={packageOptions}
-                value={draft.preferredPackageId ?? ""}
-                onChange={(value) => setDraft((current) => ({ ...current, preferredPackageId: value || null }))}
-              />
-              <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Packed length"
-                    type="number"
-                    min={0}
-                    step={0.001}
-                    value={draft.packedLength}
-                    onChange={(value) => setDraft((current) => ({ ...current, packedLength: value }))}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Packed width"
-                    type="number"
-                    min={0}
-                    step={0.001}
-                    value={draft.packedWidth}
-                    onChange={(value) => setDraft((current) => ({ ...current, packedWidth: value }))}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Packed height"
-                    type="number"
-                    min={0}
-                    step={0.001}
-                    value={draft.packedHeight}
-                    onChange={(value) => setDraft((current) => ({ ...current, packedHeight: value }))}
-                    autoComplete="off"
-                  />
-                </div>
-              </InlineStack>
-              <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Packed weight (g)"
-                    type="number"
-                    min={0}
-                    step={0.001}
-                    value={draft.packedWeightGrams}
-                    onChange={(value) => setDraft((current) => ({ ...current, packedWeightGrams: value }))}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1, display: "flex", alignItems: "end" }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <input
-                      type="checkbox"
-                      checked={draft.canSharePackage}
-                      onChange={(event) => setDraft((current) => ({ ...current, canSharePackage: event.currentTarget.checked }))}
-                    />
-                    <span>Can share a package with other items</span>
-                  </label>
-                </div>
-              </InlineStack>
-            </BlockStack>
+                {draft.equipmentLines.length > 0 ? (
+                  <BlockStack gap="300">
+                    <Text as="h3" variant="headingSm">Variant-specific</Text>
+                    {draft.equipmentLines.map((line: SerializedEquipmentLine) => (
+                      <InlineStack key={line.id} align="space-between" blockAlign="center">
+                        <BlockStack gap="100">
+                          <InlineStack gap="200" blockAlign="center">
+                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
+                            <Badge tone="attention">Variant-specific</Badge>
+                            {productionTemplateEquipmentIds.has(line.equipmentId) ? (
+                              <Badge tone="warning">Also in template</Badge>
+                            ) : null}
+                          </InlineStack>
+                          <Text as="p" variant="bodyMd" tone="subdued">{describeEquipmentLine(line)}</Text>
+                        </BlockStack>
+                        <Button variant="plain" tone="critical" onClick={() => removeAdditionalEquipmentLine(line.id)}>
+                          Remove
+                        </Button>
+                      </InlineStack>
+                    ))}
+                  </BlockStack>
+                ) : null}
+              </BlockStack>
+            )}
           </BlockStack>
         </Card>
 
@@ -2454,293 +3645,60 @@ export default function VariantDetailPage() {
             <Text as="h2" variant="headingMd">Labor</Text>
             <Divider />
             <BlockStack gap="400">
-              <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Minutes per variant"
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={draft.laborMinutes}
-                    onChange={(value) => setDraft((current) => ({ ...current, laborMinutes: value }))}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label={`Hourly rate (${getCurrencySymbol()})`}
-                    placeholder={
-                      shopDefaultLaborRate
-                        ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
-                        : "Set a variant override or configure a shop default"
-                    }
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={draft.laborRate}
-                    onChange={(value) => setDraft((current) => ({ ...current, laborRate: value }))}
-                    onBlur={() => setDraft((current) => ({ ...current, laborRate: normalizeFixedDecimalInput(current.laborRate) }))}
-                    autoComplete="off"
-                    helpText={laborRateHelpText}
-                  />
-                </div>
-              </InlineStack>
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Current effective rate: {effectiveLaborRateLabel}
-              </Text>
-            </BlockStack>
-          </BlockStack>
-        </Card>
-
-        <Card>
-          <BlockStack gap="400">
-            <BlockStack gap="100">
-              <Text as="h2" variant="headingMd">Mistake Buffer Override</Text>
-              <Text as="p" variant="bodyMd" tone="subdued">
-                Overrides the global default from Settings for this variant only.
-              </Text>
-            </BlockStack>
-            <Divider />
-            <BlockStack gap="400">
               <TextField
-                label="Mistake buffer (%)"
-                placeholder={`${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
+                label="Minutes per variant"
                 type="number"
                 min={0}
-                max={100}
-                step={0.1}
-                value={draft.mistakeBuffer}
-                onChange={(value) => setDraft((current) => ({ ...current, mistakeBuffer: value }))}
+                step={0.5}
+                value={draft.laborMinutes}
+                onChange={(value) => setDraft((current) => ({ ...current, laborMinutes: value }))}
                 autoComplete="off"
-                helpText="Leave blank to use the global default from Settings"
+                helpText="Leave blank to use the template default minutes when one is configured."
               />
               <Text as="p" variant="bodyMd" tone="subdued">
-                {draft.mistakeBuffer
-                  ? formatPct(Number(draft.mistakeBuffer) / 100)
-                  : `${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
+                Current effective labor: {effectiveLaborMinutesLabel}; {effectiveLaborRateLabel}
               </Text>
-            </BlockStack>
-          </BlockStack>
-        </Card>
-
-        {assignedProductionTemplate && (
-          <Card>
-            <BlockStack gap="400">
-              <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Template Material Lines</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Override assigned template materials without cloning the template.
-                </Text>
-              </BlockStack>
-              <Divider />
-              {draft.templateMaterialLines.length === 0 ? (
-                <Text as="p" variant="bodyMd" tone="subdued">This template has no material lines.</Text>
-              ) : (
-                <BlockStack gap="300">
-                  {draft.templateMaterialLines.map((line) => (
-                    <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
-                      <BlockStack gap="100">
-                        <InlineStack gap="200" blockAlign="center">
-                          <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                          <Badge tone={line.hasOverride ? "attention" : "info"}>
-                            {line.hasOverride ? "Override active" : "Using template default"}
-                          </Badge>
-                        </InlineStack>
-                        <Text as="p" variant="bodyMd" tone="subdued">
-                          Default: {describeMaterialLine(line)}
-                        </Text>
-                        {line.hasOverride && (
-                          <Text as="p" variant="bodyMd" tone="subdued">
-                            Override: {describeMaterialLine({
-                              costingModel: line.costingModel,
-                              quantity: line.overrideQuantity,
-                              yield: line.overrideYield,
-                              usesPerVariant: line.overrideUsesPerVariant,
-                            })}
-                          </Text>
-                        )}
-                      </BlockStack>
-                      <InlineStack gap="200">
-                        <Button variant="plain" onClick={() => openMaterialOverride(line)}>
-                          {line.hasOverride ? "Edit override" : "Override"}
-                        </Button>
-                        {line.hasOverride && (
-                          <Button variant="plain" onClick={() => resetMaterialOverride(line.templateLineId)}>
-                            Reset
-                          </Button>
-                        )}
-                      </InlineStack>
-                    </InlineStack>
-                  ))}
-                </BlockStack>
-              )}
-            </BlockStack>
-          </Card>
-        )}
-
-        <Card>
-          <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <InlineStack gap="200" blockAlign="center">
-                  <Text as="h2" variant="headingMd">Additional Material Lines</Text>
-                  {draft.materialLines.length > 0 && (
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      {draft.materialLines.length}
+              <details>
+                <summary style={{ cursor: "pointer", fontWeight: 650 }}>Overrides</summary>
+                <div style={{ marginTop: "1rem" }}>
+                  <BlockStack gap="400">
+                    <TextField
+                      label={`Hourly rate (${getCurrencySymbol()})`}
+                      placeholder={
+                        shopDefaultLaborRate
+                          ? `${formatMoney(shopDefaultLaborRate)}/hr (Shop default)`
+                          : "Set a variant override or configure a shop default"
+                      }
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={draft.laborRate}
+                      onChange={(value) => setDraft((current) => ({ ...current, laborRate: value }))}
+                      onBlur={() => setDraft((current) => ({ ...current, laborRate: normalizeFixedDecimalInput(current.laborRate) }))}
+                      autoComplete="off"
+                      helpText={laborRateHelpText}
+                    />
+                    <TextField
+                      label="Mistake buffer (%)"
+                      placeholder={`${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
+                      type="number"
+                      min={0}
+                      max={100}
+                      step={0.1}
+                      value={draft.mistakeBuffer}
+                      onChange={(value) => setDraft((current) => ({ ...current, mistakeBuffer: value }))}
+                      autoComplete="off"
+                      helpText="Leave blank to use the global default from Settings"
+                    />
+                    <Text as="p" variant="bodyMd" tone="subdued">
+                      Effective mistake buffer: {draft.mistakeBuffer
+                        ? formatPct(Number(draft.mistakeBuffer) / 100)
+                        : `${formatPct((Number(shopDefaults.mistakeBuffer ?? "0")) / 100)} (Shop Default)`}
                     </Text>
-                  )}
-                </InlineStack>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Add variant-only materials that are not part of the assigned template.
-                </Text>
-              </BlockStack>
-              <Button onClick={() => setAddMaterialOpen(true)} disabled={availableMaterials.length === draft.materialLines.length}>
-                Add material
-              </Button>
-            </InlineStack>
-            <Divider />
-            {draft.materialLines.length === 0 ? (
-              <Text as="p" variant="bodyMd" tone="subdued">No variant-only material lines.</Text>
-            ) : (
-              <BlockStack gap="400">
-                {[
-                  {
-                    heading: "Production materials",
-                    lines: additionalProductionMaterialLines,
-                    emptyText: "No additional production materials.",
-                  },
-                  {
-                    heading: "Shipping materials",
-                    lines: additionalShippingMaterialLines,
-                    emptyText: "No additional shipping materials.",
-                  },
-                ].map((section) => (
-                  <BlockStack key={section.heading} gap="200">
-                    <Text as="h3" variant="headingSm">{section.heading}</Text>
-                    {section.lines.length === 0 ? (
-                      <Text as="p" variant="bodyMd" tone="subdued">{section.emptyText}</Text>
-                    ) : (
-                      <BlockStack gap="300">
-                        {section.lines.map((line: SerializedMaterialLine) => (
-                          <InlineStack key={line.id} align="space-between" blockAlign="center">
-                            <BlockStack gap="100">
-                              <InlineStack gap="200" blockAlign="center">
-                                <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                                <Badge tone={line.materialType === "shipping" ? "info" : "success"}>
-                                  {line.materialType === "shipping" ? "Shipping" : "Production"}
-                                </Badge>
-                              </InlineStack>
-                              <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
-                            </BlockStack>
-                            <Button variant="plain" tone="critical" onClick={() => removeAdditionalMaterialLine(line.id)}>
-                              Remove
-                            </Button>
-                          </InlineStack>
-                        ))}
-                      </BlockStack>
-                    )}
                   </BlockStack>
-                ))}
-              </BlockStack>
-            )}
-          </BlockStack>
-        </Card>
-
-        {assignedProductionTemplate && (
-          <Card>
-            <BlockStack gap="400">
-              <BlockStack gap="100">
-                <Text as="h2" variant="headingMd">Template Equipment Lines</Text>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Override assigned template equipment values per variant.
-                </Text>
-              </BlockStack>
-              <Divider />
-              {draft.templateEquipmentLines.length === 0 ? (
-                <Text as="p" variant="bodyMd" tone="subdued">This template has no equipment lines.</Text>
-              ) : (
-                <BlockStack gap="300">
-                  {draft.templateEquipmentLines.map((line) => (
-                    <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
-                      <BlockStack gap="100">
-                        <InlineStack gap="200" blockAlign="center">
-                          <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
-                          <Badge tone={line.hasOverride ? "attention" : "info"}>
-                            {line.hasOverride ? "Override active" : "Using template default"}
-                          </Badge>
-                        </InlineStack>
-                        <Text as="p" variant="bodyMd" tone="subdued">
-                          Default: {describeEquipmentLine(line)}
-                        </Text>
-                        {line.hasOverride && (
-                          <Text as="p" variant="bodyMd" tone="subdued">
-                            Override: {describeEquipmentLine({
-                              usageMode: line.overrideUsageMode,
-                              minutes: line.overrideMinutes,
-                              uses: line.overrideUses,
-                              yieldDurationMinutes: line.overrideYieldDurationMinutes,
-                              yieldUses: line.overrideYieldUses,
-                              yieldQuantity: line.overrideYieldQuantity,
-                            })}
-                          </Text>
-                        )}
-                      </BlockStack>
-                      <InlineStack gap="200">
-                        <Button variant="plain" onClick={() => openEquipmentOverride(line)}>
-                          {line.hasOverride ? "Edit override" : "Override"}
-                        </Button>
-                        {line.hasOverride && (
-                          <Button variant="plain" onClick={() => resetEquipmentOverride(line.templateLineId)}>
-                            Reset
-                          </Button>
-                        )}
-                      </InlineStack>
-                    </InlineStack>
-                  ))}
-                </BlockStack>
-              )}
+                </div>
+              </details>
             </BlockStack>
-          </Card>
-        )}
-
-        <Card>
-          <BlockStack gap="400">
-            <InlineStack align="space-between" blockAlign="center">
-              <BlockStack gap="100">
-                <InlineStack gap="200" blockAlign="center">
-                  <Text as="h2" variant="headingMd">Additional Equipment Lines</Text>
-                  {draft.equipmentLines.length > 0 && (
-                    <Text as="span" variant="bodySm" tone="subdued">
-                      {draft.equipmentLines.length}
-                    </Text>
-                  )}
-                </InlineStack>
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  Add variant-only equipment usage outside the assigned template.
-                </Text>
-              </BlockStack>
-              <Button onClick={() => setAddEquipmentOpen(true)} disabled={availableEquipment.length === draft.equipmentLines.length}>
-                Add equipment
-              </Button>
-            </InlineStack>
-            <Divider />
-            {draft.equipmentLines.length === 0 ? (
-              <Text as="p" variant="bodyMd" tone="subdued">No variant-only equipment lines.</Text>
-            ) : (
-              <BlockStack gap="300">
-                {draft.equipmentLines.map((line: SerializedEquipmentLine) => (
-                  <InlineStack key={line.id} align="space-between" blockAlign="center">
-                    <BlockStack gap="100">
-                      <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
-                      <Text as="p" variant="bodyMd" tone="subdued">{describeEquipmentLine(line)}</Text>
-                    </BlockStack>
-                    <Button variant="plain" tone="critical" onClick={() => removeAdditionalEquipmentLine(line.id)}>
-                      Remove
-                    </Button>
-                  </InlineStack>
-                ))}
-              </BlockStack>
-            )}
           </BlockStack>
         </Card>
 
@@ -2963,6 +3921,233 @@ export default function VariantDetailPage() {
       </Modal>
 
       <Modal
+        open={promoteDialogOpen}
+        onClose={() => setPromoteDialogOpen(false)}
+        title="Create template from variant"
+        primaryAction={{
+          content: "Create template",
+          loading: promoteFetcher.state !== "idle",
+          disabled:
+            isDirty ||
+            !promoteForm.name.trim() ||
+            (!promoteForm.includeMaterials && !promoteForm.includeEquipment && !promoteForm.includeLabor) ||
+            (promoteForm.includeMaterials && promoteForm.materialLineKeys.length === 0) ||
+            (promoteForm.includeEquipment && promoteForm.equipmentLineKeys.length === 0),
+          onAction: promoteVariantToTemplate,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setPromoteDialogOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {promoteFetcher.data && !promoteFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{promoteFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Template name"
+              value={promoteForm.name}
+              onChange={(value) => setPromoteForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <TextField
+              label="Description"
+              value={promoteForm.description}
+              onChange={(value) => setPromoteForm((current) => ({ ...current, description: value }))}
+              autoComplete="off"
+            />
+            <BlockStack gap="200">
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.includeMaterials}
+                  onChange={() => setPromoteForm((current) => ({ ...current, includeMaterials: !current.includeMaterials }))}
+                />
+                <span>Include effective production materials</span>
+              </label>
+              {promoteForm.includeMaterials ? (
+                <BlockStack gap="150">
+                  {promotableMaterialLines.length === 0 ? (
+                    <Text as="p" variant="bodyMd" tone="subdued">No production material lines are available to include.</Text>
+                  ) : (
+                    promotableMaterialLines.map((line) => (
+                      <label key={line.key} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", paddingLeft: "1.5rem" }}>
+                        <input
+                          type="checkbox"
+                          checked={promoteForm.materialLineKeys.includes(line.key)}
+                          onChange={() => togglePromoteMaterialLine(line.key)}
+                        />
+                        <span>
+                          <span>{line.name}</span>
+                          <span style={{ color: "#616161" }}> ({line.source}: {line.description})</span>
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </BlockStack>
+              ) : null}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.includeEquipment}
+                  onChange={() => setPromoteForm((current) => ({ ...current, includeEquipment: !current.includeEquipment }))}
+                />
+                <span>Include effective equipment</span>
+              </label>
+              {promoteForm.includeEquipment ? (
+                <BlockStack gap="150">
+                  {promotableEquipmentLines.length === 0 ? (
+                    <Text as="p" variant="bodyMd" tone="subdued">No equipment lines are available to include.</Text>
+                  ) : (
+                    promotableEquipmentLines.map((line) => (
+                      <label key={line.key} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem", paddingLeft: "1.5rem" }}>
+                        <input
+                          type="checkbox"
+                          checked={promoteForm.equipmentLineKeys.includes(line.key)}
+                          onChange={() => togglePromoteEquipmentLine(line.key)}
+                        />
+                        <span>
+                          <span>{line.name}</span>
+                          <span style={{ color: "#616161" }}> ({line.source}: {line.description || "No usage set"})</span>
+                        </span>
+                      </label>
+                    ))
+                  )}
+                </BlockStack>
+              ) : null}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.includeLabor}
+                  onChange={() => setPromoteForm((current) => ({ ...current, includeLabor: !current.includeLabor }))}
+                />
+                <span>Include labor defaults</span>
+              </label>
+              {promoteForm.includeLabor && !draft.laborRate && !selectedProductionTemplate?.defaultLaborRate && shopDefaultLaborRate ? (
+                <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={promoteForm.freezeShopLaborRate}
+                    onChange={() => setPromoteForm((current) => ({ ...current, freezeShopLaborRate: !current.freezeShopLaborRate }))}
+                  />
+                  <span>Copy current shop default labor rate into the template</span>
+                </label>
+              ) : null}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.includeDefaultShippingTemplate && Boolean(effectiveTemplateSelection.shippingTemplateId)}
+                  disabled={!effectiveTemplateSelection.shippingTemplateId}
+                  onChange={() =>
+                    setPromoteForm((current) => ({
+                      ...current,
+                      includeDefaultShippingTemplate: !current.includeDefaultShippingTemplate,
+                    }))
+                  }
+                />
+                <span>Set this production template&apos;s default shipping template to the current shipping template</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteForm.assignBack}
+                  onChange={() => setPromoteForm((current) => ({ ...current, assignBack: !current.assignBack }))}
+                />
+                <span>Assign the new template back to this variant</span>
+              </label>
+            </BlockStack>
+            {promoteForm.assignBack ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Exact promoted variant-only rows and stale previous-template overrides will be removed; any remaining
+                variant-specific rows will be reported for review.
+              </Text>
+            ) : null}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={promoteShippingDialogOpen}
+        onClose={() => setPromoteShippingDialogOpen(false)}
+        title="Create shipping template from variant"
+        primaryAction={{
+          content: "Create shipping template",
+          loading: promoteFetcher.state !== "idle",
+          disabled: isDirty || !promoteShippingForm.name.trim() || promoteShippingForm.materialLineKeys.length === 0,
+          onAction: promoteVariantToShippingTemplate,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setPromoteShippingDialogOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {promoteFetcher.data && !promoteFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{promoteFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Template name"
+              value={promoteShippingForm.name}
+              onChange={(value) => setPromoteShippingForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <TextField
+              label="Description"
+              value={promoteShippingForm.description}
+              onChange={(value) => setPromoteShippingForm((current) => ({ ...current, description: value }))}
+              autoComplete="off"
+            />
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Select the effective shipping material lines to include in the new shipping template.
+              </Text>
+              {promotableShippingMaterialLines.map((line) => (
+                <label key={line.key} style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
+                  <input
+                    type="checkbox"
+                    checked={promoteShippingForm.materialLineKeys.includes(line.key)}
+                    onChange={() => togglePromoteShippingMaterialLine(line.key)}
+                  />
+                  <span>
+                    <span>{line.name}</span>
+                    <span style={{ color: "#616161" }}> ({line.source}: {line.description})</span>
+                  </span>
+                </label>
+              ))}
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteShippingForm.assignBack}
+                  onChange={() => setPromoteShippingForm((current) => ({ ...current, assignBack: !current.assignBack }))}
+                />
+                <span>Assign the new shipping template back to this variant</span>
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input
+                  type="checkbox"
+                  checked={promoteShippingForm.setAsProductionDefault && Boolean(effectiveTemplateSelection.productionTemplateId)}
+                  disabled={!effectiveTemplateSelection.productionTemplateId}
+                  onChange={() =>
+                    setPromoteShippingForm((current) => ({
+                      ...current,
+                      setAsProductionDefault: !current.setAsProductionDefault,
+                    }))
+                  }
+                />
+                <span>Set as the current production template&apos;s default shipping template</span>
+              </label>
+            </BlockStack>
+            {promoteShippingForm.assignBack ? (
+              <Text as="p" variant="bodyMd" tone="subdued">
+                Selected variant-only shipping rows will be removed after promotion; excluded inherited rows will be
+                preserved as variant-specific rows.
+              </Text>
+            ) : null}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
         open={Boolean(materialOverrideTarget)}
         onClose={closeMaterialOverride}
         title={materialOverrideTarget ? `Override ${materialOverrideTarget.materialName}` : "Override material"}
@@ -3077,6 +4262,17 @@ export default function VariantDetailPage() {
                 </Text>
               }
             />
+            <Button
+              onClick={() => {
+                setQuickMaterialForm((current) => ({
+                  ...current,
+                  name: materialSearchValue,
+                }));
+                setQuickMaterialOpen(true);
+              }}
+            >
+              Create material
+            </Button>
             {selectedMaterial?.costingModel === "counted" && (
               <TextField
                 label="Quantity used per item"
@@ -3147,39 +4343,39 @@ export default function VariantDetailPage() {
                 Default: {describeEquipmentLine(equipmentOverrideTarget)}
               </Text>
               <Select
-                label="Usage mode"
+                label="How usage is measured"
                 value={overrideEqUsageMode}
                 onChange={setOverrideEqUsageMode}
-                options={[
-                  { label: "Direct minutes / uses", value: "direct" },
-                  { label: "Duration yield", value: "duration_yield" },
-                  { label: "Use yield", value: "use_yield" },
-                ]}
+                options={equipmentOverrideUsageModeOptions}
               />
               {overrideEqUsageMode === "direct" && (
                 <InlineStack gap="400" wrap={false}>
-                  <div style={{ flex: 1 }}>
-                    <TextField
-                      label="Minutes"
-                      type="number"
-                      min={0}
-                      step={0.5}
-                      value={overrideEqMinutes}
-                      onChange={setOverrideEqMinutes}
-                      autoComplete="off"
-                    />
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <TextField
-                      label="Uses"
-                      type="number"
-                      min={0}
-                      step={1}
-                      value={overrideEqUses}
-                      onChange={setOverrideEqUses}
-                      autoComplete="off"
-                    />
-                  </div>
+                  {equipmentOverrideUsageBasis !== "unit" && (
+                    <div style={{ flex: 1 }}>
+                      <TextField
+                        label="Minutes"
+                        type="number"
+                        min={0}
+                        step={0.5}
+                        value={overrideEqMinutes}
+                        onChange={setOverrideEqMinutes}
+                        autoComplete="off"
+                      />
+                    </div>
+                  )}
+                  {equipmentOverrideUsageBasis !== "time" && (
+                    <div style={{ flex: 1 }}>
+                      <TextField
+                        label="Uses"
+                        type="number"
+                        min={0}
+                        step={1}
+                        value={overrideEqUses}
+                        onChange={setOverrideEqUses}
+                        autoComplete="off"
+                      />
+                    </div>
+                  )}
                 </InlineStack>
               )}
               {overrideEqUsageMode === "duration_yield" && (
@@ -3270,6 +4466,12 @@ export default function VariantDetailPage() {
                 const nextEquipment = availableEquipment.find((equipment: AvailableEquipment) => equipment.id === nextId);
                 setSelectedEquipmentId(nextId);
                 setEquipmentSearchValue(nextEquipment?.name ?? "");
+                setEqUsageMode(defaultUsageModeForBasis(nextEquipment?.usageBasis));
+                setEqMinutes("");
+                setEqUses("");
+                setEqYieldDurationMinutes("");
+                setEqYieldUses("");
+                setEqYieldQuantity("");
               }}
               textField={
                 <Autocomplete.TextField
@@ -3286,40 +4488,51 @@ export default function VariantDetailPage() {
                 </Text>
               }
             />
+            <Button
+              onClick={() => {
+                setQuickEquipmentForm((current) => ({
+                  ...current,
+                  name: equipmentSearchValue,
+                }));
+                setQuickEquipmentOpen(true);
+              }}
+            >
+              Create equipment
+            </Button>
             <Select
-              label="Usage mode"
+              label="How usage is measured"
               value={eqUsageMode}
               onChange={setEqUsageMode}
-              options={[
-                { label: "Direct minutes / uses", value: "direct" },
-                { label: "Duration yield", value: "duration_yield" },
-                { label: "Use yield", value: "use_yield" },
-              ]}
+              options={equipmentUsageModeOptions}
             />
             {eqUsageMode === "direct" && (
               <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Minutes"
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={eqMinutes}
-                    onChange={setEqMinutes}
-                    autoComplete="off"
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Uses"
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={eqUses}
-                    onChange={setEqUses}
-                    autoComplete="off"
-                  />
-                </div>
+                {selectedEquipmentUsageBasis !== "unit" && (
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Minutes"
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={eqMinutes}
+                      onChange={setEqMinutes}
+                      autoComplete="off"
+                    />
+                  </div>
+                )}
+                {selectedEquipmentUsageBasis !== "time" && (
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Uses"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={eqUses}
+                      onChange={setEqUses}
+                      autoComplete="off"
+                    />
+                  </div>
+                )}
               </InlineStack>
             )}
             {eqUsageMode === "duration_yield" && (
@@ -3376,6 +4589,161 @@ export default function VariantDetailPage() {
                 </div>
               </InlineStack>
             )}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={quickMaterialOpen}
+        onClose={() => setQuickMaterialOpen(false)}
+        title="Create material"
+        primaryAction={{
+          content: "Create material",
+          loading: quickCreateFetcher.state !== "idle" && quickCreateFetcher.formData?.get("intent") === "quick-create-material",
+          onAction: submitQuickMaterial,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setQuickMaterialOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {quickCreateFetcher.data?.actionKind === "quick-create-material" && !quickCreateFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{quickCreateFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Name"
+              value={quickMaterialForm.name}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <Select
+              label="Material type"
+              value={quickMaterialForm.type}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, type: value }))}
+              options={[
+                { label: "Production", value: "production" },
+                { label: "Shipping", value: "shipping" },
+              ]}
+            />
+            <Select
+              label="Costing method"
+              value={quickMaterialForm.costingModel}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, costingModel: value }))}
+              options={[
+                { label: "Counted parts", value: "counted" },
+                { label: "Variable yield", value: "yield" },
+                { label: "Portioned use", value: "uses" },
+              ]}
+            />
+            <InlineStack gap="400" wrap={false}>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Purchase price"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickMaterialForm.purchasePrice}
+                  onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchasePrice: value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Purchase quantity"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickMaterialForm.purchaseQty}
+                  onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchaseQty: value }))}
+                  autoComplete="off"
+                />
+              </div>
+            </InlineStack>
+            {quickMaterialForm.costingModel === "uses" ? (
+              <TextField
+                label="Portions per purchased unit"
+                type="number"
+                min={0}
+                step={0.01}
+                value={quickMaterialForm.totalUsesPerUnit}
+                onChange={(value) => setQuickMaterialForm((current) => ({ ...current, totalUsesPerUnit: value }))}
+                autoComplete="off"
+              />
+            ) : null}
+            <TextField
+              label="Purchase link"
+              value={quickMaterialForm.purchaseLink}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchaseLink: value }))}
+              autoComplete="off"
+            />
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={quickEquipmentOpen}
+        onClose={() => setQuickEquipmentOpen(false)}
+        title="Create equipment"
+        primaryAction={{
+          content: "Create equipment",
+          loading: quickCreateFetcher.state !== "idle" && quickCreateFetcher.formData?.get("intent") === "quick-create-equipment",
+          onAction: submitQuickEquipment,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setQuickEquipmentOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {quickCreateFetcher.data?.actionKind === "quick-create-equipment" && !quickCreateFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{quickCreateFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Name"
+              value={quickEquipmentForm.name}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <InlineStack gap="400" wrap={false}>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Hourly rate"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickEquipmentForm.hourlyRate}
+                  onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, hourlyRate: value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Per-use cost"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickEquipmentForm.perUseCost}
+                  onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, perUseCost: value }))}
+                  autoComplete="off"
+                />
+              </div>
+            </InlineStack>
+            <TextField
+              label="Equipment cost"
+              type="number"
+              min={0}
+              step={0.01}
+              value={quickEquipmentForm.equipmentCost}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, equipmentCost: value }))}
+              autoComplete="off"
+            />
+            <TextField
+              label="Purchase link"
+              value={quickEquipmentForm.purchaseLink}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, purchaseLink: value }))}
+              autoComplete="off"
+            />
           </BlockStack>
         </Modal.Section>
       </Modal>

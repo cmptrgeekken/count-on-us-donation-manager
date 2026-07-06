@@ -11,7 +11,20 @@ describe("scaleWidgetVariantForQuantity", () => {
         currencyCode: "USD",
         laborCost: "3.00",
         materialLines: [{ name: "Sticker Paper", type: "production", lineCost: "0.18" }],
-        equipmentLines: [{ name: "Printer", lineCost: "0.03" }],
+        equipmentLines: [
+          {
+            name: "Printer",
+            lineCost: "0.03",
+            componentCosts: {
+              electricity: "0.01",
+              depreciation: "0.01",
+              consumables: "0.01",
+              maintenance: "0.00",
+              manualOverride: "0.00",
+            },
+            consumableLines: [{ name: "Ink absorber", lifespanUnit: "uses", lineCost: "0.01" }],
+          },
+        ],
         shippingMaterialLines: [{ name: "Mailer", lineCost: "0.15" }],
         podCostTotal: "0.00",
         mistakeBufferAmount: "0.01",
@@ -38,6 +51,8 @@ describe("scaleWidgetVariantForQuantity", () => {
     expect(result.laborCost).toBe("9.00");
     expect(result.materialLines[0].lineCost).toBe("0.54");
     expect(result.equipmentLines[0].lineCost).toBe("0.09");
+    expect(result.equipmentLines[0].componentCosts?.electricity).toBe("0.03");
+    expect(result.equipmentLines[0].consumableLines?.[0].lineCost).toBe("0.03");
     expect(result.shippingMaterialLines[0].lineCost).toBe("0.15");
     expect(result.causes[0].estimatedDonationAmount).toBe("37.05");
     expect(result.taxReserve.estimatedAmount).toBe("12.45");

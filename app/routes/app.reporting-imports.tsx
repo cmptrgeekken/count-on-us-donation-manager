@@ -10,6 +10,7 @@ import {
   parseHistoricalImportRows,
   rebuildAllReporting,
   rebuildReportingPeriod,
+  replaceOrderSnapshots,
 } from "../services/historicalBackfill.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
@@ -17,7 +18,7 @@ import { useAppLocalization } from "../utils/use-app-localization";
 type ActionData = {
   ok: boolean;
   message: string;
-  actionKind?: "import" | "rebuild";
+  actionKind?: "import" | "rebuild" | "replacement";
   summary?: unknown;
   importPayload?: string;
   importKind?: string | null;
@@ -101,6 +102,7 @@ function actionJson(data: ActionData, init?: ResponseInit) {
 function actionKindForIntent(intent: string | undefined): ActionData["actionKind"] {
   if (intent === "dry-run-import" || intent === "apply-import") return "import";
   if (intent === "rebuild-period" || intent === "rebuild-all") return "rebuild";
+  if (intent === "dry-run-replace-snapshots" || intent === "replace-snapshots") return "replacement";
   return undefined;
 }
 
@@ -298,6 +300,44 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Response>
       return actionJson({ ok: true, message: "Reporting history rebuilt. Results are shown below.", actionKind: "rebuild", summary: result });
     }
 
+    if (intent === "dry-run-replace-snapshots" || intent === "replace-snapshots") {
+      const { payload, fileName } = await readImportPayload(formData);
+      const rows = parseHistoricalImportRows(payload, "orders");
+      const dryRun = intent === "dry-run-replace-snapshots";
+      const forceClosed = formData.get("forceClosed") === "on";
+      const replacementReason = formData.get("replacementReason")?.toString().trim() ?? "";
+      const confirmation = formData.get("replacementConfirmation")?.toString().trim() ?? "";
+      const sourceName = formData.get("sourceName")?.toString().trim() || fileName || null;
+      const mappingOverrides = parseVariantMappings(formData);
+
+      if (!dryRun && confirmation !== "REPLACE") {
+        return actionJson(
+          { ok: false, message: "Type REPLACE to confirm snapshot replacement.", actionKind: "replacement", importPayload: payload, importKind: "orders", sourceName, mappingOverrides },
+          { status: 400 },
+        );
+      }
+
+      const summary = await replaceOrderSnapshots({
+        shopId,
+        rows,
+        dryRun,
+        forceClosed,
+        replacementReason,
+        sourceName,
+        mappingOverrides,
+      });
+      return actionJson({
+        ok: summary.errors.length === 0,
+        message: dryRun ? "Snapshot replacement dry run complete." : "Snapshots replaced. Rebuild affected reporting periods after reviewing the results.",
+        actionKind: "replacement",
+        summary,
+        importPayload: payload,
+        importKind: "orders",
+        sourceName,
+        mappingOverrides,
+      });
+    }
+
     return actionJson({ ok: false, message: "Unknown action." }, { status: 400 });
   } catch (error) {
     return actionJson(
@@ -314,20 +354,27 @@ export default function ReportingImportsPage() {
   const { formatMoney, locale } = useAppLocalization();
   const importIntentRef = useRef<HTMLInputElement>(null);
   const mappingIntentRef = useRef<HTMLInputElement>(null);
+  const replacementIntentRef = useRef<HTMLInputElement>(null);
   const busy = navigation.state !== "idle";
   const submittingIntent = navigation.formData?.get("intent")?.toString();
   const isRebuildSubmitting = submittingIntent === "rebuild-period" || submittingIntent === "rebuild-all";
+  const isReplacementSubmitting = submittingIntent === "dry-run-replace-snapshots" || submittingIntent === "replace-snapshots";
   const importActionData = actionData?.actionKind === "import" ? actionData : null;
   const rebuildActionData = actionData?.actionKind === "rebuild" ? actionData : null;
+  const replacementActionData = actionData?.actionKind === "replacement" ? actionData : null;
   const rebuildResults = rebuildPeriodResults(rebuildActionData?.summary);
-  const statusMessage = isRebuildSubmitting ? "Rebuild in progress." : actionData?.message ?? "";
-  const mappingRequests = lineMappingRequests(actionData?.summary);
+  const statusMessage = isRebuildSubmitting
+    ? "Rebuild in progress."
+    : isReplacementSubmitting
+      ? "Snapshot replacement in progress."
+      : actionData?.message ?? "";
+  const mappingRequests = lineMappingRequests(importActionData?.summary);
   const mappingOverrides = actionData?.mappingOverrides ?? {};
-  const hasReviewedMappings = actionData?.importKind === "orders" &&
-    Boolean(actionData.importPayload) &&
+  const hasReviewedMappings = importActionData?.importKind === "orders" &&
+    Boolean(importActionData.importPayload) &&
     Object.keys(mappingOverrides).length > 0 &&
     mappingRequests.length === 0 &&
-    actionData.message.includes("dry run");
+    importActionData.message.includes("dry run");
 
   return (
     <>
@@ -426,12 +473,12 @@ export default function ReportingImportsPage() {
               </div>
             </Form>
 
-            {actionData?.importKind === "orders" && actionData.importPayload && mappingRequests.length > 0 ? (
+            {importActionData?.importKind === "orders" && importActionData.importPayload && mappingRequests.length > 0 ? (
               <Form method="post" style={{ display: "grid", gap: "1rem" }}>
                 <input ref={mappingIntentRef} type="hidden" name="intent" defaultValue="dry-run-import" />
                 <input type="hidden" name="kind" value="orders" />
-                <input type="hidden" name="sourceName" value={actionData.sourceName ?? ""} />
-                <textarea name="payload" value={actionData.importPayload} readOnly hidden />
+                <input type="hidden" name="sourceName" value={importActionData.sourceName ?? ""} />
+                <textarea name="payload" value={importActionData.importPayload} readOnly hidden />
                 <s-banner tone="warning">
                   <s-text>Some order lines need a product/variant mapping before import.</s-text>
                 </s-banner>
@@ -473,8 +520,8 @@ export default function ReportingImportsPage() {
               <Form method="post" style={{ display: "grid", gap: "1rem" }}>
                 <input type="hidden" name="intent" value="apply-import" />
                 <input type="hidden" name="kind" value="orders" />
-                <input type="hidden" name="sourceName" value={actionData?.sourceName ?? ""} />
-                <textarea name="payload" value={actionData?.importPayload ?? ""} readOnly hidden />
+                <input type="hidden" name="sourceName" value={importActionData?.sourceName ?? ""} />
+                <textarea name="payload" value={importActionData?.importPayload ?? ""} readOnly hidden />
                 {Object.entries(mappingOverrides).map(([key, value]) => (
                   <input key={key} type="hidden" name={`variantMapping:${key}`} value={value} />
                 ))}
@@ -488,6 +535,99 @@ export default function ReportingImportsPage() {
                 </div>
               </Form>
             ) : null}
+          </div>
+        </s-section>
+
+        <s-section heading="Snapshot replacement">
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <s-banner tone="warning">
+              <s-text>
+                Snapshot replacement recomputes order cost snapshots from the uploaded order payload and current Count On Us configuration. Use dry run first, then rebuild affected reporting periods after replacement.
+              </s-text>
+            </s-banner>
+            {isReplacementSubmitting ? (
+              <s-banner tone="info">
+                <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      width: "1rem",
+                      height: "1rem",
+                      border: "2px solid currentColor",
+                      borderTopColor: "transparent",
+                      borderRadius: "999px",
+                      animation: "reporting-imports-spin 0.8s linear infinite",
+                      flex: "0 0 auto",
+                    }}
+                  />
+                  <s-text>Snapshot replacement in progress. This may take a moment.</s-text>
+                </div>
+              </s-banner>
+            ) : null}
+            {replacementActionData ? (
+              <s-banner tone={replacementActionData.ok ? "success" : "critical"}>
+                <s-text>{replacementActionData.message}</s-text>
+                {replacementActionData.summary ? (
+                  <pre style={{ overflowX: "auto", whiteSpace: "pre-wrap", margin: "0.75rem 0 0" }}>
+                    {stringifySummary(replacementActionData.summary)}
+                  </pre>
+                ) : null}
+              </s-banner>
+            ) : null}
+            <Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: "1rem" }}>
+              <input ref={replacementIntentRef} type="hidden" name="intent" defaultValue="dry-run-replace-snapshots" />
+              <s-text>
+                Upload or paste Shopify order exports for snapshots that already exist. Closed-period snapshots require force replacement. Existing payment, receipt, tax, or public disclosure evidence should be reviewed before continuing.
+              </s-text>
+              <s-text-field label="Source name" name="sourceName" placeholder="Optional filename or replacement batch name" />
+              <div style={{ display: "grid", gap: "0.4rem" }}>
+                <label htmlFor="replacementPayloadFile">Replacement order file</label>
+                <input id="replacementPayloadFile" name="payloadFile" type="file" accept="text/csv,application/csv,application/json,.csv,.json" />
+                <s-text color="subdued">Use the same Shopify CSV or JSON order format as historical order import.</s-text>
+              </div>
+              <div style={{ display: "grid", gap: "0.4rem" }}>
+                <label htmlFor="replacementPayload">JSON or CSV fallback</label>
+                <textarea
+                  id="replacementPayload"
+                  name="payload"
+                  rows={8}
+                  style={{
+                    width: "100%",
+                    padding: "0.75rem",
+                    border: "1px solid var(--p-color-border, #d2d5d8)",
+                    borderRadius: "0.5rem",
+                    font: "inherit",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+                  }}
+                />
+              </div>
+              <s-text-field
+                label="Replacement reason"
+                name="replacementReason"
+                placeholder="Example: Recompute beta snapshots after equipment consumable costing rollout"
+              />
+              <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <input type="checkbox" name="forceClosed" />
+                <span>Allow replacement for snapshots in closed reporting periods</span>
+              </label>
+              <s-text-field
+                label="Type REPLACE to apply"
+                name="replacementConfirmation"
+                placeholder="Required only when applying replacement"
+              />
+              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                <s-button type="submit" variant="secondary" disabled={busy} onClick={() => {
+                  if (replacementIntentRef.current) replacementIntentRef.current.value = "dry-run-replace-snapshots";
+                }}>
+                  Dry run replacement
+                </s-button>
+                <s-button type="submit" tone="critical" variant="secondary" disabled={busy} onClick={() => {
+                  if (replacementIntentRef.current) replacementIntentRef.current.value = "replace-snapshots";
+                }}>
+                  Replace snapshots
+                </s-button>
+              </div>
+            </Form>
           </div>
         </s-section>
 

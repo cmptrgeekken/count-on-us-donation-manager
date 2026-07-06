@@ -124,8 +124,29 @@ describe("buildReportingSummary", () => {
         aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("0") } }),
       },
       shopifyChargeTransaction: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("0") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("10.00") } }),
         findMany: vi.fn().mockResolvedValue([]),
+      },
+      orderSettlement: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { feeAmount: decimal("12.50") } }),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "settlement-1",
+            shopifyOrderId: "gid://shopify/Order/2",
+            orderNumber: "#1002",
+            source: "faire",
+            status: "confirmed",
+            grossOrderAmount: decimal("40.00"),
+            shopifyPaidAmount: decimal("0"),
+            amountReceived: decimal("27.50"),
+            feeAmount: decimal("12.50"),
+            currency: "USD",
+            paidAt: new Date("2026-04-15T00:00:00.000Z"),
+            referenceId: "faire-payout-1",
+            notes: null,
+            detectedReason: "Marketplace or external payment source with no Shopify paid amount.",
+          },
+        ]),
       },
       disbursement: {
         findMany: vi.fn().mockResolvedValue([]),
@@ -158,6 +179,18 @@ describe("buildReportingSummary", () => {
 
     expect(result.summary?.track1.totalNetContribution).toBe("130");
     expect(result.summary?.track1.salesTaxCollected).toBe("12.34");
+    expect(result.summary?.track1.shopifyCharges).toBe("10");
+    expect(result.summary?.track1.externalSettlementFees).toBe("12.5");
+    expect(result.summary?.track1.donationPool).toBe("112.5");
+    expect(result.summary?.externalSettlements).toEqual([
+      expect.objectContaining({
+        id: "settlement-1",
+        source: "faire",
+        status: "confirmed",
+        amountReceived: "27.5",
+        feeAmount: "12.5",
+      }),
+    ]);
     expect(result.summary?.track1.allocations).toEqual([
       expect.objectContaining({
         causeId: "cause-1",

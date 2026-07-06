@@ -10,6 +10,7 @@ import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import {
+  parseOptionalNonNegativeDecimal,
   parseOptionalNonNegativeMoney,
   parsePercentInputToRate,
 } from "../utils/money-parsing";
@@ -94,6 +95,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       managedMarketsEnableDate: true,
       mistakeBuffer: true,
       defaultLaborRate: true,
+      defaultElectricityCostPerKwh: true,
       effectiveTaxRate: true,
       taxDeductionMode: true,
       postPurchaseEmailEnabled: true,
@@ -108,6 +110,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     managedMarketsEnableDate: formatDateInput(shop?.managedMarketsEnableDate),
     mistakeBuffer: shop?.mistakeBuffer ? (Number(shop.mistakeBuffer) * 100).toFixed(2) : "",
     defaultLaborRate: shop?.defaultLaborRate ? Number(shop.defaultLaborRate).toFixed(2) : "",
+    defaultElectricityCostPerKwh: shop?.defaultElectricityCostPerKwh?.toString() ?? "",
     effectiveTaxRate: shop?.effectiveTaxRate ? (Number(shop.effectiveTaxRate) * 100).toFixed(2) : "",
     taxDeductionMode: shop?.taxDeductionMode ?? "dont_deduct",
     postPurchaseEmailEnabled: shop?.postPurchaseEmailEnabled ?? false,
@@ -242,6 +245,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "update-cost-defaults") {
     let mistakeBuffer: Prisma.Decimal;
     let defaultLaborRate: Prisma.Decimal | null;
+    let defaultElectricityCostPerKwh: Prisma.Decimal | null;
     try {
       mistakeBuffer = parsePercentInputToRate(
         formData.get("mistakeBuffer")?.toString(),
@@ -250,6 +254,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       defaultLaborRate = parseOptionalNonNegativeMoney(
         formData.get("defaultLaborRate")?.toString(),
         "Labor rate",
+      );
+      defaultElectricityCostPerKwh = parseOptionalNonNegativeDecimal(
+        formData.get("defaultElectricityCostPerKwh")?.toString(),
+        "Electricity cost per kWh",
+        6,
       );
     } catch (error) {
       if (error instanceof Response) {
@@ -263,6 +272,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       data: {
         mistakeBuffer,
         defaultLaborRate,
+        defaultElectricityCostPerKwh,
       },
     });
 
@@ -275,6 +285,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         payload: {
           mistakeBuffer: mistakeBuffer.toString(),
           defaultLaborRate: defaultLaborRate?.toString() ?? null,
+          defaultElectricityCostPerKwh: defaultElectricityCostPerKwh?.toString() ?? null,
         },
       },
     });
@@ -428,6 +439,7 @@ export default function Settings() {
     managedMarketsEnableDate,
     mistakeBuffer,
     defaultLaborRate,
+    defaultElectricityCostPerKwh,
     effectiveTaxRate,
     taxDeductionMode,
     postPurchaseEmailEnabled,
@@ -442,6 +454,7 @@ export default function Settings() {
   const [managedMarketsEnableDateInput, setManagedMarketsEnableDateInput] = useState(managedMarketsEnableDate ?? "");
   const [bufferInput, setBufferInput] = useState(mistakeBuffer ?? "");
   const [laborRateInput, setLaborRateInput] = useState(defaultLaborRate ?? "");
+  const [electricityRateInput, setElectricityRateInput] = useState(defaultElectricityCostPerKwh ?? "");
   const [effectiveTaxRateInput, setEffectiveTaxRateInput] = useState(effectiveTaxRate ?? "");
   const [taxDeductionModeInput, setTaxDeductionModeInput] = useState(taxDeductionMode ?? "dont_deduct");
   const [postPurchaseEmailEnabledInput, setPostPurchaseEmailEnabledInput] = useState(postPurchaseEmailEnabled ?? false);
@@ -581,6 +594,18 @@ export default function Settings() {
               />
               <s-text>
                 Example: {formatMoney(15)}/hr. Leave blank to remove the shop default labor rate.
+              </s-text>
+              <s-text-field
+                label={`Default electricity cost (${getCurrencySymbol()}/kWh)`}
+                name="defaultElectricityCostPerKwh"
+                value={electricityRateInput}
+                onChange={(event) => setElectricityRateInput((event.currentTarget as HTMLInputElement).value)}
+                type="number"
+                min={0}
+                step={0.000001}
+              />
+              <s-text>
+                Used for calculated equipment electricity costs unless an equipment item has its own override.
               </s-text>
               <div>
                 <s-button type="submit" disabled={isSubmitting}>Save cost defaults</s-button>

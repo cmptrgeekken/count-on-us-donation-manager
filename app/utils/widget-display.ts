@@ -2,6 +2,12 @@ type WidgetLine = {
   name: string;
   lineCost: string;
   type?: string;
+  componentCosts?: Record<string, string>;
+  consumableLines?: Array<{
+    name: string;
+    lifespanUnit: string;
+    lineCost: string;
+  }>;
 };
 
 type WidgetCause = {
@@ -45,6 +51,15 @@ function scaleLine(line: WidgetLine, quantity: number) {
   return {
     ...line,
     lineCost: fixedMoney(parseMoney(line.lineCost) * quantity),
+    componentCosts: line.componentCosts
+      ? Object.fromEntries(
+          Object.entries(line.componentCosts).map(([key, value]) => [key, fixedMoney(parseMoney(value) * quantity)]),
+        )
+      : line.componentCosts,
+    consumableLines: line.consumableLines?.map((consumableLine) => ({
+      ...consumableLine,
+      lineCost: fixedMoney(parseMoney(consumableLine.lineCost) * quantity),
+    })),
   };
 }
 

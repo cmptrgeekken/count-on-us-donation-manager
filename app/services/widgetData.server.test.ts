@@ -69,6 +69,14 @@ describe("buildWidgetProductPayload", () => {
           purchaseLink: "https://example.com/printer",
           hourlyRate: decimal("0.90"),
           perUseCost: null,
+          componentCosts: {
+            electricityCost: decimal("0"),
+            depreciationCost: decimal("0"),
+            consumablesCost: decimal("0"),
+            maintenanceCost: decimal("0"),
+            manualOverrideCost: decimal("0.03"),
+          },
+          consumableLines: [],
         },
       ],
     });
@@ -190,6 +198,14 @@ describe("buildWidgetProductPayload", () => {
         rate: "$0.90/hr",
         rateDetail: null,
         purchaseLink: "https://example.com/printer",
+        componentCosts: {
+          electricity: "0.00",
+          depreciation: "0.00",
+          consumables: "0.00",
+          maintenance: "0.00",
+          manualOverride: "0.03",
+        },
+        consumableLines: [],
       },
     ]);
 

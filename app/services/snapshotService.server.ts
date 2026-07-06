@@ -3,6 +3,7 @@ import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
 import { resolveCosts, type CostResult, type PodCostResolution } from "./costEngine.server";
 import { reconcileSnapshotPackaging } from "./packaging.server";
+import { detectAndUpsertExternalSettlementReview } from "./orderSettlement.server";
 import { decryptProviderCredential } from "./providerCredentials.server";
 import { listPrintifyProducts } from "./printify.server";
 import { recomputeTaxOffsetCache } from "./taxOffsetCache.server";
@@ -41,6 +42,33 @@ export type ShopifyOrderPayload = {
   order_number?: string | number | null;
   created_at?: string | null;
   createdAt?: string | null;
+  source_name?: string | null;
+  landing_site?: string | null;
+  referring_site?: string | null;
+  financial_status?: string | null;
+  fulfillment_status?: string | null;
+  currency?: string | null;
+  presentment_currency?: string | null;
+  total_price?: string | number | null;
+  current_total_price?: string | number | null;
+  subtotal_price?: string | number | null;
+  current_subtotal_price?: string | number | null;
+  total_received?: string | number | null;
+  total_outstanding?: string | number | null;
+  payment_gateway_names?: string[] | null;
+  gateway?: string | null;
+  total_price_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+      currency_code?: string | null;
+    } | null;
+  } | null;
+  current_total_price_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+      currency_code?: string | null;
+    } | null;
+  } | null;
   total_tax?: string | number | null;
   current_total_tax?: string | number | null;
   total_tax_set?: {
@@ -342,7 +370,13 @@ export async function createSnapshot(
   db: any = prisma,
   origin: "webhook" | "reconciliation" | "historical_import" = "webhook",
   fetchImpl: typeof fetch = fetch,
-  metadata: { importBatchId?: string | null; importedAt?: Date | null; periodId?: string | null } = {},
+  metadata: {
+    importBatchId?: string | null;
+    importedAt?: Date | null;
+    periodId?: string | null;
+    replaceExistingSnapshotId?: string | null;
+    replacementReason?: string | null;
+  } = {},
 ): Promise<{ created: boolean; snapshotId?: string }> {
   const shopifyOrderId = order.admin_graphql_api_id ?? null;
   if (!shopifyOrderId) {
@@ -354,7 +388,10 @@ export async function createSnapshot(
     select: { id: true, salesTaxCollected: true },
   });
 
-  if (existing) {
+  const replacementSnapshotId = metadata.replaceExistingSnapshotId ?? null;
+  const isReplacing = Boolean(replacementSnapshotId && existing?.id === replacementSnapshotId);
+
+  if (existing && !isReplacing) {
     const salesTaxCollected = getOrderSalesTax(order);
     if (
       salesTaxCollected.greaterThan(ZERO) &&
@@ -608,6 +645,12 @@ export async function createSnapshot(
 
   try {
     const result = await db.$transaction(async (tx: any) => {
+      if (isReplacing && replacementSnapshotId) {
+        await tx.orderSnapshot.delete({
+          where: { id: replacementSnapshotId },
+        });
+      }
+
       const snapshot = await tx.orderSnapshot.create({
         data: {
           shopId,
@@ -697,22 +740,43 @@ export async function createSnapshot(
         }
 
         if (line.finalCosts.equipmentLines.length > 0) {
-          await tx.orderSnapshotEquipmentLine.createMany({
-            data: line.finalCosts.equipmentLines.map((equipmentLine) => ({
-              snapshotLineId: snapshotLine.id,
-              equipmentId: equipmentLine.equipmentId,
-              equipmentName: equipmentLine.name,
-              hourlyRate: equipmentLine.hourlyRate,
-              perUseCost: equipmentLine.perUseCost,
-              usageMode: equipmentLine.usageMode,
-              minutes: scaleDecimal(equipmentLine.minutes, line.quantity),
-              uses: scaleDecimal(equipmentLine.uses, line.quantity),
-              yieldDurationMinutes: equipmentLine.yieldDurationMinutes,
-              yieldUses: equipmentLine.yieldUses,
-              yieldQuantity: equipmentLine.yieldQuantity,
-              lineCost: equipmentLine.lineCost.mul(line.quantity),
-            })),
-          });
+          for (const equipmentLine of line.finalCosts.equipmentLines) {
+            const snapshotEquipmentLine = await tx.orderSnapshotEquipmentLine.create({
+              data: {
+                snapshotLineId: snapshotLine.id,
+                equipmentId: equipmentLine.equipmentId,
+                equipmentName: equipmentLine.name,
+                hourlyRate: equipmentLine.hourlyRate,
+                perUseCost: equipmentLine.perUseCost,
+                hourlyRateMode: equipmentLine.hourlyRateMode ?? "manual",
+                perUseCostMode: equipmentLine.perUseCostMode ?? "manual",
+                usageMode: equipmentLine.usageMode,
+                minutes: scaleDecimal(equipmentLine.minutes, line.quantity),
+                uses: scaleDecimal(equipmentLine.uses, line.quantity),
+                yieldDurationMinutes: equipmentLine.yieldDurationMinutes,
+                yieldUses: equipmentLine.yieldUses,
+                yieldQuantity: equipmentLine.yieldQuantity,
+                electricityCost: (equipmentLine.componentCosts?.electricityCost ?? ZERO).mul(line.quantity),
+                depreciationCost: (equipmentLine.componentCosts?.depreciationCost ?? ZERO).mul(line.quantity),
+                consumablesCost: (equipmentLine.componentCosts?.consumablesCost ?? ZERO).mul(line.quantity),
+                maintenanceCost: (equipmentLine.componentCosts?.maintenanceCost ?? ZERO).mul(line.quantity),
+                manualOverrideCost: (equipmentLine.componentCosts?.manualOverrideCost ?? equipmentLine.lineCost).mul(line.quantity),
+                lineCost: equipmentLine.lineCost.mul(line.quantity),
+              },
+            });
+
+            if ((equipmentLine.consumableLines ?? []).length > 0) {
+              await tx.orderSnapshotEquipmentConsumableLine.createMany({
+                data: (equipmentLine.consumableLines ?? []).map((consumableLine) => ({
+                  snapshotEquipmentLineId: snapshotEquipmentLine.id,
+                  consumableId: consumableLine.consumableId,
+                  consumableName: consumableLine.name,
+                  lifespanUnit: consumableLine.lifespanUnit,
+                  lineCost: consumableLine.lineCost.mul(line.quantity),
+                })),
+              });
+            }
+          }
         }
 
         if (line.finalCosts.podLines.length > 0) {
@@ -770,6 +834,16 @@ export async function createSnapshot(
 
       await recomputeTaxOffsetCache(shopId, tx);
 
+      if (typeof tx.orderSettlement?.upsert === "function") {
+        await detectAndUpsertExternalSettlementReview({
+          shopId,
+          snapshotId: snapshot.id,
+          periodId: metadata.periodId ?? null,
+          order,
+          db: tx,
+        });
+      }
+
       await tx.auditLog.create({
         data: {
           shopId,
@@ -781,6 +855,8 @@ export async function createSnapshot(
             shopifyOrderId,
             lineCount: withFinalCosts.length,
             origin,
+            replacedSnapshotId: replacementSnapshotId,
+            replacementReason: metadata.replacementReason ?? null,
           },
         },
       });

@@ -33,13 +33,27 @@ function createEquipment(id: string) {
     id,
     name: id,
     hourlyRate: null,
+    hourlyRateMode: "manual",
     perUseCost: null,
+    perUseCostMode: "manual",
+    equipmentCost: null,
+    acquisitionCost: null,
+    expectedLifespanHours: null,
+    expectedLifespanUnit: "hours",
+    salvageValue: null,
+    wattsPerOperatingHour: null,
+    electricityCostPerKwhOverride: null,
+    consumables: [],
   };
 }
 
 function createDb(
   config: unknown,
-  shopOverrides?: { mistakeBuffer?: Prisma.Decimal | null; defaultLaborRate?: Prisma.Decimal | null },
+  shopOverrides?: {
+    mistakeBuffer?: Prisma.Decimal | null;
+    defaultLaborRate?: Prisma.Decimal | null;
+    defaultElectricityCostPerKwh?: Prisma.Decimal | null;
+  },
   providerMappings: unknown[] = [],
 ) {
   return {
@@ -50,6 +64,7 @@ function createDb(
       findUnique: vi.fn().mockResolvedValue({
         mistakeBuffer: shopOverrides?.mistakeBuffer ?? null,
         defaultLaborRate: shopOverrides?.defaultLaborRate ?? null,
+        defaultElectricityCostPerKwh: shopOverrides?.defaultElectricityCostPerKwh ?? null,
       }),
     },
     providerVariantMapping: {
@@ -59,6 +74,62 @@ function createDb(
 }
 
 describe("resolveCosts", () => {
+  it("uses production template labor defaults when the variant has no labor override", async () => {
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: {
+        defaultLaborMinutes: decimal("15"),
+        defaultLaborRate: decimal("40"),
+        materialLines: [],
+        equipmentLines: [],
+      },
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config, { defaultLaborRate: decimal("25") }),
+    );
+
+    expect(result.laborCost.toString()).toBe("10");
+    expect(result.totalCost.toString()).toBe("10");
+  });
+
+  it("lets variant labor values override production template defaults", async () => {
+    const config = {
+      laborMinutes: decimal("6"),
+      laborRate: decimal("60"),
+      mistakeBuffer: null,
+      productionTemplate: {
+        defaultLaborMinutes: decimal("15"),
+        defaultLaborRate: decimal("40"),
+        materialLines: [],
+        equipmentLines: [],
+      },
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config, { defaultLaborRate: decimal("25") }),
+    );
+
+    expect(result.laborCost.toString()).toBe("6");
+    expect(result.totalCost.toString()).toBe("6");
+  });
+
   it("applies explicit template-line material overrides when template lines share the same material", async () => {
     const sharedMaterial = createMaterial({ id: "mat-shared" });
     const config = {
@@ -327,6 +398,137 @@ describe("resolveCosts", () => {
         usageMode: "use_yield",
         yieldUses: decimal("1"),
         yieldQuantity: decimal("6"),
+      }),
+    );
+  });
+
+  it("calculates equipment rates from electricity, depreciation, and consumables", async () => {
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: null,
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [
+        {
+          id: "equipment-line-1",
+          equipmentId: "laser",
+          equipment: {
+            ...createEquipment("laser"),
+            hourlyRateMode: "calculated",
+            perUseCostMode: "calculated",
+            acquisitionCost: decimal("1000"),
+            expectedLifespanHours: decimal("500"),
+            salvageValue: decimal("0"),
+            wattsPerOperatingHour: decimal("500"),
+            consumables: [
+              {
+                id: "filter-1",
+                name: "Pre-filter",
+                replacementCost: decimal("100"),
+                lifespanQuantity: decimal("100"),
+                lifespanUnit: "hours",
+                status: "active",
+              },
+              {
+                id: "blade-1",
+                name: "Blade",
+                replacementCost: decimal("50"),
+                lifespanQuantity: decimal("25"),
+                lifespanUnit: "uses",
+                status: "active",
+              },
+            ],
+          },
+          templateLineId: null,
+          usageMode: "direct",
+          minutes: decimal("30"),
+          uses: decimal("2"),
+          yieldDurationMinutes: null,
+          yieldUses: null,
+          yieldQuantity: null,
+        },
+      ],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config, { defaultElectricityCostPerKwh: decimal("0.20") }),
+    );
+
+    expect(result.equipmentCost.toString()).toBe("5.55");
+    expect(result.equipmentLines[0]).toEqual(
+      expect.objectContaining({
+        hourlyRate: decimal("3.1"),
+        perUseCost: decimal("2"),
+        lineCost: decimal("5.55"),
+        componentCosts: expect.objectContaining({
+          electricityCost: decimal("0.05"),
+          depreciationCost: decimal("1"),
+          consumablesCost: decimal("4.5"),
+          manualOverrideCost: decimal("0"),
+        }),
+        consumableLines: [
+          expect.objectContaining({ consumableId: "filter-1", lineCost: decimal("0.5") }),
+          expect.objectContaining({ consumableId: "blade-1", lineCost: decimal("4") }),
+        ],
+      }),
+    );
+  });
+
+  it("allocates equipment depreciation by use when lifespan is use-based", async () => {
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: null,
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [
+        {
+          id: "equipment-line-1",
+          equipmentId: "button-maker",
+          equipment: {
+            ...createEquipment("button-maker"),
+            hourlyRateMode: "calculated",
+            perUseCostMode: "calculated",
+            acquisitionCost: decimal("500"),
+            expectedLifespanHours: decimal("10000"),
+            expectedLifespanUnit: "uses",
+            salvageValue: decimal("0"),
+          },
+          templateLineId: null,
+          usageMode: "direct",
+          minutes: null,
+          uses: decimal("4"),
+          yieldDurationMinutes: null,
+          yieldUses: null,
+          yieldQuantity: null,
+        },
+      ],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config),
+    );
+
+    expect(result.equipmentCost.toString()).toBe("0.2");
+    expect(result.equipmentLines[0]).toEqual(
+      expect.objectContaining({
+        hourlyRate: decimal("0"),
+        perUseCost: decimal("0.05"),
+        lineCost: decimal("0.2"),
+        componentCosts: expect.objectContaining({
+          depreciationCost: decimal("0.2"),
+        }),
       }),
     );
   });

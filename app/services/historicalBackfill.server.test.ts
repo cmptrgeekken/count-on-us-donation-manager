@@ -7,6 +7,7 @@ import {
   parseHistoricalImportRows,
   rebuildAllReporting,
   rebuildReportingPeriod,
+  replaceOrderSnapshots,
 } from "./historicalBackfill.server";
 
 function decimal(value: string | number) {
@@ -372,6 +373,88 @@ describe("historical backfill imports", () => {
         useCount: { increment: 1 },
       }),
     });
+  });
+
+  it("blocks snapshot replacement for closed periods unless force replacement is enabled", async () => {
+    const existingSnapshot = {
+      id: "snapshot-1",
+      orderNumber: "#1001",
+      origin: "webhook",
+      periodId: "period-1",
+      period: { status: "CLOSED" },
+      lines: [
+        { totalCost: decimal("12.50"), netContribution: decimal("37.50") },
+        { totalCost: decimal("4.00"), netContribution: decimal("6.00") },
+      ],
+    };
+    const variant = {
+      id: "variant-1",
+      costConfig: { id: "cost-1" },
+      product: {
+        causeAssignments: [{ id: "cause-assignment-1" }],
+        artistAssignments: [],
+      },
+    };
+    const db = {
+      orderSnapshot: { findUnique: vi.fn().mockResolvedValue(existingSnapshot) },
+      variant: { findUnique: vi.fn().mockResolvedValue(variant) },
+    };
+    const rows = [{
+      admin_graphql_api_id: "gid://shopify/Order/1001",
+      name: "#1001",
+      line_items: [{
+        title: "Sticker",
+        variant_id: "gid://shopify/ProductVariant/1",
+        quantity: "1",
+        price: "50.00",
+      }],
+    }];
+
+    const blocked = await replaceOrderSnapshots({
+      shopId: "shop-1",
+      rows,
+      dryRun: true,
+      forceClosed: false,
+      replacementReason: "Refresh costs",
+      db: db as any,
+    });
+
+    expect(blocked.updated).toBe(0);
+    expect(blocked.skipped).toBe(1);
+    expect(blocked.errors).toEqual([
+      { row: 1, message: "Snapshot belongs to a closed period. Enable force replacement to replace it." },
+    ]);
+    expect(blocked.replacementResults).toEqual([
+      expect.objectContaining({
+        existingSnapshotId: "snapshot-1",
+        periodStatus: "CLOSED",
+        requiresForce: true,
+        status: "blocked",
+        totalCost: "16.5",
+        netContribution: "43.5",
+      }),
+    ]);
+
+    const forced = await replaceOrderSnapshots({
+      shopId: "shop-1",
+      rows,
+      dryRun: true,
+      forceClosed: true,
+      replacementReason: "Refresh costs",
+      db: db as any,
+    });
+
+    expect(forced.updated).toBe(1);
+    expect(forced.skipped).toBe(0);
+    expect(forced.errors).toEqual([]);
+    expect(forced.replacementResults).toEqual([
+      expect.objectContaining({
+        existingSnapshotId: "snapshot-1",
+        periodStatus: "CLOSED",
+        requiresForce: true,
+        status: "would_replace",
+      }),
+    ]);
   });
 });
 

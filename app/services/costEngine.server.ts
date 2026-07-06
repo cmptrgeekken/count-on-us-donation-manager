@@ -43,6 +43,25 @@ export type ResolvedEquipmentLine = {
   purchaseLink?: string | null;
   hourlyRate?: Prisma.Decimal | null;
   perUseCost?: Prisma.Decimal | null;
+  hourlyRateMode?: string;
+  perUseCostMode?: string;
+  componentCosts?: ResolvedEquipmentComponentCosts;
+  consumableLines?: ResolvedEquipmentConsumableLine[];
+};
+
+export type ResolvedEquipmentComponentCosts = {
+  electricityCost: Prisma.Decimal;
+  depreciationCost: Prisma.Decimal;
+  consumablesCost: Prisma.Decimal;
+  maintenanceCost: Prisma.Decimal;
+  manualOverrideCost: Prisma.Decimal;
+};
+
+export type ResolvedEquipmentConsumableLine = {
+  consumableId: string;
+  name: string;
+  lifespanUnit: string;
+  lineCost: Prisma.Decimal;
 };
 
 export type ResolvedPodLine = {
@@ -160,6 +179,244 @@ function computeEquipmentLineCost(params: {
   return cost;
 }
 
+export type EquipmentConsumableForCosting = {
+  id: string;
+  name: string;
+  replacementCost: Prisma.Decimal;
+  lifespanQuantity: Prisma.Decimal;
+  lifespanUnit: string;
+  status: string;
+};
+
+export type EquipmentForCosting = {
+  hourlyRate: Prisma.Decimal | null;
+  hourlyRateMode?: string | null;
+  perUseCost: Prisma.Decimal | null;
+  perUseCostMode?: string | null;
+  equipmentCost?: Prisma.Decimal | null;
+  acquisitionCost?: Prisma.Decimal | null;
+  expectedLifespanHours?: Prisma.Decimal | null;
+  expectedLifespanUnit?: string | null;
+  salvageValue?: Prisma.Decimal | null;
+  wattsPerOperatingHour?: Prisma.Decimal | null;
+  electricityCostPerKwhOverride?: Prisma.Decimal | null;
+  consumables?: EquipmentConsumableForCosting[];
+};
+
+function hourlyRateMode(equipment: EquipmentForCosting): string {
+  return equipment.hourlyRateMode === "calculated" ? "calculated" : "manual";
+}
+
+function perUseCostMode(equipment: EquipmentForCosting): string {
+  return equipment.perUseCostMode === "calculated" ? "calculated" : "manual";
+}
+
+function ratePerConsumableUse(consumable: EquipmentConsumableForCosting): Prisma.Decimal {
+  if (consumable.status !== "active" || consumable.lifespanQuantity.lte(ZERO)) {
+    return ZERO;
+  }
+  return consumable.replacementCost.div(consumable.lifespanQuantity);
+}
+
+function computeDepreciationRate(equipment: EquipmentForCosting): Prisma.Decimal {
+  const acquisitionCost = equipment.acquisitionCost ?? equipment.equipmentCost;
+  if (!acquisitionCost || !equipment.expectedLifespanHours || equipment.expectedLifespanHours.lte(ZERO)) {
+    return ZERO;
+  }
+
+  const depreciableCost = acquisitionCost.sub(equipment.salvageValue ?? ZERO);
+  if (depreciableCost.lte(ZERO)) {
+    return ZERO;
+  }
+
+  return depreciableCost.div(equipment.expectedLifespanHours);
+}
+
+function computeElectricityHourlyRate(
+  equipment: EquipmentForCosting,
+  defaultElectricityCostPerKwh: Prisma.Decimal | null | undefined,
+): Prisma.Decimal {
+  const costPerKwh = equipment.electricityCostPerKwhOverride ?? defaultElectricityCostPerKwh;
+  if (!equipment.wattsPerOperatingHour || !costPerKwh) {
+    return ZERO;
+  }
+
+  return equipment.wattsPerOperatingHour.div(1000).mul(costPerKwh);
+}
+
+function computeEquipmentComponentRates(
+  equipment: EquipmentForCosting,
+  defaultElectricityCostPerKwh: Prisma.Decimal | null | undefined,
+): {
+  hourlyRate: Prisma.Decimal | null;
+  perUseCost: Prisma.Decimal | null;
+  electricityHourlyRate: Prisma.Decimal;
+  depreciationHourlyRate: Prisma.Decimal;
+  depreciationPerUseCost: Prisma.Decimal;
+  hourlyConsumableRates: Array<{ consumable: EquipmentConsumableForCosting; rate: Prisma.Decimal }>;
+  perUseConsumableRates: Array<{ consumable: EquipmentConsumableForCosting; rate: Prisma.Decimal }>;
+} {
+  const electricityHourlyRate = computeElectricityHourlyRate(equipment, defaultElectricityCostPerKwh);
+  const depreciationRate = computeDepreciationRate(equipment);
+  const depreciationUnit = equipment.expectedLifespanUnit === "uses" ? "uses" : "hours";
+  const depreciationHourlyRate = depreciationUnit === "hours" ? depreciationRate : ZERO;
+  const depreciationPerUseCost = depreciationUnit === "uses" ? depreciationRate : ZERO;
+  const hourlyConsumableRates = (equipment.consumables ?? [])
+    .filter((consumable) => consumable.lifespanUnit === "hours")
+    .map((consumable) => ({ consumable, rate: ratePerConsumableUse(consumable) }))
+    .filter((line) => line.rate.gt(ZERO));
+  const perUseConsumableRates = (equipment.consumables ?? [])
+    .filter((consumable) => consumable.lifespanUnit === "uses")
+    .map((consumable) => ({ consumable, rate: ratePerConsumableUse(consumable) }))
+    .filter((line) => line.rate.gt(ZERO));
+
+  const calculatedHourlyRate = hourlyConsumableRates
+    .reduce((sum, line) => sum.add(line.rate), ZERO)
+    .add(electricityHourlyRate)
+    .add(depreciationHourlyRate);
+  const calculatedPerUseCost = perUseConsumableRates
+    .reduce((sum, line) => sum.add(line.rate), ZERO)
+    .add(depreciationPerUseCost);
+
+  return {
+    hourlyRate: hourlyRateMode(equipment) === "calculated" ? calculatedHourlyRate : equipment.hourlyRate,
+    perUseCost: perUseCostMode(equipment) === "calculated" ? calculatedPerUseCost : equipment.perUseCost,
+    electricityHourlyRate,
+    depreciationHourlyRate,
+    depreciationPerUseCost,
+    hourlyConsumableRates,
+    perUseConsumableRates,
+  };
+}
+
+export function resolveEquipmentEffectiveRates(
+  equipment: EquipmentForCosting,
+  defaultElectricityCostPerKwh: Prisma.Decimal | null | undefined,
+): {
+  hourlyRate: Prisma.Decimal | null;
+  perUseCost: Prisma.Decimal | null;
+} {
+  const rates = computeEquipmentComponentRates(equipment, defaultElectricityCostPerKwh);
+  return {
+    hourlyRate: rates.hourlyRate,
+    perUseCost: rates.perUseCost,
+  };
+}
+
+function computeEquipmentComponentBreakdown(params: {
+  equipment: EquipmentForCosting;
+  componentRates: ReturnType<typeof computeEquipmentComponentRates>;
+  usageMode: string;
+  minutes: Prisma.Decimal | null;
+  uses: Prisma.Decimal | null;
+  yieldDurationMinutes: Prisma.Decimal | null;
+  yieldUses: Prisma.Decimal | null;
+  yieldQuantity: Prisma.Decimal | null;
+}): {
+  componentCosts: ResolvedEquipmentComponentCosts;
+  consumableLines: ResolvedEquipmentConsumableLine[];
+} {
+  const {
+    equipment,
+    componentRates,
+    usageMode,
+    minutes,
+    uses,
+    yieldDurationMinutes,
+    yieldUses,
+    yieldQuantity,
+  } = params;
+  const electricityCost =
+    hourlyRateMode(equipment) === "calculated"
+      ? computeEquipmentLineCost({
+          hourlyRate: componentRates.electricityHourlyRate,
+          perUseCost: null,
+          usageMode,
+          minutes,
+          uses: null,
+          yieldDurationMinutes,
+          yieldUses: null,
+          yieldQuantity,
+        })
+      : ZERO;
+  const depreciationCost =
+    hourlyRateMode(equipment) === "calculated" || perUseCostMode(equipment) === "calculated"
+      ? computeEquipmentLineCost({
+          hourlyRate: hourlyRateMode(equipment) === "calculated" ? componentRates.depreciationHourlyRate : null,
+          perUseCost: perUseCostMode(equipment) === "calculated" ? componentRates.depreciationPerUseCost : null,
+          usageMode,
+          minutes,
+          uses,
+          yieldDurationMinutes: hourlyRateMode(equipment) === "calculated" ? yieldDurationMinutes : null,
+          yieldUses: perUseCostMode(equipment) === "calculated" ? yieldUses : null,
+          yieldQuantity,
+        })
+      : ZERO;
+
+  const hourlyConsumableLines =
+    hourlyRateMode(equipment) === "calculated"
+      ? componentRates.hourlyConsumableRates.map((line) => ({
+          consumableId: line.consumable.id,
+          name: line.consumable.name,
+          lifespanUnit: line.consumable.lifespanUnit,
+          lineCost: computeEquipmentLineCost({
+            hourlyRate: line.rate,
+            perUseCost: null,
+            usageMode,
+            minutes,
+            uses: null,
+            yieldDurationMinutes,
+            yieldUses: null,
+            yieldQuantity,
+          }),
+        }))
+      : [];
+  const perUseConsumableLines =
+    perUseCostMode(equipment) === "calculated"
+      ? componentRates.perUseConsumableRates.map((line) => ({
+          consumableId: line.consumable.id,
+          name: line.consumable.name,
+          lifespanUnit: line.consumable.lifespanUnit,
+          lineCost: computeEquipmentLineCost({
+            hourlyRate: null,
+            perUseCost: line.rate,
+            usageMode,
+            minutes: null,
+            uses,
+            yieldDurationMinutes: null,
+            yieldUses,
+            yieldQuantity,
+          }),
+        }))
+      : [];
+
+  const consumableLines = [...hourlyConsumableLines, ...perUseConsumableLines].filter((line) =>
+    line.lineCost.gt(ZERO),
+  );
+  const consumablesCost = consumableLines.reduce((sum, line) => sum.add(line.lineCost), ZERO);
+  const manualOverrideCost = computeEquipmentLineCost({
+    hourlyRate: hourlyRateMode(equipment) === "manual" ? equipment.hourlyRate : null,
+    perUseCost: perUseCostMode(equipment) === "manual" ? equipment.perUseCost : null,
+    usageMode,
+    minutes,
+    uses,
+    yieldDurationMinutes,
+    yieldUses,
+    yieldQuantity,
+  });
+
+  return {
+    componentCosts: {
+      electricityCost,
+      depreciationCost,
+      consumablesCost,
+      maintenanceCost: ZERO,
+      manualOverrideCost,
+    },
+    consumableLines,
+  };
+}
+
 async function resolvePodCosts(
   shopId: string,
   variantId: string,
@@ -247,21 +504,21 @@ export async function resolveCosts(
           defaultShippingTemplate: {
             include: {
               materialLines: { include: { material: true } },
-              equipmentLines: { include: { equipment: true } },
+              equipmentLines: { include: { equipment: { include: { consumables: true } } } },
             },
           },
           materialLines: { include: { material: true } },
-          equipmentLines: { include: { equipment: true } },
+          equipmentLines: { include: { equipment: { include: { consumables: true } } } },
         },
       },
       shippingTemplate: {
         include: {
           materialLines: { include: { material: true } },
-          equipmentLines: { include: { equipment: true } },
+          equipmentLines: { include: { equipment: { include: { consumables: true } } } },
         },
       },
       materialLines: { include: { material: true, templateLine: true } },
-      equipmentLines: { include: { equipment: true, templateLine: true } },
+      equipmentLines: { include: { equipment: { include: { consumables: true } }, templateLine: true } },
     },
   });
   const {
@@ -290,10 +547,10 @@ export async function resolveCosts(
     };
   }
 
-  // Step 2: Load shop mistake buffer fallback
+  // Step 2: Load shop defaults
   const shop = await db.shop.findUnique({
     where: { shopId },
-    select: { mistakeBuffer: true, defaultLaborRate: true },
+    select: { mistakeBuffer: true, defaultLaborRate: true, defaultElectricityCostPerKwh: true },
   });
 
   const productionTemplate = config.productionTemplate;
@@ -481,9 +738,23 @@ export async function resolveCosts(
   }
 
   const resolvedEquipmentLines: ResolvedEquipmentLine[] = allEquipmentLines.map((l) => {
+    const componentRates = computeEquipmentComponentRates(
+      l.equipment,
+      shop?.defaultElectricityCostPerKwh,
+    );
     const lineCost = computeEquipmentLineCost({
-      hourlyRate: l.equipment.hourlyRate,
-      perUseCost: l.equipment.perUseCost,
+      hourlyRate: componentRates.hourlyRate,
+      perUseCost: componentRates.perUseCost,
+      usageMode: l.usageMode,
+      minutes: l.minutes,
+      uses: l.uses,
+      yieldDurationMinutes: l.yieldDurationMinutes,
+      yieldUses: l.yieldUses,
+      yieldQuantity: l.yieldQuantity,
+    });
+    const { componentCosts, consumableLines } = computeEquipmentComponentBreakdown({
+      equipment: l.equipment,
+      componentRates,
       usageMode: l.usageMode,
       minutes: l.minutes,
       uses: l.uses,
@@ -505,8 +776,12 @@ export async function resolveCosts(
       purchaseLink: l.equipment.purchaseLink ?? null,
     };
 
-    line.hourlyRate = l.equipment.hourlyRate;
-    line.perUseCost = l.equipment.perUseCost;
+    line.hourlyRate = componentRates.hourlyRate;
+    line.perUseCost = componentRates.perUseCost;
+    line.hourlyRateMode = hourlyRateMode(l.equipment);
+    line.perUseCostMode = perUseCostMode(l.equipment);
+    line.componentCosts = componentCosts;
+    line.consumableLines = consumableLines;
 
     return line;
   });
@@ -543,12 +818,13 @@ export async function resolveCosts(
   const mistakeBufferPct = decimalOrZero(config.mistakeBuffer ?? shop?.mistakeBuffer);
   const mistakeBufferAmount = materialCost.mul(mistakeBufferPct);
 
-  const laborRate = config.laborRate ?? shop?.defaultLaborRate;
+  const laborMinutes = config.laborMinutes ?? productionTemplate?.defaultLaborMinutes;
+  const laborRate = config.laborRate ?? productionTemplate?.defaultLaborRate ?? shop?.defaultLaborRate;
 
   // Labor cost
   const laborCost =
-    config.laborMinutes && laborRate
-      ? laborRate.mul(config.laborMinutes).div(60)
+    laborMinutes && laborRate
+      ? laborRate.mul(laborMinutes).div(60)
       : ZERO;
 
   // Step 7: Return materialised cost structure

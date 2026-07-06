@@ -91,7 +91,10 @@ const textList = (maxItems: number, maxItemLength: number) =>
     });
 
 function hasControlCharacters(value: string) {
-  return /[\u0000-\u001f\u007f]/.test(value);
+  return Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127;
+  });
 }
 
 function isPrivateOrLocalHostname(hostname: string) {

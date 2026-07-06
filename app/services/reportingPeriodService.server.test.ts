@@ -230,6 +230,10 @@ describe("closeReportingPeriod", () => {
       orderSnapshot: {
         updateMany: vi.fn().mockResolvedValue(undefined),
       },
+      orderSettlement: {
+        count: vi.fn().mockResolvedValue(0),
+        updateMany: vi.fn().mockResolvedValue(undefined),
+      },
       orderSnapshotLine: {
         findMany: vi.fn().mockResolvedValue([]),
       },
@@ -264,6 +268,18 @@ describe("closeReportingPeriod", () => {
       },
       data: { periodId: "period-1" },
     });
+    expect(tx.orderSettlement.updateMany).toHaveBeenCalledWith({
+      where: {
+        shopId: "shop-1",
+        snapshot: {
+          createdAt: {
+            gte: period.startDate,
+            lt: period.endDate,
+          },
+        },
+      },
+      data: { periodId: "period-1" },
+    });
     expect(tx.reportingPeriod.update).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -283,5 +299,30 @@ describe("closeReportingPeriod", () => {
     );
 
     vi.useRealTimers();
+  });
+
+  it("blocks closing when external settlement reviews are unresolved", async () => {
+    const period = {
+      id: "period-1",
+      shopId: "shop-1",
+      status: "OPEN",
+      startDate: new Date("2026-04-01T00:00:00.000Z"),
+      endDate: new Date("2026-04-08T00:00:00.000Z"),
+    };
+    const tx = {
+      reportingPeriod: {
+        findFirst: vi.fn().mockResolvedValue(period),
+      },
+      orderSettlement: {
+        count: vi.fn().mockResolvedValue(1),
+      },
+    };
+    const db = {
+      $transaction: vi.fn().mockImplementation((callback) => callback(tx)),
+    };
+
+    await expect(closeReportingPeriod("shop-1", "period-1", db as any)).rejects.toThrow(
+      "Resolve 1 external settlement review before closing this reporting period.",
+    );
   });
 });

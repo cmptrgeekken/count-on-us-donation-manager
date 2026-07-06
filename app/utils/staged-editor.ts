@@ -14,6 +14,7 @@ export type TemplateDraftEquipmentLine = {
   id: string;
   equipmentId: string;
   equipmentName: string;
+  usageBasis: string;
   hourlyRate: string | null;
   perUseCost: string | null;
   usageMode: string;
@@ -28,6 +29,8 @@ export type TemplateDraft = {
   name: string;
   description: string;
   defaultShippingTemplateId?: string | null;
+  defaultLaborMinutes: string;
+  defaultLaborRate: string;
   materialLines: TemplateDraftMaterialLine[];
   equipmentLines: TemplateDraftEquipmentLine[];
 };
@@ -47,6 +50,7 @@ export type TemplateCatalogEquipmentLine = {
   templateLineId: string;
   equipmentId: string;
   equipmentName: string;
+  usageBasis: string;
   usageMode: string;
   minutes: string | null;
   uses: string | null;
@@ -60,6 +64,8 @@ export type TemplateCatalogEntry = {
   name: string;
   type?: string | null;
   defaultShippingTemplateId?: string | null;
+  defaultLaborMinutes?: string | null;
+  defaultLaborRate?: string | null;
   materialLines: TemplateCatalogMaterialLine[];
   equipmentLines: TemplateCatalogEquipmentLine[];
 };
@@ -97,6 +103,7 @@ export type VariantAdditionalEquipmentDraftLine = {
   id: string;
   equipmentId: string;
   equipmentName: string;
+  usageBasis: string;
   hourlyRate: string | null;
   perUseCost: string | null;
   usageMode: string;
@@ -138,6 +145,8 @@ export function normalizeTemplateDraft(draft: TemplateDraft) {
     name: draft.name.trim(),
     description: draft.description.trim(),
     defaultShippingTemplateId: draft.defaultShippingTemplateId ?? "",
+    defaultLaborMinutes: draft.defaultLaborMinutes.trim(),
+    defaultLaborRate: draft.defaultLaborRate.trim(),
     materialLines: draft.materialLines.map((line) => ({
       id: line.id,
       materialId: line.materialId,

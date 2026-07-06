@@ -60,7 +60,20 @@ type EstimateMaterialLinePayload = {
   purchaseLink: string | null;
 };
 
-type EstimateEquipmentLinePayload = Omit<EstimateMaterialLinePayload, "type">;
+type EstimateEquipmentLinePayload = Omit<EstimateMaterialLinePayload, "type"> & {
+  componentCosts: {
+    electricity: string;
+    depreciation: string;
+    consumables: string;
+    maintenance: string;
+    manualOverride: string;
+  };
+  consumableLines: Array<{
+    name: string;
+    lifespanUnit: string;
+    lineCost: string;
+  }>;
+};
 
 export type VariantEstimatePayload = {
   variantId: string;
@@ -252,6 +265,18 @@ function displayEquipmentLine(line: {
   purchaseLink?: string | null;
   hourlyRate?: Prisma.Decimal | null;
   perUseCost?: Prisma.Decimal | null;
+  componentCosts?: {
+    electricityCost: Prisma.Decimal;
+    depreciationCost: Prisma.Decimal;
+    consumablesCost: Prisma.Decimal;
+    maintenanceCost: Prisma.Decimal;
+    manualOverrideCost: Prisma.Decimal;
+  };
+  consumableLines?: Array<{
+    name: string;
+    lifespanUnit: string;
+    lineCost: Prisma.Decimal;
+  }>;
 }) {
   const quantityParts = [
     quantityLabel(line.minutes, "min"),
@@ -275,6 +300,18 @@ function displayEquipmentLine(line: {
     rate: rateParts.join(" + ") || null,
     rateDetail: null,
     purchaseLink: line.purchaseLink ?? null,
+    componentCosts: {
+      electricity: formatEstimateMoney(line.componentCosts?.electricityCost ?? ZERO),
+      depreciation: formatEstimateMoney(line.componentCosts?.depreciationCost ?? ZERO),
+      consumables: formatEstimateMoney(line.componentCosts?.consumablesCost ?? ZERO),
+      maintenance: formatEstimateMoney(line.componentCosts?.maintenanceCost ?? ZERO),
+      manualOverride: formatEstimateMoney(line.componentCosts?.manualOverrideCost ?? ZERO),
+    },
+    consumableLines: (line.consumableLines ?? []).map((consumableLine) => ({
+      name: consumableLine.name,
+      lifespanUnit: consumableLine.lifespanUnit,
+      lineCost: formatEstimateMoney(consumableLine.lineCost),
+    })),
   };
 }
 

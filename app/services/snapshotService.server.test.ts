@@ -46,9 +46,11 @@ function createDb({
     : vi.fn().mockResolvedValue({ id: "snapshot-1" });
   const orderSnapshotLineCreate = vi.fn().mockResolvedValue({ id: "snapshot-line-1" });
   const materialLineCreateMany = vi.fn().mockResolvedValue(undefined);
-  const equipmentLineCreateMany = vi.fn().mockResolvedValue(undefined);
+  const equipmentLineCreate = vi.fn().mockResolvedValue({ id: "snapshot-equipment-line-1" });
+  const equipmentConsumableLineCreateMany = vi.fn().mockResolvedValue(undefined);
   const podLineCreateMany = vi.fn().mockResolvedValue(undefined);
   const causeAllocationCreateMany = vi.fn().mockResolvedValue(undefined);
+  const orderSettlementUpsert = vi.fn().mockResolvedValue(undefined);
   const auditLogCreate = vi.fn().mockResolvedValue(undefined);
   const variantCostConfigFindFirst = vi
     .fn()
@@ -59,9 +61,11 @@ function createDb({
     orderSnapshot: { create: orderSnapshotCreate },
     orderSnapshotLine: { create: orderSnapshotLineCreate },
     orderSnapshotMaterialLine: { createMany: materialLineCreateMany },
-    orderSnapshotEquipmentLine: { createMany: equipmentLineCreateMany },
+    orderSnapshotEquipmentLine: { create: equipmentLineCreate },
+    orderSnapshotEquipmentConsumableLine: { createMany: equipmentConsumableLineCreateMany },
     orderSnapshotPODLine: { createMany: podLineCreateMany },
     lineCauseAllocation: { createMany: causeAllocationCreateMany },
+    orderSettlement: { upsert: orderSettlementUpsert },
     variantCostConfig: { findFirst: variantCostConfigFindFirst },
     auditLog: { create: auditLogCreate },
   };
@@ -110,9 +114,11 @@ function createDb({
       orderSnapshotCreate,
       orderSnapshotLineCreate,
       materialLineCreateMany,
-      equipmentLineCreateMany,
+      equipmentLineCreate,
+      equipmentConsumableLineCreateMany,
       podLineCreateMany,
       causeAllocationCreateMany,
+      orderSettlementUpsert,
       auditLogCreate,
     },
   };
@@ -137,6 +143,70 @@ describe("createSnapshot", () => {
 
     expect(result).toEqual({ created: false, snapshotId: "existing-snapshot" });
     expect(resolveCosts).not.toHaveBeenCalled();
+  });
+
+  it("creates an external settlement review for marketplace orders paid outside Shopify", async () => {
+    const db = createDb();
+    resolveCosts.mockResolvedValue({
+      laborCost: decimal("1"),
+      materialCost: decimal("2"),
+      packagingCost: decimal("0"),
+      equipmentCost: decimal("0"),
+      podCost: decimal("0"),
+      mistakeBufferAmount: decimal("0"),
+      totalCost: decimal("3"),
+      netContribution: decimal("47"),
+      materialLines: [],
+      equipmentLines: [],
+      podLines: [],
+    });
+
+    await createSnapshot("shop-1", {
+      admin_graphql_api_id: "gid://shopify/Order/1001",
+      name: "#1001",
+      source_name: "Faire",
+      financial_status: "paid",
+      currency: "USD",
+      total_price: "480.00",
+      total_received: "0.00",
+      line_items: [{
+        id: "line-1",
+        admin_graphql_api_id: "gid://shopify/LineItem/1",
+        variant_id: 100,
+        product_id: 200,
+        title: "Wholesale Sticker",
+        variant_title: "Default Title",
+        quantity: 1,
+        price: "50.00",
+      }],
+    }, db as any);
+
+    expect(db.__spies.orderSettlementUpsert).toHaveBeenCalledWith({
+      where: {
+        shopId_shopifyOrderId: {
+          shopId: "shop-1",
+          shopifyOrderId: "gid://shopify/Order/1001",
+        },
+      },
+      create: expect.objectContaining({
+        shopId: "shop-1",
+        snapshotId: "snapshot-1",
+        shopifyOrderId: "gid://shopify/Order/1001",
+        orderNumber: "#1001",
+        source: "faire",
+        status: "needs_review",
+        grossOrderAmount: decimal("480"),
+        shopifyPaidAmount: decimal("0"),
+        feeAmount: decimal("0"),
+        currency: "USD",
+      }),
+      update: expect.objectContaining({
+        snapshotId: "snapshot-1",
+        grossOrderAmount: decimal("480"),
+        shopifyPaidAmount: decimal("0"),
+        currency: "USD",
+      }),
+    });
   });
 
   it("persists snapshot line totals scaled by quantity and writes cause allocations", async () => {
@@ -177,6 +247,23 @@ describe("createSnapshot", () => {
             lineCost: decimal("3"),
             hourlyRate: decimal("36"),
             perUseCost: null,
+            hourlyRateMode: "calculated",
+            perUseCostMode: "manual",
+            componentCosts: {
+              electricityCost: decimal("0.25"),
+              depreciationCost: decimal("1"),
+              consumablesCost: decimal("1.75"),
+              maintenanceCost: decimal("0"),
+              manualOverrideCost: decimal("0"),
+            },
+            consumableLines: [
+              {
+                consumableId: "filter-1",
+                name: "Pre-filter",
+                lifespanUnit: "hours",
+                lineCost: decimal("1.75"),
+              },
+            ],
           },
         ],
       })
@@ -216,6 +303,23 @@ describe("createSnapshot", () => {
             lineCost: decimal("3"),
             hourlyRate: decimal("36"),
             perUseCost: null,
+            hourlyRateMode: "calculated",
+            perUseCostMode: "manual",
+            componentCosts: {
+              electricityCost: decimal("0.25"),
+              depreciationCost: decimal("1"),
+              consumablesCost: decimal("1.75"),
+              maintenanceCost: decimal("0"),
+              manualOverrideCost: decimal("0"),
+            },
+            consumableLines: [
+              {
+                consumableId: "filter-1",
+                name: "Pre-filter",
+                lifespanUnit: "hours",
+                lineCost: decimal("1.75"),
+              },
+            ],
           },
         ],
       });
@@ -274,6 +378,31 @@ describe("createSnapshot", () => {
           expect.objectContaining({
             quantity: decimal("4"),
             lineCost: decimal("40"),
+          }),
+        ],
+      }),
+    );
+    expect(db.__spies.equipmentLineCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          hourlyRateMode: "calculated",
+          perUseCostMode: "manual",
+          electricityCost: decimal("0.5"),
+          depreciationCost: decimal("2"),
+          consumablesCost: decimal("3.5"),
+          manualOverrideCost: decimal("0"),
+          lineCost: decimal("6"),
+        }),
+      }),
+    );
+    expect(db.__spies.equipmentConsumableLineCreateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [
+          expect.objectContaining({
+            consumableId: "filter-1",
+            consumableName: "Pre-filter",
+            lifespanUnit: "hours",
+            lineCost: decimal("3.5"),
           }),
         ],
       }),

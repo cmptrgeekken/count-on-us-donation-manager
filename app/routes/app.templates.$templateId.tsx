@@ -2,6 +2,7 @@ import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
+import { Prisma } from "@prisma/client";
 import {
   Autocomplete,
   Badge,
@@ -22,6 +23,8 @@ import {
 import { z } from "zod";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
+import { resolveEquipmentEffectiveRates, type EquipmentForCosting } from "../services/costEngine.server";
+import { createEquipmentLibraryItem, createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import {
   parseOptionalNonNegativeNumber,
@@ -30,6 +33,13 @@ import {
   parseOptionalPositiveWholeNumber,
   parseRequiredNonNegativeWholeNumber,
 } from "../utils/number-parsing";
+import { parseOptionalNonNegativeMoney } from "../utils/money-parsing";
+import { normalizeFixedDecimalInput } from "../utils/input-formatting";
+import {
+  defaultUsageModeForBasis,
+  usageModeAllowedForBasis,
+  usageModeOptionsForBasis,
+} from "../utils/equipment-usage";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { useUnsavedChangesGuard } from "../utils/use-unsaved-changes-guard";
 import {
@@ -45,6 +55,8 @@ const templateDraftSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   description: z.string(),
   defaultShippingTemplateId: z.string().nullable().optional(),
+  defaultLaborMinutes: z.string(),
+  defaultLaborRate: z.string(),
   materialLines: z.array(z.object({
     id: z.string(),
     materialId: z.string().min(1),
@@ -69,6 +81,8 @@ function serializeTemplate(template: {
   name: string;
   type: string;
   defaultShippingTemplateId: string | null;
+  defaultLaborMinutes: { toString(): string } | null;
+  defaultLaborRate: { toString(): string } | null;
   description: string | null;
   status: string;
   materialLines: Array<{
@@ -82,7 +96,7 @@ function serializeTemplate(template: {
   equipmentLines: Array<{
     id: string;
     equipmentId: string;
-    equipment: { name: string; hourlyRate: { toString(): string } | null; perUseCost: { toString(): string } | null };
+    equipment: EquipmentForCosting & { name: string; usageBasis: string };
     usageMode: string;
     minutes: { toString(): string } | null;
     uses: { toString(): string } | null;
@@ -90,12 +104,14 @@ function serializeTemplate(template: {
     yieldUses: { toString(): string } | null;
     yieldQuantity: { toString(): string } | null;
   }>;
-}) {
+}, defaultElectricityCostPerKwh?: Prisma.Decimal | null) {
   return {
     id: template.id,
     name: template.name,
     type: template.type,
     defaultShippingTemplateId: template.defaultShippingTemplateId,
+    defaultLaborMinutes: template.defaultLaborMinutes?.toString() ?? "",
+    defaultLaborRate: template.defaultLaborRate?.toString() ?? "",
     description: template.description ?? "",
     status: template.status,
     materialLines: template.materialLines.map((line) => ({
@@ -109,19 +125,23 @@ function serializeTemplate(template: {
       yield: line.yield?.toString() ?? null,
       usesPerVariant: line.usesPerVariant?.toString() ?? null,
     })),
-    equipmentLines: template.equipmentLines.map((line) => ({
-      id: line.id,
-      equipmentId: line.equipmentId,
-      equipmentName: line.equipment.name,
-      hourlyRate: line.equipment.hourlyRate?.toString() ?? null,
-      perUseCost: line.equipment.perUseCost?.toString() ?? null,
-      usageMode: line.usageMode ?? "direct",
-      minutes: line.minutes?.toString() ?? null,
-      uses: line.uses?.toString() ?? null,
-      yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
-      yieldUses: line.yieldUses?.toString() ?? null,
-      yieldQuantity: line.yieldQuantity?.toString() ?? null,
-    })),
+    equipmentLines: template.equipmentLines.map((line) => {
+      const rates = resolveEquipmentEffectiveRates(line.equipment, defaultElectricityCostPerKwh);
+      return {
+        id: line.id,
+        equipmentId: line.equipmentId,
+        equipmentName: line.equipment.name,
+        usageBasis: line.equipment.usageBasis ?? "time_and_unit",
+        hourlyRate: rates.hourlyRate?.toString() ?? null,
+        perUseCost: rates.perUseCost?.toString() ?? null,
+        usageMode: line.usageMode ?? "direct",
+        minutes: line.minutes?.toString() ?? null,
+        uses: line.uses?.toString() ?? null,
+        yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
+        yieldUses: line.yieldUses?.toString() ?? null,
+        yieldQuantity: line.yieldQuantity?.toString() ?? null,
+      };
+    }),
   };
 }
 
@@ -130,6 +150,8 @@ function buildTemplateDraft(template: ReturnType<typeof serializeTemplate>): Tem
     name: template.name,
     description: template.description,
     defaultShippingTemplateId: template.defaultShippingTemplateId,
+    defaultLaborMinutes: template.defaultLaborMinutes,
+    defaultLaborRate: template.defaultLaborRate,
     materialLines: cloneDraft(template.materialLines),
     equipmentLines: cloneDraft(template.equipmentLines),
   };
@@ -143,6 +165,14 @@ function sortTemplateEquipmentLines(lines: TemplateDraftEquipmentLine[]) {
   return [...lines].sort((a, b) => a.equipmentName.localeCompare(b.equipmentName));
 }
 
+function sortAvailableMaterials(lines: AvailableMaterial[]) {
+  return [...lines].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function sortAvailableEquipment(lines: AvailableEquipment[]) {
+  return [...lines].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -152,7 +182,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     where: { id: templateId, shopId },
     include: {
       materialLines: { include: { material: true }, orderBy: { material: { name: "asc" } } },
-      equipmentLines: { include: { equipment: true }, orderBy: { equipment: { name: "asc" } } },
+      equipmentLines: { include: { equipment: { include: { consumables: true } } }, orderBy: { equipment: { name: "asc" } } },
     },
   });
 
@@ -160,7 +190,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const [materials, equipment, shippingTemplates] = await Promise.all([
+  const [materials, equipment, shippingTemplates, shopDefaults] = await Promise.all([
     prisma.materialLibraryItem.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
@@ -169,7 +199,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     prisma.equipmentLibraryItem.findMany({
       where: { shopId, status: "active" },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, hourlyRate: true, perUseCost: true },
+      include: { consumables: true },
     }),
     prisma.costTemplate.findMany({
       where: {
@@ -181,10 +211,15 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       orderBy: { name: "asc" },
       select: { id: true, name: true },
     }),
+    prisma.shop.findUnique({
+      where: { shopId },
+      select: { defaultElectricityCostPerKwh: true },
+    }),
   ]);
+  const defaultElectricityCostPerKwh = shopDefaults?.defaultElectricityCostPerKwh ?? null;
 
   return jsonResponse({
-    template: serializeTemplate(template),
+    template: serializeTemplate(template, defaultElectricityCostPerKwh),
     availableMaterials: materials.map((item) => ({
       id: item.id,
       name: item.name,
@@ -193,12 +228,16 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       perUnitCost: item.perUnitCost.toString(),
       totalUsesPerUnit: item.totalUsesPerUnit?.toString() ?? null,
     })),
-    availableEquipment: equipment.map((item) => ({
-      id: item.id,
-      name: item.name,
-      hourlyRate: item.hourlyRate?.toString() ?? null,
-      perUseCost: item.perUseCost?.toString() ?? null,
-    })),
+    availableEquipment: equipment.map((item) => {
+      const rates = resolveEquipmentEffectiveRates(item, defaultElectricityCostPerKwh);
+      return {
+        id: item.id,
+        name: item.name,
+        usageBasis: item.usageBasis,
+        hourlyRate: rates.hourlyRate?.toString() ?? null,
+        perUseCost: rates.perUseCost?.toString() ?? null,
+      };
+    }),
     availableShippingTemplates: shippingTemplates,
   });
 };
@@ -212,7 +251,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     where: { id: templateId, shopId },
     include: {
       materialLines: { select: { id: true, materialId: true } },
-      equipmentLines: { select: { id: true, equipmentId: true } },
+      equipmentLines: { select: { id: true, equipmentId: true, equipment: { select: { usageBasis: true } } } },
     },
   });
 
@@ -222,6 +261,63 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
+
+  if (intent === "quick-create-material") {
+    let material: Awaited<ReturnType<typeof createMaterialLibraryItem>>;
+    try {
+      const costingModel = formData.get("costingModel")?.toString();
+      const normalizedCostingModel =
+        costingModel === "yield" || costingModel === "uses" || costingModel === "counted"
+          ? costingModel
+          : "counted";
+      material = await createMaterialLibraryItem({
+        shopId,
+        input: {
+          name: formData.get("name")?.toString() ?? "",
+          type: template.type === "shipping" ? "shipping" : "production",
+          costingModel: normalizedCostingModel,
+          purchasePrice: formData.get("purchasePrice")?.toString() ?? "",
+          purchaseQty: formData.get("purchaseQty")?.toString() ?? "",
+          totalUsesPerUnit: formData.get("totalUsesPerUnit")?.toString() ?? "",
+          purchaseLink: formData.get("purchaseLink")?.toString() ?? "",
+          weightGrams: formData.get("weightGrams")?.toString() ?? "",
+          unitDescription: formData.get("unitDescription")?.toString() ?? "",
+          notes: formData.get("notes")?.toString() ?? "",
+        },
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return jsonResponse({ ok: false, message: await error.text(), actionKind: "quick-create-material" }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return jsonResponse({ ok: true, message: "Material created.", actionKind: "quick-create-material", material });
+  }
+
+  if (intent === "quick-create-equipment") {
+    let equipment: Awaited<ReturnType<typeof createEquipmentLibraryItem>>;
+    try {
+      equipment = await createEquipmentLibraryItem({
+        shopId,
+        input: {
+          name: formData.get("name")?.toString() ?? "",
+          hourlyRate: formData.get("hourlyRate")?.toString() ?? "",
+          perUseCost: formData.get("perUseCost")?.toString() ?? "",
+          equipmentCost: formData.get("equipmentCost")?.toString() ?? "",
+          purchaseLink: formData.get("purchaseLink")?.toString() ?? "",
+          notes: formData.get("notes")?.toString() ?? "",
+        },
+      });
+    } catch (error) {
+      if (error instanceof Response) {
+        return jsonResponse({ ok: false, message: await error.text(), actionKind: "quick-create-equipment" }, { status: error.status });
+      }
+      throw error;
+    }
+
+    return jsonResponse({ ok: true, message: "Equipment created.", actionKind: "quick-create-equipment", equipment });
+  }
 
   if (intent !== "save-template-draft") {
     return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
@@ -242,6 +338,23 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const draft = parsedDraft.data;
   const normalizedDefaultShippingTemplateId = draft.defaultShippingTemplateId?.trim() || null;
+  let defaultLaborMinutes: number | null;
+  let defaultLaborRate: Prisma.Decimal | null;
+
+  try {
+    defaultLaborMinutes = template.type === "production"
+      ? parseOptionalNonNegativeNumber(draft.defaultLaborMinutes, "Default labor minutes")
+      : null;
+    defaultLaborRate = template.type === "production"
+      ? parseOptionalNonNegativeMoney(draft.defaultLaborRate, "Default labor rate")
+      : null;
+  } catch (error) {
+    if (error instanceof Response) {
+      return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
+    }
+    throw error;
+  }
+
   const existingMaterialLines = new Map(template.materialLines.map((line) => [line.id, line]));
   const existingEquipmentLines = new Map(template.equipmentLines.map((line) => [line.id, line]));
 
@@ -297,7 +410,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const [materialRecords, equipmentRecords] = await Promise.all([
     prisma.materialLibraryItem.findMany({ where: { id: { in: newMaterialIds }, shopId }, select: { id: true } }),
-    prisma.equipmentLibraryItem.findMany({ where: { id: { in: newEquipmentIds }, shopId }, select: { id: true } }),
+    prisma.equipmentLibraryItem.findMany({ where: { id: { in: newEquipmentIds }, shopId }, select: { id: true, usageBasis: true } }),
   ]);
 
   if (materialRecords.length !== newMaterialIds.length) {
@@ -308,6 +421,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     return jsonResponse({ ok: false, message: "One or more equipment items could not be found." }, { status: 404 });
   }
 
+  const equipmentUsageBasisById = new Map<string, string>();
+  for (const line of template.equipmentLines) {
+    equipmentUsageBasisById.set(line.equipmentId, line.equipment.usageBasis ?? "time_and_unit");
+  }
+  for (const equipment of equipmentRecords) {
+    equipmentUsageBasisById.set(equipment.id, equipment.usageBasis);
+  }
+
   await prisma.$transaction(async (tx) => {
     await tx.costTemplate.updateMany({
       where: { id: templateId, shopId },
@@ -315,6 +436,8 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         name: draft.name.trim(),
         description: draft.description.trim() || null,
         defaultShippingTemplateId: template.type === "production" ? normalizedDefaultShippingTemplateId : null,
+        defaultLaborMinutes,
+        defaultLaborRate,
       },
     });
     
@@ -365,10 +488,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     for (const line of draft.equipmentLines) {
       const usageMode = line.usageMode || "direct";
+      const usageBasis = equipmentUsageBasisById.get(line.equipmentId);
+      if (!usageModeAllowedForBasis(usageMode, usageBasis)) {
+        throw new Response("Selected equipment usage mode is not allowed for this equipment's usage basis.", { status: 400 });
+      }
       const data = {
         usageMode,
-        minutes: usageMode === "direct" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
-        uses: usageMode === "direct" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
+        minutes: usageMode === "direct" && usageBasis !== "unit" ? parseOptionalNonNegativeNumber(line.minutes, "Equipment minutes") : null,
+        uses: usageMode === "direct" && usageBasis !== "time" ? parseOptionalNonNegativeWholeNumber(line.uses, "Equipment uses") : null,
         yieldDurationMinutes: usageMode === "duration_yield" ? parseOptionalPositiveNumber(line.yieldDurationMinutes, "Equipment yield duration") : null,
         yieldUses: usageMode === "use_yield" ? parseOptionalPositiveWholeNumber(line.yieldUses, "Equipment yield uses") : null,
         yieldQuantity: usageMode !== "direct" ? parseOptionalPositiveWholeNumber(line.yieldQuantity, "Products yielded") : null,
@@ -432,6 +559,7 @@ type AvailableEquipment = {
   name: string;
   hourlyRate: string | null;
   perUseCost: string | null;
+  usageBasis: string;
 };
 
 function serializeDraft(draft: TemplateDraft) {
@@ -467,13 +595,27 @@ function describeEquipmentLine(line: TemplateDraftEquipmentLine) {
 }
 
 export default function TemplateDetailPage() {
-  const { template, availableMaterials, availableEquipment, availableShippingTemplates } = useLoaderData<typeof loader>();
+  const {
+    template,
+    availableMaterials: loadedMaterials,
+    availableEquipment: loadedEquipment,
+    availableShippingTemplates,
+  } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string; savedAt?: string }>();
+  const quickCreateFetcher = useFetcher<{
+    ok: boolean;
+    message: string;
+    actionKind?: "quick-create-material" | "quick-create-equipment";
+    material?: AvailableMaterial;
+    equipment?: AvailableEquipment;
+  }>();
   const revalidator = useRevalidator();
-  const { formatMoney } = useAppLocalization();
+  const { formatMoney, getCurrencySymbol } = useAppLocalization();
 
   const [baseDraft, setBaseDraft] = useState(() => buildTemplateDraft(template));
   const [draft, setDraft] = useState(() => buildTemplateDraft(template));
+  const [availableMaterials, setAvailableMaterials] = useState<AvailableMaterial[]>(() => loadedMaterials);
+  const [availableEquipment, setAvailableEquipment] = useState<AvailableEquipment[]>(() => loadedEquipment);
 
   const [materialModalOpen, setMaterialModalOpen] = useState(false);
   const [editingMaterialLineId, setEditingMaterialLineId] = useState<string | null>(null);
@@ -482,6 +624,15 @@ export default function TemplateDetailPage() {
   const [matQty, setMatQty] = useState("1");
   const [matYield, setMatYield] = useState("1");
   const [matUses, setMatUses] = useState("");
+  const [quickMaterialOpen, setQuickMaterialOpen] = useState(false);
+  const [quickMaterialForm, setQuickMaterialForm] = useState({
+    name: "",
+    costingModel: "counted",
+    purchasePrice: "",
+    purchaseQty: "1",
+    totalUsesPerUnit: "",
+    purchaseLink: "",
+  });
 
   const [equipmentModalOpen, setEquipmentModalOpen] = useState(false);
   const [editingEquipmentLineId, setEditingEquipmentLineId] = useState<string | null>(null);
@@ -493,6 +644,14 @@ export default function TemplateDetailPage() {
   const [eqYieldDurationMinutes, setEqYieldDurationMinutes] = useState("");
   const [eqYieldUses, setEqYieldUses] = useState("");
   const [eqYieldQuantity, setEqYieldQuantity] = useState("");
+  const [quickEquipmentOpen, setQuickEquipmentOpen] = useState(false);
+  const [quickEquipmentForm, setQuickEquipmentForm] = useState({
+    name: "",
+    hourlyRate: "",
+    perUseCost: "",
+    equipmentCost: "",
+    purchaseLink: "",
+  });
 
   const handledSaveRef = useRef<string | null>(null);
 
@@ -500,6 +659,9 @@ export default function TemplateDetailPage() {
   const isDirty = serializeDraft(draft) !== serializeDraft(baseDraft);
   const { confirmThenNavigate } = useUnsavedChangesGuard(isDirty);
   const selectedMaterial = availableMaterials.find((item: AvailableMaterial) => item.id === selectedMaterialId);
+  const selectedEquipment = availableEquipment.find((item: AvailableEquipment) => item.id === selectedEquipmentId);
+  const selectedEquipmentUsageBasis = selectedEquipment?.usageBasis ?? "time_and_unit";
+  const equipmentUsageModeOptions = usageModeOptionsForBasis(selectedEquipmentUsageBasis);
 
   useEffect(() => {
     if (!fetcher.data?.ok || !fetcher.data.savedAt || fetcher.data.savedAt === handledSaveRef.current) return;
@@ -509,6 +671,30 @@ export default function TemplateDetailPage() {
     setDraft(committedDraft);
     revalidator.revalidate();
   }, [draft, fetcher.data, revalidator]);
+
+  useEffect(() => {
+    if (!quickCreateFetcher.data?.ok) return;
+
+    if (quickCreateFetcher.data.actionKind === "quick-create-material" && quickCreateFetcher.data.material) {
+      const material = quickCreateFetcher.data.material;
+      setAvailableMaterials((current) => sortAvailableMaterials([...current, material]));
+      setSelectedMaterialId(material.id);
+      setMaterialSearchValue(material.name);
+      setMatQty("1");
+      setMatYield(material.costingModel === "yield" ? "1" : "");
+      setMatUses("");
+      setQuickMaterialOpen(false);
+    }
+
+    if (quickCreateFetcher.data.actionKind === "quick-create-equipment" && quickCreateFetcher.data.equipment) {
+      const equipment = quickCreateFetcher.data.equipment;
+      setAvailableEquipment((current) => sortAvailableEquipment([...current, equipment]));
+      setSelectedEquipmentId(equipment.id);
+      setEquipmentSearchValue(equipment.name);
+      setEqUsageMode(defaultUsageModeForBasis(equipment.usageBasis));
+      setQuickEquipmentOpen(false);
+    }
+  }, [quickCreateFetcher.data]);
 
   function resetMaterialModal() {
     setEditingMaterialLineId(null);
@@ -606,10 +792,13 @@ export default function TemplateDetailPage() {
   }
 
   function openEditEquipmentModal(line: TemplateDraftEquipmentLine) {
+    const nextUsageMode = usageModeAllowedForBasis(line.usageMode, line.usageBasis)
+      ? line.usageMode
+      : defaultUsageModeForBasis(line.usageBasis);
     setEditingEquipmentLineId(line.id);
     setSelectedEquipmentId(line.equipmentId);
     setEquipmentSearchValue(line.equipmentName);
-    setEqUsageMode(line.usageMode ?? "direct");
+    setEqUsageMode(nextUsageMode);
     setEqMinutes(line.minutes ?? "");
     setEqUses(line.uses ?? "");
     setEqYieldDurationMinutes(line.yieldDurationMinutes ?? "");
@@ -619,18 +808,18 @@ export default function TemplateDetailPage() {
   }
 
   function commitEquipmentModal() {
-    const selectedEquipment = availableEquipment.find((item: AvailableEquipment) => item.id === selectedEquipmentId);
     if (!selectedEquipment) return;
 
     const nextLine: TemplateDraftEquipmentLine = {
       id: editingEquipmentLineId ?? createClientId("draft-equipment"),
       equipmentId: selectedEquipment.id,
       equipmentName: selectedEquipment.name,
+      usageBasis: selectedEquipment.usageBasis,
       hourlyRate: selectedEquipment.hourlyRate,
       perUseCost: selectedEquipment.perUseCost,
       usageMode: eqUsageMode,
-      minutes: eqUsageMode === "direct" ? (eqMinutes || null) : null,
-      uses: eqUsageMode === "direct" ? (eqUses || null) : null,
+      minutes: eqUsageMode === "direct" && selectedEquipment.usageBasis !== "unit" ? (eqMinutes || null) : null,
+      uses: eqUsageMode === "direct" && selectedEquipment.usageBasis !== "time" ? (eqUses || null) : null,
       yieldDurationMinutes: eqUsageMode === "duration_yield" ? (eqYieldDurationMinutes || null) : null,
       yieldUses: eqUsageMode === "use_yield" ? (eqYieldUses || null) : null,
       yieldQuantity: eqUsageMode !== "direct" ? (eqYieldQuantity || null) : null,
@@ -650,6 +839,29 @@ export default function TemplateDetailPage() {
       ...current,
       equipmentLines: current.equipmentLines.filter((line) => line.id !== lineId),
     }));
+  }
+
+  function submitQuickMaterial() {
+    const formData = new FormData();
+    formData.append("intent", "quick-create-material");
+    formData.append("name", quickMaterialForm.name);
+    formData.append("costingModel", quickMaterialForm.costingModel);
+    formData.append("purchasePrice", quickMaterialForm.purchasePrice);
+    formData.append("purchaseQty", quickMaterialForm.purchaseQty);
+    formData.append("totalUsesPerUnit", quickMaterialForm.totalUsesPerUnit);
+    formData.append("purchaseLink", quickMaterialForm.purchaseLink);
+    quickCreateFetcher.submit(formData, { method: "post" });
+  }
+
+  function submitQuickEquipment() {
+    const formData = new FormData();
+    formData.append("intent", "quick-create-equipment");
+    formData.append("name", quickEquipmentForm.name);
+    formData.append("hourlyRate", quickEquipmentForm.hourlyRate);
+    formData.append("perUseCost", quickEquipmentForm.perUseCost);
+    formData.append("equipmentCost", quickEquipmentForm.equipmentCost);
+    formData.append("purchaseLink", quickEquipmentForm.purchaseLink);
+    quickCreateFetcher.submit(formData, { method: "post" });
   }
 
   function previewMaterialLineCost() {
@@ -811,6 +1023,47 @@ export default function TemplateDetailPage() {
           </BlockStack>
         </Card>
 
+        {template.type === "production" && (
+          <Card>
+            <BlockStack gap="400">
+              <Text as="h2" variant="headingMd">Default labor</Text>
+              <Divider />
+              <InlineStack gap="400" wrap={false}>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label="Minutes per variant"
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={draft.defaultLaborMinutes}
+                    onChange={(value) => setDraft((current) => ({ ...current, defaultLaborMinutes: value }))}
+                    autoComplete="off"
+                    helpText="Variants using this template inherit these minutes unless they set a labor override."
+                  />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <TextField
+                    label={`Hourly rate (${getCurrencySymbol()})`}
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={draft.defaultLaborRate}
+                    onChange={(value) => setDraft((current) => ({ ...current, defaultLaborRate: value }))}
+                    onBlur={() =>
+                      setDraft((current) => ({
+                        ...current,
+                        defaultLaborRate: normalizeFixedDecimalInput(current.defaultLaborRate),
+                      }))
+                    }
+                    autoComplete="off"
+                    helpText="Leave blank to use the shop default labor rate when one is configured."
+                  />
+                </div>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        )}
+
         <Card>
           <BlockStack gap="400">
             <InlineStack align="space-between" blockAlign="center">
@@ -942,6 +1195,19 @@ export default function TemplateDetailPage() {
                 }
               />
             )}
+            {!editingMaterialLineId ? (
+              <Button
+                onClick={() => {
+                  setQuickMaterialForm((current) => ({
+                    ...current,
+                    name: materialSearchValue,
+                  }));
+                  setQuickMaterialOpen(true);
+                }}
+              >
+                Create material
+              </Button>
+            ) : null}
             {selectedMaterial?.costingModel === "counted" && (
               <TextField
                 label="Quantity used per item"
@@ -1025,6 +1291,12 @@ export default function TemplateDetailPage() {
                   const nextEquipment = availableEquipment.find((item: AvailableEquipment) => item.id === nextId);
                   setSelectedEquipmentId(nextId);
                   setEquipmentSearchValue(nextEquipment?.name ?? "");
+                  setEqUsageMode(defaultUsageModeForBasis(nextEquipment?.usageBasis));
+                  setEqMinutes("");
+                  setEqUses("");
+                  setEqYieldDurationMinutes("");
+                  setEqYieldUses("");
+                  setEqYieldQuantity("");
                 }}
                 textField={
                   <Autocomplete.TextField
@@ -1042,42 +1314,55 @@ export default function TemplateDetailPage() {
                 }
               />
             )}
+            {!editingEquipmentLineId ? (
+              <Button
+                onClick={() => {
+                  setQuickEquipmentForm((current) => ({
+                    ...current,
+                    name: equipmentSearchValue,
+                  }));
+                  setQuickEquipmentOpen(true);
+                }}
+              >
+                Create equipment
+              </Button>
+            ) : null}
             <Select
-              label="Usage mode"
+              label="How usage is measured"
               value={eqUsageMode}
               onChange={setEqUsageMode}
-              options={[
-                { label: "Direct minutes / uses", value: "direct" },
-                { label: "Duration yield", value: "duration_yield" },
-                { label: "Use yield", value: "use_yield" },
-              ]}
+              options={equipmentUsageModeOptions}
             />
             {eqUsageMode === "direct" && (
               <InlineStack gap="400" wrap={false}>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Minutes"
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={eqMinutes}
-                    onChange={setEqMinutes}
-                    autoComplete="off"
-                    helpText="Time on equipment per variant."
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <TextField
-                    label="Uses"
-                    type="number"
-                    min={0}
-                    step={1}
-                    value={eqUses}
-                    onChange={setEqUses}
-                    autoComplete="off"
-                    helpText="Per-use charges per variant."
-                  />
-                </div>
+                {selectedEquipmentUsageBasis !== "unit" && (
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Minutes"
+                      type="number"
+                      min={0}
+                      step={0.5}
+                      value={eqMinutes}
+                      onChange={setEqMinutes}
+                      autoComplete="off"
+                      helpText="Time on equipment per variant."
+                    />
+                  </div>
+                )}
+                {selectedEquipmentUsageBasis !== "time" && (
+                  <div style={{ flex: 1 }}>
+                    <TextField
+                      label="Uses"
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={eqUses}
+                      onChange={setEqUses}
+                      autoComplete="off"
+                      helpText="Per-use charges per variant."
+                    />
+                  </div>
+                )}
               </InlineStack>
             )}
             {eqUsageMode === "duration_yield" && (
@@ -1139,6 +1424,152 @@ export default function TemplateDetailPage() {
                 Estimated line cost: <strong>{previewEquipmentLineCost()}</strong>
               </Text>
             )}
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={quickMaterialOpen}
+        onClose={() => setQuickMaterialOpen(false)}
+        title={`Create ${template.type === "shipping" ? "shipping" : "production"} material`}
+        primaryAction={{
+          content: "Create material",
+          loading: quickCreateFetcher.state !== "idle" && quickCreateFetcher.formData?.get("intent") === "quick-create-material",
+          onAction: submitQuickMaterial,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setQuickMaterialOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {quickCreateFetcher.data?.actionKind === "quick-create-material" && !quickCreateFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{quickCreateFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Name"
+              value={quickMaterialForm.name}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <Select
+              label="Costing method"
+              value={quickMaterialForm.costingModel}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, costingModel: value }))}
+              options={[
+                { label: "Counted parts", value: "counted" },
+                { label: "Variable yield", value: "yield" },
+                { label: "Portioned use", value: "uses" },
+              ]}
+            />
+            <InlineStack gap="400" wrap={false}>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Purchase price"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickMaterialForm.purchasePrice}
+                  onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchasePrice: value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Purchase quantity"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickMaterialForm.purchaseQty}
+                  onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchaseQty: value }))}
+                  autoComplete="off"
+                />
+              </div>
+            </InlineStack>
+            {quickMaterialForm.costingModel === "uses" ? (
+              <TextField
+                label="Portions per purchased unit"
+                type="number"
+                min={0}
+                step={0.01}
+                value={quickMaterialForm.totalUsesPerUnit}
+                onChange={(value) => setQuickMaterialForm((current) => ({ ...current, totalUsesPerUnit: value }))}
+                autoComplete="off"
+              />
+            ) : null}
+            <TextField
+              label="Purchase link"
+              value={quickMaterialForm.purchaseLink}
+              onChange={(value) => setQuickMaterialForm((current) => ({ ...current, purchaseLink: value }))}
+              autoComplete="off"
+            />
+          </BlockStack>
+        </Modal.Section>
+      </Modal>
+
+      <Modal
+        open={quickEquipmentOpen}
+        onClose={() => setQuickEquipmentOpen(false)}
+        title="Create equipment"
+        primaryAction={{
+          content: "Create equipment",
+          loading: quickCreateFetcher.state !== "idle" && quickCreateFetcher.formData?.get("intent") === "quick-create-equipment",
+          onAction: submitQuickEquipment,
+        }}
+        secondaryActions={[{ content: "Cancel", onAction: () => setQuickEquipmentOpen(false) }]}
+      >
+        <Modal.Section>
+          <BlockStack gap="400">
+            {quickCreateFetcher.data?.actionKind === "quick-create-equipment" && !quickCreateFetcher.data.ok ? (
+              <Banner tone="critical">
+                <Text as="p" variant="bodyMd">{quickCreateFetcher.data.message}</Text>
+              </Banner>
+            ) : null}
+            <TextField
+              label="Name"
+              value={quickEquipmentForm.name}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, name: value }))}
+              autoComplete="off"
+            />
+            <InlineStack gap="400" wrap={false}>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Hourly rate"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickEquipmentForm.hourlyRate}
+                  onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, hourlyRate: value }))}
+                  autoComplete="off"
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <TextField
+                  label="Per-use cost"
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={quickEquipmentForm.perUseCost}
+                  onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, perUseCost: value }))}
+                  autoComplete="off"
+                />
+              </div>
+            </InlineStack>
+            <TextField
+              label="Equipment cost"
+              type="number"
+              min={0}
+              step={0.01}
+              value={quickEquipmentForm.equipmentCost}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, equipmentCost: value }))}
+              autoComplete="off"
+            />
+            <TextField
+              label="Purchase link"
+              value={quickEquipmentForm.purchaseLink}
+              onChange={(value) => setQuickEquipmentForm((current) => ({ ...current, purchaseLink: value }))}
+              autoComplete="off"
+            />
           </BlockStack>
         </Modal.Section>
       </Modal>

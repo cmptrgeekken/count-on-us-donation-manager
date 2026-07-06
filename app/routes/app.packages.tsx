@@ -2,8 +2,10 @@ import { jsonResponse } from "~/utils/json-response.server";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 import { prisma } from "../db.server";
+import { createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { calculatePackageMaterialCost } from "../services/packaging.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
@@ -157,6 +159,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const intent = formData.get("intent")?.toString();
 
   try {
+    if (intent === "quick-create-shipping-material") {
+      const material = await createMaterialLibraryItem({
+        shopId,
+        input: {
+          name: formData.get("name")?.toString() ?? "",
+          type: "shipping",
+          costingModel: "counted",
+          purchasePrice: formData.get("purchasePrice")?.toString() ?? "",
+          purchaseQty: formData.get("purchaseQty")?.toString() ?? "",
+          purchaseLink: formData.get("purchaseLink")?.toString() ?? "",
+          totalUsesPerUnit: "",
+          weightGrams: formData.get("weightGrams")?.toString() ?? "",
+          unitDescription: formData.get("unitDescription")?.toString() ?? "",
+          notes: formData.get("notes")?.toString() ?? "",
+        },
+      });
+      return jsonResponse({
+        ok: true,
+        message: "Shipping material created.",
+        actionKind: "quick-create-shipping-material",
+        material: {
+          id: material.id,
+          name: material.name,
+          perUnitCost: material.perUnitCost,
+        },
+      });
+    }
+
     if (intent === "save-package") {
       const parsed = packageFormSchema.safeParse({
         id: formData.get("id")?.toString() ?? "",
@@ -252,10 +282,29 @@ function Field({ label, name, defaultValue = "", type = "text" }: { label: strin
 }
 
 export default function PackagesPage() {
-  const { packages, shippingMaterials, reviewItems } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const { packages, shippingMaterials: loadedShippingMaterials, reviewItems } = useLoaderData<typeof loader>();
+  const fetcher = useFetcher<{
+    ok: boolean;
+    message: string;
+    actionKind?: "quick-create-shipping-material";
+    material?: ShippingMaterialRow;
+  }>();
   const { formatMoney } = useAppLocalization();
+  const [shippingMaterials, setShippingMaterials] = useState<ShippingMaterialRow[]>(() => loadedShippingMaterials);
   const isSubmitting = fetcher.state !== "idle";
+
+  useEffect(() => {
+    setShippingMaterials(loadedShippingMaterials);
+  }, [loadedShippingMaterials]);
+
+  useEffect(() => {
+    if (fetcher.data?.actionKind !== "quick-create-shipping-material" || !fetcher.data.ok || !fetcher.data.material) return;
+    const material = fetcher.data.material;
+    setShippingMaterials((current) => [
+      material,
+      ...current.filter((item) => item.id !== material.id),
+    ]);
+  }, [fetcher.data]);
 
   return (
     <>
@@ -294,6 +343,24 @@ export default function PackagesPage() {
               </label>
               <div>
                 <s-button type="submit" disabled={isSubmitting}>Create package</s-button>
+              </div>
+            </fetcher.Form>
+
+            <fetcher.Form method="post" style={{ display: "grid", gap: "0.75rem", maxWidth: "760px" }}>
+              <input type="hidden" name="intent" value="quick-create-shipping-material" />
+              <s-text type="strong">Quick create shipping material</s-text>
+              <div style={{ display: "grid", gridTemplateColumns: "2fr repeat(3, 1fr)", gap: "0.75rem" }}>
+                <Field label="Name" name="name" />
+                <Field label="Purchase price" name="purchasePrice" type="number" />
+                <Field label="Purchase quantity" name="purchaseQty" type="number" defaultValue="1" />
+                <Field label="Weight (g)" name="weightGrams" type="number" />
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.75rem" }}>
+                <Field label="Unit description" name="unitDescription" />
+                <Field label="Purchase link" name="purchaseLink" />
+              </div>
+              <div>
+                <s-button type="submit" variant="secondary" disabled={isSubmitting}>Create shipping material</s-button>
               </div>
             </fetcher.Form>
 

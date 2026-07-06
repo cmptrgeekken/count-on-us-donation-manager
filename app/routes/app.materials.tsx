@@ -1,11 +1,12 @@
 import { jsonResponse } from "~/utils/json-response.server";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { EmptyTableRow, ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
+import { createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import {
@@ -24,6 +25,17 @@ const materialFormSchema = z.object({
   costingModel: z.enum(["counted", "yield", "uses"]),
   purchaseLink: z.union([z.literal(""), z.url({ message: "Purchase link must be a valid URL." })]),
 });
+
+const dialogFieldStyle: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "0.75rem",
+  borderRadius: "0.75rem",
+  border: "1px solid var(--p-color-border, #d2d5d8)",
+  background: "var(--p-color-bg-surface, #fff)",
+  color: "var(--p-color-text, #303030)",
+  font: "inherit",
+};
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -129,16 +141,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     };
 
     if (intent === "create") {
-      const material = await prisma.materialLibraryItem.create({ data });
-      await prisma.auditLog.create({
-        data: {
+      try {
+        await createMaterialLibraryItem({
           shopId,
-          entity: "MaterialLibraryItem",
-          entityId: material.id,
-          action: "MATERIAL_CREATED",
-          actor: "merchant",
-        },
-      });
+          input: {
+            name,
+            type,
+            costingModel,
+            purchasePrice: formData.get("purchasePrice")?.toString() ?? "",
+            purchaseQty: formData.get("purchaseQty")?.toString() ?? "",
+            totalUsesPerUnit: formData.get("totalUsesPerUnit")?.toString() ?? "",
+            purchaseLink: parsed.data.purchaseLink,
+            weightGrams: formData.get("weightGrams")?.toString() ?? "",
+            unitDescription: unitDescription ?? "",
+            notes: notes ?? "",
+          },
+        });
+      } catch (error) {
+        if (error instanceof Response) {
+          return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
+        }
+        throw error;
+      }
       return jsonResponse({ ok: true, message: "Material created." });
     }
 
@@ -584,13 +608,7 @@ export default function MaterialsPage() {
               id="material-type"
               value={form.type}
               onChange={(event) => updateForm("type", event.currentTarget.value)}
-              style={{
-                width: "100%",
-                padding: "0.75rem",
-                borderRadius: "0.75rem",
-                border: "1px solid var(--p-color-border)",
-                font: "inherit",
-              }}
+              style={dialogFieldStyle}
             >
               <option value="production">Production material</option>
               <option value="shipping">Shipping material</option>
@@ -603,13 +621,7 @@ export default function MaterialsPage() {
               id="material-costing-model"
               value={form.costingModel}
               onChange={(event) => updateForm("costingModel", event.currentTarget.value)}
-              style={{
-                width: "100%",
-                padding: "0.75rem",
-                borderRadius: "0.75rem",
-                border: "1px solid var(--p-color-border)",
-                font: "inherit",
-              }}
+              style={dialogFieldStyle}
             >
               <option value="counted">Counted parts</option>
               <option value="yield">Variable yield</option>
@@ -720,14 +732,7 @@ export default function MaterialsPage() {
               value={form.notes}
               onChange={(event) => updateForm("notes", event.currentTarget.value)}
                 style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  padding: "0.75rem",
-                  borderRadius: "0.75rem",
-                  border: "1px solid var(--p-color-border)",
-                  background: "var(--p-color-bg-surface, #fff)",
-                  color: "var(--p-color-text, #303030)",
-                  font: "inherit",
+                  ...dialogFieldStyle,
                   resize: "vertical",
                 }}
               />

@@ -247,7 +247,7 @@ export async function buildPublicTransparencyPage(
   const scopedEndDate =
     rollupRange?.endDate ?? scopedPeriods.reduce<Date | null>((latest, period) => (!latest || period.endDate > latest ? period.endDate : latest), null);
 
-  const [snapshotLines, orderSnapshots, shopifyChargeTransactions, shop, businessExpenseTotals] =
+  const [snapshotLines, orderSnapshots, shopifyChargeTransactions, externalSettlementTotals, shop, businessExpenseTotals] =
     scopedStartDate && scopedEndDate
       ? await Promise.all([
           db.orderSnapshotLine.findMany({
@@ -313,6 +313,27 @@ export async function buildPublicTransparencyPage(
               transactionType: true,
             },
           }),
+          db.orderSettlement?.aggregate
+            ? db.orderSettlement.aggregate({
+                where: {
+                  shopId,
+                  status: "confirmed",
+                  OR: [
+                    { periodId: { in: Array.from(periodIdsInScope) } },
+                    {
+                      periodId: null,
+                      snapshot: {
+                        createdAt: {
+                          gte: scopedStartDate,
+                          lt: scopedEndDate,
+                        },
+                      },
+                    },
+                  ],
+                },
+                _sum: { feeAmount: true },
+              })
+            : Promise.resolve({ _sum: { feeAmount: new Prisma.Decimal(0) } }),
           db.shop.findUnique({
             where: { shopId },
             select: {
@@ -331,7 +352,7 @@ export async function buildPublicTransparencyPage(
             _sum: { amount: true },
           }),
         ])
-      : [[], [], [], null, { _sum: { amount: new Prisma.Decimal(0) } }];
+      : [[], [], [], { _sum: { feeAmount: new Prisma.Decimal(0) } }, null, { _sum: { amount: new Prisma.Decimal(0) } }];
 
   const causeTotals = new Map<string, { causeId: string; causeName: string; donated: number; pending: number }>();
   const receiptCauseTotals = new Map<
@@ -482,6 +503,9 @@ export async function buildPublicTransparencyPage(
         : 0,
     ),
   );
+  const externalMarketplaceFees = Math.abs(
+    decimalToNumber(externalSettlementTotals._sum.feeAmount ?? new Prisma.Decimal(0)),
+  );
   const salesTaxCollected = sumValues(orderSnapshots, (snapshot) => snapshot.salesTaxCollected);
   const allocationInputs = scopedPeriods.flatMap((period) =>
     period.causeAllocations.map((allocation) => ({
@@ -510,6 +534,7 @@ export async function buildPublicTransparencyPage(
   const additionalPublicDeductions =
     shippingPostage +
     shopifyFees +
+    externalMarketplaceFees +
     platformFees +
     taxBuffer +
     marketingReserve;
@@ -518,6 +543,7 @@ export async function buildPublicTransparencyPage(
     productCosts +
     shippingPostage +
     shopifyFees +
+    externalMarketplaceFees +
     platformFees +
     taxBuffer +
     marketingReserve;
@@ -597,6 +623,7 @@ export async function buildPublicTransparencyPage(
                 buildMoneyRow("POD/provider fulfillment", podCost, "negative"),
                 buildMoneyRow("Mistake buffer", mistakeBuffer, "negative"),
                 buildMoneyRow("Shopify/payment fees", shopifyFees, "negative"),
+                buildMoneyRow("External marketplace settlement fees", externalMarketplaceFees, "negative"),
                 buildMoneyRow("Shopify subscription/app fees", platformFees, "negative"),
                 buildMoneyRow("Tax buffer", taxBuffer, "negative"),
                 buildMoneyRow("Marketing/acquisition reserve", marketingReserve, "negative"),

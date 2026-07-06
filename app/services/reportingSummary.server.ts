@@ -67,6 +67,10 @@ function floorCurrency(value: Prisma.Decimal) {
   return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 }
 
+function hasFindMany(model: unknown): model is { findMany: unknown } {
+  return typeof model === "object" && model !== null && "findMany" in model;
+}
+
 export async function buildReportingSummary(shopId: string, requestedPeriodId?: string | null, db = prisma) {
   const periods = await db.reportingPeriod.findMany({
     where: { shopId },
@@ -91,6 +95,13 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   }
 
   const selectedPeriod = periods.find((period) => period.id === requestedPeriodId) ?? periods[0];
+  const mockableDb = db as typeof db & {
+    artistAllocation?: { findMany?: typeof db.artistAllocation.findMany };
+    artistPayment?: { findMany?: typeof db.artistPayment.findMany };
+    artist?: { findMany?: typeof db.artist.findMany };
+    orderPackageAllocation?: { findMany?: typeof db.orderPackageAllocation.findMany };
+    packagingReviewItem?: { findMany?: typeof db.packagingReviewItem.findMany };
+  };
 
   const [shop, snapshotLines, orderTaxSummary, closedAllocations, expensesSummary, chargesSummary, charges, disbursements, taxTrueUps, carryForwardTrueUps, activeCauses, outstandingAllocations] =
     await Promise.all([
@@ -321,8 +332,8 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
     ]);
 
   const [closedArtistAllocations, artistPayments, activeArtists, outstandingArtistAllocations] = await Promise.all([
-    db.artistAllocation?.findMany
-      ? db.artistAllocation.findMany({
+    mockableDb.artistAllocation?.findMany
+      ? mockableDb.artistAllocation.findMany({
           where: {
             shopId,
             periodId: selectedPeriod.id,
@@ -336,8 +347,8 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           },
         })
       : Promise.resolve([]),
-    db.artistPayment?.findMany
-      ? db.artistPayment.findMany({
+    mockableDb.artistPayment?.findMany
+      ? mockableDb.artistPayment.findMany({
           where: {
             shopId,
             periodId: selectedPeriod.id,
@@ -383,8 +394,8 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           },
         })
       : Promise.resolve([]),
-    db.artist?.findMany
-      ? db.artist.findMany({
+    mockableDb.artist?.findMany
+      ? mockableDb.artist.findMany({
           where: {
             shopId,
             status: { in: ["active", "draft"] },
@@ -398,7 +409,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           },
         })
       : Promise.resolve([]),
-    db.artistAllocation?.findMany
+    hasFindMany((mockableDb as { artistAllocation?: unknown }).artistAllocation)
       ? listOutstandingArtistAllocations(
           shopId,
           {
@@ -409,8 +420,8 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       : Promise.resolve([]),
   ]);
 
-  const packageAllocations = db.orderPackageAllocation?.findMany
-    ? await db.orderPackageAllocation.findMany({
+  const packageAllocations = mockableDb.orderPackageAllocation?.findMany
+    ? await mockableDb.orderPackageAllocation.findMany({
         where: {
           shopId,
           snapshot: {
@@ -440,8 +451,8 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       })
     : [];
 
-  const packagingReviewItems = db.packagingReviewItem?.findMany
-    ? await db.packagingReviewItem.findMany({
+  const packagingReviewItems = mockableDb.packagingReviewItem?.findMany
+    ? await mockableDb.packagingReviewItem.findMany({
         where: {
           shopId,
           status: "open",
@@ -468,6 +479,51 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         },
       })
     : [];
+
+  const settlementScopeWhere = {
+    shopId,
+    OR: [
+      { periodId: selectedPeriod.id },
+      {
+        periodId: null,
+        snapshot: {
+          createdAt: {
+            gte: selectedPeriod.startDate,
+            lt: selectedPeriod.endDate,
+          },
+        },
+      },
+    ],
+  };
+  const [externalSettlementFeeSummary, externalSettlements] = await Promise.all([
+    db.orderSettlement.aggregate({
+      where: {
+        ...settlementScopeWhere,
+        status: "confirmed",
+      },
+      _sum: { feeAmount: true },
+    }),
+    db.orderSettlement.findMany({
+      where: settlementScopeWhere,
+      orderBy: [{ status: "asc" }, { createdAt: "desc" }],
+      select: {
+        id: true,
+        shopifyOrderId: true,
+        orderNumber: true,
+        source: true,
+        status: true,
+        grossOrderAmount: true,
+        shopifyPaidAmount: true,
+        amountReceived: true,
+        feeAmount: true,
+        currency: true,
+        paidAt: true,
+        referenceId: true,
+        notes: true,
+        detectedReason: true,
+      },
+    }),
+  ]);
 
   const allocationMap = new Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>();
   const artistAllocationMap = new Map<string, { artistId: string; artistName: string; creditName: string; allocated: Prisma.Decimal }>();
@@ -526,6 +582,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   const expenseTotal = expensesSummary._sum.amount ?? ZERO;
   const salesTaxCollected = orderTaxSummary._sum.salesTaxCollected ?? ZERO;
   const shopifyCharges = chargesSummary._sum.amount ?? ZERO;
+  const externalSettlementFees = externalSettlementFeeSummary._sum.feeAmount ?? ZERO;
   const useClosedAllocations = selectedPeriod.status === "CLOSED" && closedAllocations.length > 0;
   let allocationRows = useClosedAllocations
     ? closedAllocations.map((allocation) => ({
@@ -854,7 +911,8 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         totalNetContribution: totalNetContribution.toString(),
         salesTaxCollected: salesTaxCollected.toString(),
         shopifyCharges: shopifyCharges.toString(),
-        donationPool: totalNetContribution.sub(shopifyCharges).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
+        externalSettlementFees: externalSettlementFees.toString(),
+        donationPool: totalNetContribution.sub(shopifyCharges).sub(externalSettlementFees).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
         taxTrueUpSurplusApplied: carryForwardSurplus.toString(),
         taxTrueUpShortfallApplied: carryForwardShortfall.toString(),
         artistPayoutTotal: totalArtistPayout.toString(),
@@ -897,6 +955,22 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         description: charge.description ?? "Shopify charge",
         amount: charge.amount.toString(),
         processedAt: charge.processedAt?.toISOString() ?? null,
+      })),
+      externalSettlements: externalSettlements.map((settlement) => ({
+        id: settlement.id,
+        shopifyOrderId: settlement.shopifyOrderId,
+        orderNumber: settlement.orderNumber ?? null,
+        source: settlement.source,
+        status: settlement.status,
+        grossOrderAmount: settlement.grossOrderAmount.toString(),
+        shopifyPaidAmount: settlement.shopifyPaidAmount?.toString() ?? null,
+        amountReceived: settlement.amountReceived?.toString() ?? null,
+        feeAmount: settlement.feeAmount.toString(),
+        currency: settlement.currency,
+        paidAt: settlement.paidAt?.toISOString() ?? null,
+        referenceId: settlement.referenceId ?? null,
+        notes: settlement.notes ?? null,
+        detectedReason: settlement.detectedReason ?? null,
       })),
       packaging: {
         allocations: packageAllocations.map((allocation: any) => ({

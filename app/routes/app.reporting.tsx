@@ -22,6 +22,10 @@ import {
 import { closeReportingPeriod } from "../services/reportingPeriodService.server";
 import { buildReportingSummary } from "../services/reportingSummary.server";
 import {
+  confirmOrderSettlement,
+  ignoreOrderSettlement,
+} from "../services/orderSettlement.server";
+import {
   recordTaxTrueUp,
   TaxTrueUpError,
   taxTrueUpErrorCodes,
@@ -87,6 +91,23 @@ type ChargeRow = {
   description: string;
   amount: string;
   processedAt: string | null;
+};
+
+type ExternalSettlementRow = {
+  id: string;
+  shopifyOrderId: string;
+  orderNumber: string | null;
+  source: string;
+  status: string;
+  grossOrderAmount: string;
+  shopifyPaidAmount: string | null;
+  amountReceived: string | null;
+  feeAmount: string;
+  currency: string;
+  paidAt: string | null;
+  referenceId: string | null;
+  notes: string | null;
+  detectedReason: string | null;
 };
 
 type DisbursementRow = {
@@ -290,6 +311,27 @@ const taxTrueUpSchema = z.object({
 });
 
 const periodIdSchema = z.string().trim().cuid("Reporting period id is invalid.");
+const settlementIdSchema = z.string().trim().cuid("Settlement review id is invalid.");
+const confirmSettlementSchema = z.object({
+  settlementId: settlementIdSchema,
+  amountReceived: z
+    .string()
+    .trim()
+    .min(1, "Amount received is required.")
+    .refine((value) => !Number.isNaN(Number(value)) && Number(value) >= 0, "Amount received must be 0 or greater."),
+  paidAt: z
+    .string()
+    .trim()
+    .optional()
+    .refine((value) => !value || !Number.isNaN(Date.parse(value)), "Paid date must be a valid date."),
+  source: z.string().trim().optional(),
+  referenceId: z.string().trim().optional(),
+  notes: z.string().trim().optional(),
+});
+const ignoreSettlementSchema = z.object({
+  settlementId: settlementIdSchema,
+  ignoreReason: z.string().trim().min(8, "Ignoring a settlement review requires a reason."),
+});
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
@@ -356,6 +398,64 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     await queueAnalyticalRecalculation(shopId, parsedPeriodId.data);
     return jsonResponse({ ok: true, message: "Analytical recalculation queued." });
+  }
+
+  if (intent === "confirm-order-settlement") {
+    const parsed = confirmSettlementSchema.safeParse({
+      settlementId: formData.get("settlementId")?.toString() ?? "",
+      amountReceived: formData.get("amountReceived")?.toString() ?? "",
+      paidAt: formData.get("paidAt")?.toString() ?? "",
+      source: formData.get("source")?.toString() ?? "",
+      referenceId: formData.get("referenceId")?.toString() ?? "",
+      notes: formData.get("notes")?.toString() ?? "",
+    });
+
+    if (!parsed.success) {
+      return jsonResponse(
+        {
+          ok: false,
+          message: parsed.error.issues[0]?.message ?? "Invalid settlement review.",
+          fieldErrors: parsed.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+
+    await confirmOrderSettlement({
+      shopId,
+      settlementId: parsed.data.settlementId,
+      amountReceived: new Prisma.Decimal(parsed.data.amountReceived),
+      paidAt: parsed.data.paidAt ? new Date(parsed.data.paidAt) : null,
+      source: parsed.data.source ?? "",
+      referenceId: parsed.data.referenceId ?? "",
+      notes: parsed.data.notes ?? "",
+    });
+    return jsonResponse({ ok: true, message: "External settlement confirmed." });
+  }
+
+  if (intent === "ignore-order-settlement") {
+    const parsed = ignoreSettlementSchema.safeParse({
+      settlementId: formData.get("settlementId")?.toString() ?? "",
+      ignoreReason: formData.get("ignoreReason")?.toString() ?? "",
+    });
+
+    if (!parsed.success) {
+      return jsonResponse(
+        {
+          ok: false,
+          message: parsed.error.issues[0]?.message ?? "Invalid settlement review.",
+          fieldErrors: parsed.error.flatten().fieldErrors,
+        },
+        { status: 400 },
+      );
+    }
+
+    await ignoreOrderSettlement({
+      shopId,
+      settlementId: parsed.data.settlementId,
+      ignoreReason: parsed.data.ignoreReason,
+    });
+    return jsonResponse({ ok: true, message: "External settlement review ignored." });
   }
 
   if (intent === "log-disbursement") {
@@ -618,6 +718,7 @@ export default function ReportingPage() {
   const artistPaymentFetcher = useFetcher<ReportingActionData>();
   const trueUpFetcher = useFetcher<ReportingActionData>();
   const recalculationFetcher = useFetcher<ReportingActionData>();
+  const settlementFetcher = useFetcher<ReportingActionData>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const revalidator = useRevalidator();
@@ -709,6 +810,7 @@ export default function ReportingPage() {
     disbursementFetcher.data?.message ??
     artistPaymentFetcher.data?.message ??
     trueUpFetcher.data?.message ??
+    settlementFetcher.data?.message ??
     recalculationFetcher.data?.message ??
     "";
   const disbursementStatusMessage =
@@ -806,6 +908,10 @@ export default function ReportingPage() {
   const disbursements: DisbursementRow[] = summary?.disbursements ?? [];
   const artistPayments: ArtistPaymentRow[] = summary?.artistPayments ?? [];
   const taxTrueUps: TaxTrueUpRow[] = summary?.taxTrueUps ?? [];
+  const externalSettlements: ExternalSettlementRow[] = summary?.externalSettlements ?? [];
+  const unresolvedExternalSettlements = externalSettlements.filter((settlement) => settlement.status === "needs_review");
+  const confirmedExternalSettlements = externalSettlements.filter((settlement) => settlement.status === "confirmed");
+  const externalSettlementFeesArePositive = new Prisma.Decimal(summary?.track1.externalSettlementFees ?? "0").greaterThan(0);
   const recalculationSummary = analyticalRecalculationRun?.summary ?? null;
   const disbursementOptions = disbursementCauseOptions.map<DisbursementOption>((allocation) => ({
     causeId: allocation.causeId,
@@ -981,6 +1087,7 @@ export default function ReportingPage() {
             disbursementFetcher.data,
             artistPaymentFetcher.data,
             trueUpFetcher.data,
+            settlementFetcher.data,
             recalculationFetcher.data,
           ]}
         />
@@ -1060,6 +1167,79 @@ export default function ReportingPage() {
                 </>
               )}
             />
+
+            {unresolvedExternalSettlements.length > 0 ? (
+              <s-banner tone="warning">
+                <div style={{ display: "grid", gap: "0.75rem" }}>
+                  <s-text>
+                    {unresolvedExternalSettlements.length} order{unresolvedExternalSettlements.length === 1 ? "" : "s"} appear to have been paid outside Shopify. Confirm the actual payout before closing this period.
+                  </s-text>
+                  <div style={{ display: "grid", gap: "0.75rem" }}>
+                    {unresolvedExternalSettlements.map((settlement) => (
+                      <div
+                        key={settlement.id}
+                        style={{
+                          display: "grid",
+                          gap: "0.65rem",
+                          padding: "0.75rem",
+                          border: "1px solid var(--p-color-border, #d2d5d8)",
+                          borderRadius: "0.5rem",
+                          background: "var(--p-color-bg-surface, #fff)",
+                        }}
+                      >
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+                          <strong>{settlement.orderNumber ?? settlement.shopifyOrderId}</strong>
+                          <span>Gross {formatMoney(settlement.grossOrderAmount)} · Shopify paid {formatMoney(settlement.shopifyPaidAmount ?? "0")}</span>
+                        </div>
+                        {settlement.detectedReason ? <s-text color="subdued">{settlement.detectedReason}</s-text> : null}
+                        <settlementFetcher.Form method="post" style={{ display: "grid", gap: "0.65rem" }}>
+                          <input type="hidden" name="intent" value="confirm-order-settlement" />
+                          <input type="hidden" name="settlementId" value={settlement.id} />
+                          <div style={{ display: "grid", gap: "0.65rem", gridTemplateColumns: "repeat(auto-fit, minmax(10rem, 1fr))" }}>
+                            <div style={{ display: "grid", gap: "0.3rem" }}>
+                              <label htmlFor={`settlement-source-${settlement.id}`}>Source</label>
+                              <input id={`settlement-source-${settlement.id}`} name="source" defaultValue={settlement.source} style={disbursementFieldStyle} />
+                            </div>
+                            <div style={{ display: "grid", gap: "0.3rem" }}>
+                              <label htmlFor={`settlement-amount-${settlement.id}`}>Amount received</label>
+                              <input id={`settlement-amount-${settlement.id}`} name="amountReceived" type="number" min="0" step="0.01" style={disbursementFieldStyle} />
+                            </div>
+                            <div style={{ display: "grid", gap: "0.3rem" }}>
+                              <label htmlFor={`settlement-paid-at-${settlement.id}`}>Paid date</label>
+                              <input id={`settlement-paid-at-${settlement.id}`} name="paidAt" type="date" style={disbursementFieldStyle} />
+                            </div>
+                            <div style={{ display: "grid", gap: "0.3rem" }}>
+                              <label htmlFor={`settlement-reference-${settlement.id}`}>Reference</label>
+                              <input id={`settlement-reference-${settlement.id}`} name="referenceId" style={disbursementFieldStyle} />
+                            </div>
+                          </div>
+                          <div style={{ display: "grid", gap: "0.3rem" }}>
+                            <label htmlFor={`settlement-notes-${settlement.id}`}>Notes</label>
+                            <input id={`settlement-notes-${settlement.id}`} name="notes" style={disbursementFieldStyle} />
+                          </div>
+                          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button type="submit" disabled={settlementFetcher.state !== "idle"} style={dashboardActionStyle(true, false)}>
+                              Confirm payout
+                            </button>
+                          </div>
+                        </settlementFetcher.Form>
+                        <settlementFetcher.Form method="post" style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "end" }}>
+                          <input type="hidden" name="intent" value="ignore-order-settlement" />
+                          <input type="hidden" name="settlementId" value={settlement.id} />
+                          <div style={{ display: "grid", gap: "0.3rem", flex: "1 1 16rem" }}>
+                            <label htmlFor={`settlement-ignore-${settlement.id}`}>Ignore reason</label>
+                            <input id={`settlement-ignore-${settlement.id}`} name="ignoreReason" placeholder="Required" style={disbursementFieldStyle} />
+                          </div>
+                          <button type="submit" disabled={settlementFetcher.state !== "idle"} style={dashboardActionStyle(false, false)}>
+                            Ignore
+                          </button>
+                        </settlementFetcher.Form>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </s-banner>
+            ) : null}
 
             {activeReportingTab === "cause-payments" && selectedPeriod?.status === "CLOSED" ? (
               <div id="log-disbursement" style={{ display: "grid", gap: "0.9rem" }}>
@@ -1496,7 +1676,7 @@ export default function ReportingPage() {
               {donationPoolIsNegative ? (
                 <s-banner tone="warning">
                   <s-text>
-                    This period&apos;s donation pool is negative because Shopify charges, artist payouts, or prior true-up shortfalls exceeded contribution dollars. Review the math below before closing or paying allocations.
+                    This period&apos;s donation pool is negative because Shopify charges, external settlement fees, artist payouts, or prior true-up shortfalls exceeded contribution dollars. Review the math below before closing or paying allocations.
                   </s-text>
                 </s-banner>
               ) : null}
@@ -1517,6 +1697,12 @@ export default function ReportingPage() {
                   value={shopifyChargesArePositive ? `-${formatMoney(summary.track1.shopifyCharges)}` : formatMoney(summary.track1.shopifyCharges)}
                   tone={shopifyChargesArePositive ? "warning" : "subdued"}
                   detail="Fees and charge adjustments reduce the pool."
+                />
+                <MetricCard
+                  label="External settlement fees"
+                  value={externalSettlementFeesArePositive ? `-${formatMoney(summary.track1.externalSettlementFees ?? "0")}` : formatMoney(summary.track1.externalSettlementFees ?? "0")}
+                  tone={externalSettlementFeesArePositive ? "warning" : "subdued"}
+                  detail="Marketplace deductions entered outside Shopify."
                 />
                 <MetricCard
                   label="Artist payouts"
@@ -2592,6 +2778,57 @@ export default function ReportingPage() {
           ) : null}
 
           {activeReportingTab === "details" ? (
+          <>
+          <s-section heading="External settlements">
+            <div style={{ display: "grid", gap: "0.5rem" }}>
+              <s-text color="subdued">Marketplace or manual settlement fees deducted separately from Shopify charges.</s-text>
+              <s-table>
+                <s-table-header-row>
+                  <s-table-header listSlot="primary">Order</s-table-header>
+                  <s-table-header listSlot="secondary">Source</s-table-header>
+                  <s-table-header listSlot="secondary">Status</s-table-header>
+                  <s-table-header listSlot="secondary">Received</s-table-header>
+                  <s-table-header listSlot="secondary">Reference</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Gross</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">Fee</s-table-header>
+                </s-table-header-row>
+                <s-table-body>
+                  {externalSettlements.length === 0 ? (
+                    <s-table-row>
+                      <s-table-cell>No external settlements recorded for this period.</s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                      <s-table-cell></s-table-cell>
+                    </s-table-row>
+                  ) : (
+                    externalSettlements.map((settlement) => (
+                      <s-table-row key={settlement.id}>
+                        <s-table-cell>{settlement.orderNumber ?? settlement.shopifyOrderId}</s-table-cell>
+                        <s-table-cell>{settlement.source}</s-table-cell>
+                        <s-table-cell>{settlement.status}</s-table-cell>
+                        <s-table-cell>
+                          {settlement.amountReceived ? formatMoney(settlement.amountReceived) : "—"}
+                          {settlement.paidAt ? ` · ${formatDate(settlement.paidAt, locale)}` : ""}
+                        </s-table-cell>
+                        <s-table-cell>{settlement.referenceId ?? "—"}</s-table-cell>
+                        <s-table-cell>{formatMoney(settlement.grossOrderAmount)}</s-table-cell>
+                        <s-table-cell>{formatMoney(settlement.feeAmount)}</s-table-cell>
+                      </s-table-row>
+                    ))
+                  )}
+                </s-table-body>
+              </s-table>
+              {confirmedExternalSettlements.length > 0 ? (
+                <s-text color="subdued">
+                  Confirmed settlement fees deducted this period: {formatMoney(summary.track1.externalSettlementFees ?? "0")}
+                </s-text>
+              ) : null}
+            </div>
+          </s-section>
+
           <s-section heading="Shopify charges">
             <div style={{ display: "grid", gap: "0.5rem" }}>
               <s-text color="subdued">Charges deducted from the donation pool for this period.</s-text>
@@ -2621,6 +2858,7 @@ export default function ReportingPage() {
               </s-table>
             </div>
           </s-section>
+          </>
           ) : null}
 
           {activeReportingTab === "tax" ? (
@@ -2718,7 +2956,7 @@ export default function ReportingPage() {
           </div>
 
           <s-text>
-            Are you sure you want to close this reporting period? You will not be able to edit allocations or charges afterwards.
+            Are you sure you want to close this reporting period? You will not be able to edit allocations or charges afterwards. External settlement reviews must be confirmed or ignored first.
           </s-text>
 
           <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>

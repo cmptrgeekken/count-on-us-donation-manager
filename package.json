@@ -3,7 +3,7 @@
   "private": true,
   "scripts": {
     "build": "remix vite:build",
-    "dev": "npm run dev:db && shopify app dev --no-update --localhost-port 3000",
+    "dev": "npm run dev:db && shopify app dev --no-update",
     "dev:db": "docker compose up -d db",
     "config:link": "shopify app config link",
     "config:use:prod": "shopify app config use shopify.app.toml",
