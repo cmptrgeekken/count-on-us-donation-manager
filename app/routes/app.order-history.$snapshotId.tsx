@@ -1,15 +1,13 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { createManualAdjustment } from "../services/adjustmentService.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { useAppLocalization } from "../utils/use-app-localization";
-
-const ZERO = new Prisma.Decimal(0);
 
 const decimalField = z
   .string()
@@ -27,8 +25,13 @@ const manualAdjustmentSchema = z.object({
   equipmentAdj: decimalField,
 });
 
-function sumDecimals(values: Array<Prisma.Decimal | null | undefined>) {
-  return values.reduce<Prisma.Decimal>((sum, value) => sum.add(value ?? ZERO), ZERO);
+function sumDecimals(values: Array<Prisma.Decimal | null | undefined>, zero: Prisma.Decimal) {
+  return values.reduce<Prisma.Decimal>((sum, value) => sum.add(value ?? zero), zero);
+}
+
+function moneyNumber(value: string | null | undefined) {
+  const parsed = Number(value ?? 0);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
@@ -152,20 +155,21 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         createdAt: item.createdAt.toISOString(),
       })),
       lines: snapshot.lines.map((line) => {
+        const zero = line.laborCost.mul(0);
         const effectiveLaborCost = line.laborCost.add(
-          sumDecimals(line.adjustments.map((adjustment) => adjustment.laborAdj ?? ZERO)),
+          sumDecimals(line.adjustments.map((adjustment) => adjustment.laborAdj), zero),
         );
         const effectiveMaterialCost = line.materialCost.add(
-          sumDecimals(line.adjustments.map((adjustment) => adjustment.materialAdj ?? ZERO)),
+          sumDecimals(line.adjustments.map((adjustment) => adjustment.materialAdj), zero),
         );
         const effectivePackagingCost = line.packagingCost.add(
-          sumDecimals(line.adjustments.map((adjustment) => adjustment.packagingAdj ?? ZERO)),
+          sumDecimals(line.adjustments.map((adjustment) => adjustment.packagingAdj), zero),
         );
         const effectiveEquipmentCost = line.equipmentCost.add(
-          sumDecimals(line.adjustments.map((adjustment) => adjustment.equipmentAdj ?? ZERO)),
+          sumDecimals(line.adjustments.map((adjustment) => adjustment.equipmentAdj), zero),
         );
         const effectiveNetContribution = line.netContribution.add(
-          sumDecimals(line.adjustments.map((adjustment) => adjustment.netContribAdj ?? ZERO)),
+          sumDecimals(line.adjustments.map((adjustment) => adjustment.netContribAdj), zero),
         );
         const effectiveTotalCost = effectiveLaborCost
           .add(effectiveMaterialCost)
@@ -276,10 +280,9 @@ export default function OrderSnapshotDetailPage() {
   const adjustmentFetcher = useFetcher<{ ok: boolean; message: string }>();
   const { formatMoney } = useAppLocalization();
   const effectiveNetContributionTotal = snapshot.lines.reduce(
-    (sum: Prisma.Decimal, line: (typeof snapshot.lines)[number]) =>
-      sum.add(new Prisma.Decimal(line.effectiveNetContribution)),
-    ZERO,
-  );
+    (sum: number, line: (typeof snapshot.lines)[number]) => sum + moneyNumber(line.effectiveNetContribution),
+    0,
+  ).toFixed(2);
 
   return (
     <>
@@ -309,7 +312,7 @@ export default function OrderSnapshotDetailPage() {
               <SummaryTile label="Line count" value={snapshot.lines.length.toString()} />
               <SummaryTile
                 label="Effective net contribution"
-                value={formatMoney(effectiveNetContributionTotal.toString())}
+                value={formatMoney(effectiveNetContributionTotal)}
               />
             </div>
           </div>

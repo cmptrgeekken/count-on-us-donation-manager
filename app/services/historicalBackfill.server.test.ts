@@ -489,6 +489,9 @@ describe("historical backfill rebuild", () => {
       shopifyChargeTransaction: {
         updateMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
+      orderSettlement: {
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
       analyticalRecalculationRun: {
         deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
       },
@@ -595,7 +598,7 @@ describe("historical backfill rebuild", () => {
   }
 
   it("rebuilds a period without deleting allocation buckets that have payment applications", async () => {
-    const { db } = createRebuildDb();
+    const { db, tx } = createRebuildDb();
 
     const result = await rebuildReportingPeriod({ shopId: "shop-1", periodId: "period-1", db: db as any });
 
@@ -633,6 +636,31 @@ describe("historical backfill rebuild", () => {
     });
     expect(db.causeAllocation.deleteMany).not.toHaveBeenCalled();
     expect(db.artistAllocation.deleteMany).not.toHaveBeenCalled();
+    expect(tx.orderSettlement.updateMany).toHaveBeenCalledWith({
+      where: {
+        shopId: "shop-1",
+        snapshot: {
+          createdAt: {
+            gte: new Date("2026-01-01T00:00:00.000Z"),
+            lt: new Date("2026-01-15T00:00:00.000Z"),
+          },
+        },
+      },
+      data: { periodId: "period-1" },
+    });
+    expect(tx.orderSettlement.updateMany).toHaveBeenCalledWith({
+      where: {
+        shopId: "shop-1",
+        periodId: "period-1",
+        snapshot: {
+          OR: [
+            { createdAt: { lt: new Date("2026-01-01T00:00:00.000Z") } },
+            { createdAt: { gte: new Date("2026-01-15T00:00:00.000Z") } },
+          ],
+        },
+      },
+      data: { periodId: null },
+    });
   });
 
   it("rebuilds all periods without requiring payment applications to be dropped first", async () => {
