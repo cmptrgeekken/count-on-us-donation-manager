@@ -1,4 +1,4 @@
-import { prisma, type DbClient } from "../db.server";
+import { prisma } from "../db.server";
 import { syncProductCauseAssignmentsMetafield } from "./productCauseAssignmentService.server";
 
 type AdminContext = {
@@ -18,6 +18,11 @@ type DerivedCauseAssignment = {
   metaobjectId: string | null;
   percentage: number;
 };
+
+type ProductArtistAssignmentDb = Pick<
+  typeof prisma,
+  "artist" | "productArtistAssignment" | "productCauseAssignment" | "auditLog"
+>;
 
 const SHOPIFY_PRODUCT_GID_PATTERN = /^gid:\/\/shopify\/Product\/\d+$/;
 
@@ -53,7 +58,7 @@ export async function saveProductArtistAssignmentsLocally({
   artistAssignments,
   auditSource = "product_detail",
 }: {
-  db?: DbClient;
+  db?: ProductArtistAssignmentDb;
   shopId: string;
   product: { id: string; shopifyId: string };
   artistAssignments: ProductArtistAssignmentInput[];
@@ -99,8 +104,8 @@ export async function saveProductArtistAssignmentsLocally({
 
   for (const artist of artists) {
     const causeTotal = artist.causeAssignments.reduce((sum, assignment) => sum + Number(assignment.percentage), 0);
-    if (causeTotal !== 100) {
-      throw new Error(`${artist.displayName} must have Cause percentages totaling 100%.`);
+    if (causeTotal > 100) {
+      throw new Error(`${artist.displayName} has Cause percentages totaling more than 100%.`);
     }
   }
 

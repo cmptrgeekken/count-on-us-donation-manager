@@ -29,6 +29,7 @@ This directory contains Architecture Decision Records (ADRs) for the Shopify Don
 | [ADR-021](adr-021-shop-capability-feature-flags.md) | Shop capability feature flags | Proposed | July 2026 |
 | [ADR-022](adr-022-equipment-component-costing.md) | Equipment component costing | Proposed | July 2026 |
 | [ADR-023](adr-023-external-marketplace-settlements.md) | External marketplace settlement review | Proposed | July 2026 |
+| [ADR-024](adr-024-standardized-assignment-pickers-and-selected-lists.md) | Standardized assignment pickers and selected lists | Proposed | July 2026 |
 
 ## Dependencies
 
@@ -54,6 +55,7 @@ ADR-020 (Contextual creation and template promotion) - extends ADR-003, ADR-008,
 ADR-021 (Shop capability feature flags) - extends ADR-003, ADR-010, ADR-015, ADR-018, and ADR-020 for merchant-facing shop capability toggles that suppress optional package/provider workflows without deleting historical data
 ADR-022 (Equipment component costing) - extends ADR-001, ADR-003, ADR-008, ADR-018, and ADR-020 for calculated equipment hourly/per-use rates from electricity, depreciation, consumables, maintenance, and manual overrides
 ADR-023 (External marketplace settlement review) - extends ADR-002, ADR-006, ADR-009, ADR-012, and ADR-019 for orders paid outside Shopify, merchant-reviewed external payouts, marketplace fee treatment, and period close safeguards
+ADR-024 (Standardized assignment pickers and selected lists) - extends ADR-013, ADR-015, and ADR-020 for shared searchable assignment pickers, compact expandable selected lists, and explicit assignment validation vocabulary
 ```
 
 ## Conventions

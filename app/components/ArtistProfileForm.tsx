@@ -1,4 +1,6 @@
 import { Form, useNavigation } from "@remix-run/react";
+import { useMemo, useState } from "react";
+import { AssignmentPicker, CompactAssignmentList } from "./AssignmentControls";
 import { HelpText } from "./HelpText";
 import type { ArtistProfileActionData } from "../services/artistProfile.server";
 
@@ -61,8 +63,32 @@ export function ArtistProfileForm({
 }) {
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
-  const assignments = new Map(artist?.causeAssignments.map((assignment) => [assignment.causeId, assignment.percentage]) ?? []);
+  const [causeRows, setCauseRows] = useState<Array<{ causeId: string; percentage: string }>>(
+    () => artist?.causeAssignments.map((assignment) => ({ causeId: assignment.causeId, percentage: assignment.percentage })) ?? [],
+  );
   const idPrefix = `${intent}-${artist?.id ?? "new"}`;
+  const selectedCauseIds = useMemo(() => new Set(causeRows.map((assignment) => assignment.causeId)), [causeRows]);
+  const causeMap = useMemo(() => new Map(causes.map((cause) => [cause.id, cause])), [causes]);
+  const causeTotal = causeRows.reduce((sum, assignment) => sum + (Number(assignment.percentage) || 0), 0);
+
+  function addCauses(causeIds: string[]) {
+    setCauseRows((current) => [
+      ...current,
+      ...causeIds
+        .filter((causeId) => !current.some((assignment) => assignment.causeId === causeId))
+        .map((causeId) => ({ causeId, percentage: "" })),
+    ]);
+  }
+
+  function updateCauseRow(index: number, percentage: string) {
+    setCauseRows((current) =>
+      current.map((assignment, rowIndex) => (rowIndex === index ? { ...assignment, percentage } : assignment)),
+    );
+  }
+
+  function removeCauseRow(index: number) {
+    setCauseRows((current) => current.filter((_, rowIndex) => rowIndex !== index));
+  }
 
   return (
     <Form method="post" style={{ display: "grid", gap: "1rem" }}>
@@ -160,24 +186,66 @@ export function ArtistProfileForm({
 
       <div style={{ display: "grid", gap: "0.5rem" }}>
         <strong>Artist-selected Causes</strong>
-        <HelpText>Active Artists must total exactly 100%. Draft Artists can be incomplete.</HelpText>
+        <HelpText>Optional preferred routing for this Artist&apos;s donated share. Percentages may total 100% or less.</HelpText>
         {causes.length === 0 ? (
           <s-text color="subdued">Create active Causes before assigning artist donation routing.</s-text>
         ) : (
-          causes.map((cause) => (
-            <div key={cause.id} style={twoColumnStyle}>
-              <span>{cause.name}</span>
-              <input
-                name={`cause:${cause.id}`}
-                type="number"
-                min="0"
-                max="100"
-                step="0.01"
-                defaultValue={assignments.get(cause.id) ?? ""}
-                style={fieldStyle}
+          <>
+            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+              <span style={{ color: causeTotal > 100 ? "var(--p-color-text-critical, #8e1f1f)" : "var(--p-color-text-subdued, #6d7175)" }}>
+                Selected routing: {causeTotal.toFixed(2)}%
+              </span>
+              <AssignmentPicker
+                id={`${idPrefix}-cause-picker`}
+                label="Add artist-selected Causes"
+                triggerLabel="Add Causes"
+                options={causes.map((cause) => ({ id: cause.id, label: cause.name }))}
+                selectedIds={selectedCauseIds}
+                onAdd={addCauses}
+                searchPlaceholder="Search Causes"
+                emptyText="No Causes match that search."
               />
             </div>
-          ))
+            <CompactAssignmentList
+              emptyText="No preferred Causes selected."
+              searchPlaceholder="Filter selected Causes"
+              items={causeRows.map((assignment, index) => {
+                const cause = causeMap.get(assignment.causeId);
+                return {
+                  id: assignment.causeId,
+                  title: cause?.name ?? "Unknown Cause",
+                  subtitle: "Artist preference",
+                  summary: `${Number(assignment.percentage || 0).toFixed(2)}%`,
+                  tone: causeTotal > 100 ? "critical" : "default",
+                  defaultExpanded: !assignment.percentage,
+                  details: (
+                    <div style={twoColumnStyle}>
+                      <input type="hidden" name={`causeId:${assignment.causeId}`} value={assignment.causeId} />
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor={`${idPrefix}-cause-${index}`}>Percentage</label>
+                        <input
+                          id={`${idPrefix}-cause-${index}`}
+                          name={`cause:${assignment.causeId}`}
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={assignment.percentage}
+                          onChange={(event) => updateCauseRow(index, event.currentTarget.value)}
+                          style={fieldStyle}
+                        />
+                      </div>
+                    </div>
+                  ),
+                  actions: (
+                    <button type="button" onClick={() => removeCauseRow(index)} style={{ ...fieldStyle, width: "auto", padding: "0.55rem 0.75rem", color: "var(--p-color-text-critical, #8e1f1f)" }}>
+                      Remove
+                    </button>
+                  ),
+                };
+              })}
+            />
+          </>
         )}
       </div>
 

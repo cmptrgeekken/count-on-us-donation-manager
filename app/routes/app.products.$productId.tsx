@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useLocation, useRouteError } from "@remix-run/react";
 import { z } from "zod";
+import { AssignmentPicker, CompactAssignmentList } from "../components/AssignmentControls";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
@@ -627,24 +628,27 @@ export default function ProductDetailPage() {
     handledRef.current = nextSignature;
   }, [fetcher.data, rows]);
 
-  function addCause() {
-    if (rows.length >= causes.length) return;
-    const nextCause = availableToAdd[0];
-    setRows((current) => [...current, { causeId: nextCause?.id ?? "", percentage: "" }]);
+  function addCauses(causeIds: string[]) {
+    setRows((current) => [
+      ...current,
+      ...causeIds
+        .filter((causeId) => !current.some((row) => row.causeId === causeId))
+        .map((causeId) => ({ causeId, percentage: "" })),
+    ]);
   }
 
-  function addArtist() {
-    if (artistRows.length >= artists.length) return;
-    const nextArtist = availableArtistsToAdd[0];
+  function addArtists(artistIds: string[]) {
     setArtistRows((current) => [
       ...current,
-      {
-        artistId: nextArtist?.id ?? "",
-        collaborationShare: current.length === 0 ? "100" : "",
-        creditOverride: "",
-        payoutEnabledOverride: "inherit",
-        payoutRateOverride: "",
-      },
+      ...artistIds
+        .filter((artistId) => !current.some((row) => row.artistId === artistId))
+        .map((artistId) => ({
+          artistId,
+          collaborationShare: current.length === 0 && artistIds.length === 1 ? "100" : "",
+          creditOverride: "",
+          payoutEnabledOverride: "inherit" as const,
+          payoutRateOverride: "",
+        })),
     ]);
   }
 
@@ -851,154 +855,105 @@ export default function ProductDetailPage() {
               <Link to="/app/artists">Manage Artists</Link>
             </div>
 
-            {artistRows.length === 0 ? (
-              <s-banner tone="info">
-                <s-text>
-                  No Artists are assigned. This product uses direct Cause assignments below.
-                  {artists.length === 0 ? " Add active Artists before assigning collaborations." : ""}
-                </s-text>
-              </s-banner>
-            ) : (
-              <div style={{ display: "grid", gap: "0.6rem" }}>
-                {artistRows.map((row, index) => {
-                  const selectableArtists = artists.filter(
-                    (artist: (typeof artists)[number]) =>
-                      artist.id === row.artistId || !artistRows.some((entry, entryIndex) => entry.artistId === artist.id && entryIndex !== index),
-                  );
-                  const selectedArtist = artists.find((artist: (typeof artists)[number]) => artist.id === row.artistId);
-                  const selectedArtistCauseText = selectedArtist?.causeAssignments.length
-                    ? selectedArtist.causeAssignments
-                        .map((assignment: (typeof selectedArtist.causeAssignments)[number]) => `${assignment.causeName} ${Number(assignment.percentage).toFixed(0)}%`)
-                        .join(" · ")
-                    : "No Cause routing configured";
-                  const effectivePayout =
-                    row.payoutEnabledOverride === "inherit"
-                      ? selectedArtist?.paymentEnabled
-                        ? `${selectedArtist.defaultPayoutRate}% default payout`
-                        : "Share donated"
-                      : row.payoutEnabledOverride === "true"
-                        ? `${row.payoutRateOverride || selectedArtist?.defaultPayoutRate || "10"}% payout`
-                        : "Share donated";
+            <CompactAssignmentList
+              emptyText={`No Artists are assigned. This product uses direct Cause assignments below.${artists.length === 0 ? " Add active Artists before assigning collaborations." : ""}`}
+              searchPlaceholder="Filter selected Artists"
+              items={artistRows.map((row, index) => {
+                const selectedArtist = artists.find((artist: (typeof artists)[number]) => artist.id === row.artistId);
+                const selectedArtistCauseText = selectedArtist?.causeAssignments.length
+                  ? selectedArtist.causeAssignments
+                      .map((assignment: (typeof selectedArtist.causeAssignments)[number]) => `${assignment.causeName} ${Number(assignment.percentage).toFixed(0)}%`)
+                      .join(" · ")
+                  : "No Cause preference";
+                const effectivePayout =
+                  row.payoutEnabledOverride === "inherit"
+                    ? selectedArtist?.paymentEnabled
+                      ? `${selectedArtist.defaultPayoutRate}% default payout`
+                      : "Share donated"
+                    : row.payoutEnabledOverride === "true"
+                      ? `${row.payoutRateOverride || selectedArtist?.defaultPayoutRate || "10"}% payout`
+                      : "Share donated";
 
-                  return (
+                return {
+                  id: `${row.artistId}-${index}`,
+                  title: selectedArtist?.displayName ?? "Unknown Artist",
+                  subtitle: selectedArtist?.creditName ?? "No Artist selected",
+                  searchText: `${selectedArtist?.displayName ?? ""} ${selectedArtist?.creditName ?? ""} ${selectedArtistCauseText}`,
+                  summary: `${Number(row.collaborationShare || 0).toFixed(2)}% share`,
+                  tone: artistRows.length > 0 && artistTotal !== 100 ? "critical" as const : "default" as const,
+                  defaultExpanded: !row.collaborationShare,
+                  details: (
                     <div
-                      key={`${row.artistId}-${index}`}
                       style={{
                         display: "grid",
-                        gap: "0.65rem",
-                        padding: "0.85rem",
-                        border: "1px solid var(--p-color-border, #d2d5d8)",
-                        borderRadius: "0.5rem",
-                        background: "var(--p-color-bg-surface, #fff)",
+                        gap: "0.75rem",
+                        gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))",
                       }}
                     >
-                      <div
-                        style={{
-                          display: "grid",
-                          gap: "0.75rem",
-                          gridTemplateColumns: "minmax(15rem, 2fr) minmax(7rem, 0.6fr) minmax(14rem, 1fr) auto",
-                          alignItems: "end",
-                        }}
-                      >
-                        <div style={{ display: "grid", gap: "0.35rem" }}>
-                          <label htmlFor={`artist-${index}`}>Artist</label>
-                          <select
-                            id={`artist-${index}`}
-                            value={row.artistId}
-                            onChange={(event) => updateArtistRow(index, { artistId: event.currentTarget.value })}
-                            style={fieldStyle}
-                          >
-                            {!row.artistId ? <option value="">Select Artist</option> : null}
-                            {selectableArtists.map((artist: (typeof artists)[number]) => (
-                              <option key={artist.id} value={artist.id}>
-                                {artist.displayName}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div style={{ display: "grid", gap: "0.35rem" }}>
-                          <label htmlFor={`artist-share-${index}`}>Share</label>
-                          <input
-                            id={`artist-share-${index}`}
-                            type="number"
-                            min="0"
-                            max="100"
-                            step="0.01"
-                            value={row.collaborationShare}
-                            onChange={(event) => updateArtistRow(index, { collaborationShare: event.currentTarget.value })}
-                            style={fieldStyle}
-                          />
-                        </div>
-
-                        <div style={{ display: "grid", gap: "0.25rem" }}>
-                          <strong>{selectedArtist?.creditName ?? "No Artist selected"}</strong>
-                          <s-text color="subdued">{effectivePayout}</s-text>
-                          <s-text color="subdued">{selectedArtistCauseText}</s-text>
-                        </div>
-
-                        <s-button variant="secondary" tone="critical" onClick={() => removeArtistRow(index)}>
-                          Remove
-                        </s-button>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor={`artist-share-${index}`}>Share</label>
+                        <input
+                          id={`artist-share-${index}`}
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={row.collaborationShare}
+                          onChange={(event) => updateArtistRow(index, { collaborationShare: event.currentTarget.value })}
+                          style={fieldStyle}
+                        />
                       </div>
-
-                      <details>
-                        <summary>Overrides</summary>
-                        <div
-                          style={{
-                            display: "grid",
-                            gap: "0.75rem",
-                            gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))",
-                            paddingTop: "0.75rem",
-                          }}
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor={`artist-credit-${index}`}>Credit override</label>
+                        <input
+                          id={`artist-credit-${index}`}
+                          type="text"
+                          value={row.creditOverride}
+                          onChange={(event) => updateArtistRow(index, { creditOverride: event.currentTarget.value })}
+                          style={fieldStyle}
+                        />
+                        <HelpText>Leave blank to use the Artist credit name.</HelpText>
+                      </div>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor={`artist-payout-enabled-${index}`}>Payout rule</label>
+                        <select
+                          id={`artist-payout-enabled-${index}`}
+                          value={row.payoutEnabledOverride}
+                          onChange={(event) => updateArtistRow(index, { payoutEnabledOverride: event.currentTarget.value as ArtistAssignmentRow["payoutEnabledOverride"] })}
+                          style={fieldStyle}
                         >
-                          <div style={{ display: "grid", gap: "0.35rem" }}>
-                            <label htmlFor={`artist-credit-${index}`}>Credit override</label>
-                            <input
-                              id={`artist-credit-${index}`}
-                              type="text"
-                              value={row.creditOverride}
-                              onChange={(event) => updateArtistRow(index, { creditOverride: event.currentTarget.value })}
-                              style={fieldStyle}
-                            />
-                            <HelpText>Leave blank to use the Artist credit name.</HelpText>
-                          </div>
-
-                          <div style={{ display: "grid", gap: "0.35rem" }}>
-                            <label htmlFor={`artist-payout-enabled-${index}`}>Payout rule</label>
-                            <select
-                              id={`artist-payout-enabled-${index}`}
-                              value={row.payoutEnabledOverride}
-                              onChange={(event) => updateArtistRow(index, { payoutEnabledOverride: event.currentTarget.value as ArtistAssignmentRow["payoutEnabledOverride"] })}
-                              style={fieldStyle}
-                            >
-                              <option value="inherit">Artist default</option>
-                              <option value="true">Enabled</option>
-                              <option value="false">Disabled</option>
-                            </select>
-                          </div>
-
-                          <div style={{ display: "grid", gap: "0.35rem" }}>
-                            <label htmlFor={`artist-payout-rate-${index}`}>Payout rate override</label>
-                            <input
-                              id={`artist-payout-rate-${index}`}
-                              type="number"
-                              min="0"
-                              max="100"
-                              step="0.01"
-                              placeholder="Use Artist default"
-                              value={row.payoutRateOverride}
-                              onChange={(event) => updateArtistRow(index, { payoutRateOverride: event.currentTarget.value })}
-                              style={fieldStyle}
-                            />
-                          </div>
-                        </div>
-                      </details>
+                          <option value="inherit">Artist default</option>
+                          <option value="true">Enabled</option>
+                          <option value="false">Disabled</option>
+                        </select>
+                      </div>
+                      <div style={{ display: "grid", gap: "0.35rem" }}>
+                        <label htmlFor={`artist-payout-rate-${index}`}>Payout rate override</label>
+                        <input
+                          id={`artist-payout-rate-${index}`}
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          placeholder="Use Artist default"
+                          value={row.payoutRateOverride}
+                          onChange={(event) => updateArtistRow(index, { payoutRateOverride: event.currentTarget.value })}
+                          style={fieldStyle}
+                        />
+                      </div>
+                      <div style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>
+                        {effectivePayout} · {selectedArtistCauseText}
+                      </div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  ),
+                  actions: (
+                    <button type="button" onClick={() => removeArtistRow(index)} style={{ ...fieldStyle, width: "auto", padding: "0.55rem 0.75rem", color: "var(--p-color-text-critical, #8e1f1f)" }}>
+                      Remove
+                    </button>
+                  ),
+                };
+              })}
+            />
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
               <s-text>
@@ -1007,9 +962,27 @@ export default function ProductDetailPage() {
                 </span>
               </s-text>
               <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <s-button variant="secondary" onClick={addArtist} disabled={artistRows.length >= artists.length}>
-                  Add Artist
-                </s-button>
+                <AssignmentPicker
+                  id="product-artist-picker"
+                  label="Add Artists"
+                  triggerLabel="Add Artists"
+                  options={availableArtistsToAdd.map((artist: (typeof artists)[number]) => ({
+                    id: artist.id,
+                    label: artist.displayName,
+                    description: artist.creditName,
+                    meta: [
+                      artist.paymentEnabled ? `${artist.defaultPayoutRate}% default payout` : "Share donated",
+                      artist.causeAssignments.length > 0
+                        ? artist.causeAssignments.map((assignment: (typeof artist.causeAssignments)[number]) => `${assignment.causeName} ${Number(assignment.percentage).toFixed(0)}%`).join(" · ")
+                        : "No Cause preference",
+                    ],
+                  }))}
+                  selectedIds={selectedArtistIds}
+                  onAdd={addArtists}
+                  searchPlaceholder="Search Artists"
+                  emptyText="No Artists match that search."
+                  disabled={artistRows.length >= artists.length}
+                />
                 <s-button variant="primary" onClick={saveArtistAssignments} disabled={isSubmitting || (artistRows.length > 0 && artistTotal !== 100)}>
                   Save Artist assignments
                 </s-button>
@@ -1030,70 +1003,50 @@ export default function ProductDetailPage() {
               </s-banner>
             ) : null}
 
-            {rows.length === 0 ? (
-              <s-banner tone="warning">
-                <s-text>No Causes are assigned yet. Products without assignments donate 0%.</s-text>
-              </s-banner>
-            ) : (
-              <div style={{ display: "grid", gap: "0.75rem" }}>
-                {rows.map((row, index) => {
-                  const selectableCauses = causes.filter(
-                    (cause: (typeof causes)[number]) =>
-                      cause.id === row.causeId || !rows.some((entry, entryIndex) => entry.causeId === cause.id && entryIndex !== index),
-                  );
-
-                  return (
-                    <div
-                      key={`${row.causeId}-${index}`}
-                      style={{
-                        display: "grid",
-                        gap: "0.75rem",
-                        gridTemplateColumns: "minmax(260px, 2fr) minmax(180px, 1fr) auto",
-                        alignItems: "end",
-                      }}
-                    >
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor={`cause-${index}`}>Cause</label>
-                        <HelpText>The recipient that should receive a share of this product&apos;s future donation pool.</HelpText>
-                        <select
-                          id={`cause-${index}`}
-                          value={row.causeId}
-                          onChange={(event) => updateRow(index, { causeId: event.currentTarget.value })}
-                          style={fieldStyle}
-                        >
-                          {!row.causeId ? <option value="">Select cause</option> : null}
-                          {selectableCauses.map((cause: (typeof causes)[number]) => (
-                            <option key={cause.id} value={cause.id}>
-                              {cause.name}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor={`percentage-${index}`}>Percentage</label>
-                        <HelpText>Percent of this product&apos;s net contribution allocated to the selected Cause.</HelpText>
-                        <input
-                          id={`percentage-${index}`}
-                          type="number"
-                          inputMode="decimal"
-                          min="0"
-                          max="100"
-                          step="0.01"
-                          value={row.percentage}
-                          onChange={(event) => updateRow(index, { percentage: event.currentTarget.value })}
-                          style={fieldStyle}
-                        />
-                      </div>
-
-                      <s-button variant="secondary" tone="critical" onClick={() => removeRow(index)}>
-                        Remove
-                      </s-button>
+            <CompactAssignmentList
+              emptyText="No Causes are assigned yet. Products without assignments donate 0%."
+              searchPlaceholder="Filter selected Causes"
+              items={rows.map((row, index) => {
+                const selectedCause = causes.find((cause: (typeof causes)[number]) => cause.id === row.causeId);
+                return {
+                  id: `${row.causeId}-${index}`,
+                  title: selectedCause?.name ?? "Unknown Cause",
+                  subtitle: "Direct product routing",
+                  searchText: selectedCause?.name ?? "",
+                  summary: `${Number(row.percentage || 0).toFixed(2)}%`,
+                  tone: total > 100 ? "critical" as const : "default" as const,
+                  defaultExpanded: !row.percentage,
+                  details: (
+                    <div style={{ display: "grid", gap: "0.35rem", maxWidth: "18rem" }}>
+                      <label htmlFor={`percentage-${index}`}>Percentage</label>
+                      <HelpText>Percent of this product&apos;s net contribution allocated to the selected Cause.</HelpText>
+                      <input
+                        id={`percentage-${index}`}
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        max="100"
+                        step="0.01"
+                        value={row.percentage}
+                        onChange={(event) => updateRow(index, { percentage: event.currentTarget.value })}
+                        style={fieldStyle}
+                        disabled={artistRows.length > 0}
+                      />
                     </div>
-                  );
-                })}
-              </div>
-            )}
+                  ),
+                  actions: (
+                    <button
+                      type="button"
+                      onClick={() => removeRow(index)}
+                      disabled={artistRows.length > 0}
+                      style={{ ...fieldStyle, width: "auto", padding: "0.55rem 0.75rem", color: "var(--p-color-text-critical, #8e1f1f)" }}
+                    >
+                      Remove
+                    </button>
+                  ),
+                };
+              })}
+            />
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
               <s-text>
@@ -1102,9 +1055,24 @@ export default function ProductDetailPage() {
                 </span>
               </s-text>
               <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <s-button variant="secondary" onClick={addCause} disabled={rows.length >= causes.length || artistRows.length > 0}>
-                  Add cause
-                </s-button>
+                <AssignmentPicker
+                  id="product-cause-picker"
+                  label="Add Causes"
+                  triggerLabel="Add Causes"
+                  options={availableToAdd.map((cause: (typeof causes)[number]) => ({
+                    id: cause.id,
+                    label: cause.name,
+                    meta: [
+                      cause.is501c3 ? "501(c)(3)" : "Not marked 501(c)(3)",
+                      cause.shopifyMetaobjectId ? "Storefront metaobject linked" : "No storefront metaobject",
+                    ],
+                  }))}
+                  selectedIds={selectedCauseIds}
+                  onAdd={addCauses}
+                  searchPlaceholder="Search Causes"
+                  emptyText="No Causes match that search."
+                  disabled={rows.length >= causes.length || artistRows.length > 0}
+                />
                 <s-button variant="primary" onClick={saveAssignments} disabled={isSubmitting || artistRows.length > 0}>
                   Save assignments
                 </s-button>

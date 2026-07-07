@@ -141,6 +141,43 @@ describe("saveProductArtistAssignmentsLocally", () => {
 
     expect(db.productArtistAssignment.deleteMany).not.toHaveBeenCalled();
   });
+
+  it("allows Artists with partial Cause preferences", async () => {
+    db.artist.findMany.mockResolvedValue([
+      {
+        id: "artist-1",
+        displayName: "Alex Artist",
+        causeAssignments: [
+          {
+            causeId: "cause-1",
+            percentage: "50",
+            cause: { shopifyMetaobjectId: "gid://shopify/Metaobject/1" },
+          },
+        ],
+      },
+    ]);
+
+    const derivedAssignments = await saveProductArtistAssignmentsLocally({
+      db: db as never,
+      shopId: "fixture-shop.myshopify.com",
+      product: { id: "product-1", shopifyId: "gid://shopify/Product/1" },
+      artistAssignments: [
+        {
+          artistId: "artist-1",
+          collaborationShare: "100",
+          payoutEnabledOverride: "inherit",
+        },
+      ],
+    });
+
+    expect(derivedAssignments).toEqual([
+      {
+        causeId: "cause-1",
+        metaobjectId: "gid://shopify/Metaobject/1",
+        percentage: 50,
+      },
+    ]);
+  });
 });
 
 describe("canSyncProductToShopify", () => {
