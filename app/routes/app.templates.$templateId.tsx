@@ -4,7 +4,6 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import {
-  Autocomplete,
   Badge,
   Banner,
   BlockStack,
@@ -21,6 +20,7 @@ import {
   TitleBar,
 } from "../components/polaris-shim";
 import { z } from "zod";
+import { AssignmentPicker } from "../components/AssignmentControls";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
 import { resolveEquipmentEffectiveRates, type EquipmentForCosting } from "../services/costEngine.server";
@@ -660,6 +660,8 @@ export default function TemplateDetailPage() {
   const { confirmThenNavigate } = useUnsavedChangesGuard(isDirty);
   const selectedMaterial = availableMaterials.find((item: AvailableMaterial) => item.id === selectedMaterialId);
   const selectedEquipment = availableEquipment.find((item: AvailableEquipment) => item.id === selectedEquipmentId);
+  const selectedDefaultShippingTemplate =
+    availableShippingTemplates.find((shippingTemplate: { id: string; name: string }) => shippingTemplate.id === draft.defaultShippingTemplateId) ?? null;
   const selectedEquipmentUsageBasis = selectedEquipment?.usageBasis ?? "time_and_unit";
   const equipmentUsageModeOptions = usageModeOptionsForBasis(selectedEquipmentUsageBasis);
 
@@ -934,20 +936,50 @@ export default function TemplateDetailPage() {
 
   const selectableMaterials = availableMaterials.filter((item: AvailableMaterial) => item.type === template.type);
 
-  const filteredMaterialOptions = availableMaterials
+  const materialPickerOptions = availableMaterials
     .filter((item: AvailableMaterial) => item.type === template.type)
-    .filter((item: AvailableMaterial) => !unavailableMaterialIds.has(item.id))
-    .filter((item: AvailableMaterial) =>
-      item.name.toLowerCase().includes(materialSearchValue.trim().toLowerCase()),
-    )
-    .map((item: AvailableMaterial) => ({ value: item.id, label: item.name }));
+    .filter((item: AvailableMaterial) => !unavailableMaterialIds.has(item.id) || item.id === selectedMaterialId)
+    .map((item: AvailableMaterial) => ({
+      id: item.id,
+      label: item.name,
+      meta: [
+        item.type,
+        item.costingModel ?? "counted",
+        `${formatMoney(item.perUnitCost)} per unit`,
+      ],
+    }));
 
-  const filteredEquipmentOptions = availableEquipment
-    .filter((item: AvailableEquipment) => !unavailableEquipmentIds.has(item.id))
-    .filter((item: AvailableEquipment) =>
-      item.name.toLowerCase().includes(equipmentSearchValue.trim().toLowerCase()),
-    )
-    .map((item: AvailableEquipment) => ({ value: item.id, label: item.name }));
+  const equipmentPickerOptions = availableEquipment
+    .filter((item: AvailableEquipment) => !unavailableEquipmentIds.has(item.id) || item.id === selectedEquipmentId)
+    .map((item: AvailableEquipment) => ({
+      id: item.id,
+      label: item.name,
+      meta: [
+        item.usageBasis,
+        item.hourlyRate ? `${formatMoney(item.hourlyRate)}/hr` : "",
+        item.perUseCost ? `${formatMoney(item.perUseCost)} per use` : "",
+      ].filter(Boolean),
+    }));
+
+  function selectMaterial(nextId: string) {
+    const nextMaterial = availableMaterials.find((item: AvailableMaterial) => item.id === nextId);
+    setSelectedMaterialId(nextId);
+    setMaterialSearchValue(nextMaterial?.name ?? "");
+    setMatYield(nextMaterial?.costingModel === "yield" ? "1" : "");
+    setMatUses("");
+  }
+
+  function selectEquipment(nextId: string) {
+    const nextEquipment = availableEquipment.find((item: AvailableEquipment) => item.id === nextId);
+    setSelectedEquipmentId(nextId);
+    setEquipmentSearchValue(nextEquipment?.name ?? "");
+    setEqUsageMode(defaultUsageModeForBasis(nextEquipment?.usageBasis));
+    setEqMinutes("");
+    setEqUses("");
+    setEqYieldDurationMinutes("");
+    setEqYieldUses("");
+    setEqYieldQuantity("");
+  }
 
   return (
     <Page
@@ -1001,20 +1033,34 @@ export default function TemplateDetailPage() {
             />
             {template.type === "production" && (
               <BlockStack gap="200">
-                <Select
-                  label="Default shipping template"
-                  value={draft.defaultShippingTemplateId ?? ""}
-                  onChange={(value) =>
-                    setDraft((current) => ({ ...current, defaultShippingTemplateId: value || null }))
-                  }
-                  options={[
-                    { label: "None", value: "" },
-                    ...availableShippingTemplates.map((shippingTemplate: { id: string; name: string }) => ({
-                      label: shippingTemplate.name,
-                      value: shippingTemplate.id,
-                    })),
-                  ]}
-                />
+                <Text as="p" variant="bodyMd" fontWeight="semibold">Default shipping template</Text>
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="p" variant="bodyMd" tone={selectedDefaultShippingTemplate ? undefined : "subdued"}>
+                    {selectedDefaultShippingTemplate?.name ?? "None"}
+                  </Text>
+                  <InlineStack gap="200">
+                    <AssignmentPicker
+                      id="template-default-shipping-picker"
+                      label="Choose default shipping template"
+                      triggerLabel={selectedDefaultShippingTemplate ? "Change template" : "Choose template"}
+                      options={availableShippingTemplates.map((shippingTemplate: { id: string; name: string }) => ({
+                        id: shippingTemplate.id,
+                        label: shippingTemplate.name,
+                      }))}
+                      selectedIds={draft.defaultShippingTemplateId ? new Set([draft.defaultShippingTemplateId]) : new Set()}
+                      onAdd={(ids) => setDraft((current) => ({ ...current, defaultShippingTemplateId: ids[0] ?? null }))}
+                      multi={false}
+                      hideSelected={false}
+                      searchPlaceholder="Search shipping templates"
+                      emptyText="No shipping templates match that search."
+                    />
+                    {draft.defaultShippingTemplateId ? (
+                      <Button variant="plain" onClick={() => setDraft((current) => ({ ...current, defaultShippingTemplateId: null }))}>
+                        Clear
+                      </Button>
+                    ) : null}
+                  </InlineStack>
+                </InlineStack>
                 <Text as="p" variant="bodyMd" tone="subdued">
                   Variants using this Production template will inherit this Shipping template unless they set an explicit Shipping override.
                 </Text>
@@ -1168,32 +1214,26 @@ export default function TemplateDetailPage() {
             {editingMaterialLineId ? (
               <TextField label="Material" value={selectedMaterial?.name ?? ""} autoComplete="off" disabled />
             ) : (
-              <Autocomplete
-                options={filteredMaterialOptions}
-                selected={selectedMaterialId ? [selectedMaterialId] : []}
-                onSelect={(selected) => {
-                  const nextId = selected[0] ?? "";
-                  const nextMaterial = availableMaterials.find((item: AvailableMaterial) => item.id === nextId);
-                  setSelectedMaterialId(nextId);
-                  setMaterialSearchValue(nextMaterial?.name ?? "");
-                  setMatYield(nextMaterial?.costingModel === "yield" ? "1" : "");
-                  setMatUses("");
-                }}
-                textField={
-                  <Autocomplete.TextField
-                    label="Material"
-                    value={materialSearchValue}
-                    onChange={setMaterialSearchValue}
-                    autoComplete="off"
-                    placeholder="Search materials"
-                  />
-                }
-                emptyState={
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    No materials match that search.
+              <BlockStack gap="200">
+                <Text as="p" variant="bodyMd" fontWeight="semibold">Material</Text>
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="p" variant="bodyMd" tone={selectedMaterial ? undefined : "subdued"}>
+                    {selectedMaterial ? selectedMaterial.name : "No material selected"}
                   </Text>
-                }
-              />
+                  <AssignmentPicker
+                    id="template-material-picker"
+                    label="Choose material"
+                    triggerLabel={selectedMaterial ? "Change material" : "Choose material"}
+                    options={materialPickerOptions}
+                    selectedIds={selectedMaterialId ? new Set([selectedMaterialId]) : new Set()}
+                    onAdd={(ids) => selectMaterial(ids[0] ?? "")}
+                    multi={false}
+                    hideSelected={false}
+                    searchPlaceholder="Search materials"
+                    emptyText="No materials match that search."
+                  />
+                </InlineStack>
+              </BlockStack>
             )}
             {!editingMaterialLineId ? (
               <Button
@@ -1283,36 +1323,26 @@ export default function TemplateDetailPage() {
                 disabled
               />
             ) : (
-              <Autocomplete
-                options={filteredEquipmentOptions}
-                selected={selectedEquipmentId ? [selectedEquipmentId] : []}
-                onSelect={(selected) => {
-                  const nextId = selected[0] ?? "";
-                  const nextEquipment = availableEquipment.find((item: AvailableEquipment) => item.id === nextId);
-                  setSelectedEquipmentId(nextId);
-                  setEquipmentSearchValue(nextEquipment?.name ?? "");
-                  setEqUsageMode(defaultUsageModeForBasis(nextEquipment?.usageBasis));
-                  setEqMinutes("");
-                  setEqUses("");
-                  setEqYieldDurationMinutes("");
-                  setEqYieldUses("");
-                  setEqYieldQuantity("");
-                }}
-                textField={
-                  <Autocomplete.TextField
-                    label="Equipment"
-                    value={equipmentSearchValue}
-                    onChange={setEquipmentSearchValue}
-                    autoComplete="off"
-                    placeholder="Search equipment"
-                  />
-                }
-                emptyState={
-                  <Text as="p" variant="bodyMd" tone="subdued">
-                    No equipment matches that search.
+              <BlockStack gap="200">
+                <Text as="p" variant="bodyMd" fontWeight="semibold">Equipment</Text>
+                <InlineStack align="space-between" blockAlign="center">
+                  <Text as="p" variant="bodyMd" tone={selectedEquipment ? undefined : "subdued"}>
+                    {selectedEquipment ? selectedEquipment.name : "No equipment selected"}
                   </Text>
-                }
-              />
+                  <AssignmentPicker
+                    id="template-equipment-picker"
+                    label="Choose equipment"
+                    triggerLabel={selectedEquipment ? "Change equipment" : "Choose equipment"}
+                    options={equipmentPickerOptions}
+                    selectedIds={selectedEquipmentId ? new Set([selectedEquipmentId]) : new Set()}
+                    onAdd={(ids) => selectEquipment(ids[0] ?? "")}
+                    multi={false}
+                    hideSelected={false}
+                    searchPlaceholder="Search equipment"
+                    emptyText="No equipment matches that search."
+                  />
+                </InlineStack>
+              </BlockStack>
             )}
             {!editingEquipmentLineId ? (
               <Button

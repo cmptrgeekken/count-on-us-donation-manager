@@ -1,8 +1,10 @@
 import { jsonResponse } from "~/utils/json-response.server";
+import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import type { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { AssignmentPicker } from "../components/AssignmentControls";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { createManualAdjustment } from "../services/adjustmentService.server";
@@ -373,6 +375,9 @@ export default function OrderSnapshotDetailPage() {
   const adjustmentFetcher = useFetcher<{ ok: boolean; message: string }>();
   const attributionFetcher = useFetcher<{ ok: boolean; message: string }>();
   const { formatMoney } = useAppLocalization();
+  const [selectedAttributionArtistId, setSelectedAttributionArtistId] = useState(snapshot.artistAttribution?.artistId ?? "");
+  const selectedAttributionArtist =
+    artists.find((artist: (typeof artists)[number]) => artist.id === selectedAttributionArtistId) ?? null;
   const effectiveNetContributionTotal = snapshot.lines.reduce(
     (sum: number, line: (typeof snapshot.lines)[number]) => sum + moneyNumber(line.effectiveNetContribution),
     0,
@@ -450,34 +455,55 @@ export default function OrderSnapshotDetailPage() {
                 <s-text>
                   Associated with {snapshot.artistAttribution.artistName} ({snapshot.artistAttribution.creditName}) via {snapshot.artistAttribution.source.replaceAll("_", " ")}.
                 </s-text>
-              </s-banner>
-            ) : null}
+            </s-banner>
+          ) : null}
             <attributionFetcher.Form method="post" style={{ display: "grid", gap: "0.75rem", maxWidth: "42rem" }}>
               <input type="hidden" name="intent" value="save-artist-attribution" />
+              <input type="hidden" name="artistId" value={selectedAttributionArtistId} />
               <div style={{ display: "grid", gap: "0.35rem" }}>
-                <label htmlFor="artist-attribution">Artist</label>
-                <select
-                  id="artist-attribution"
-                  name="artistId"
-                  defaultValue={snapshot.artistAttribution?.artistId ?? ""}
-                  style={{
-                    width: "100%",
-                    boxSizing: "border-box",
-                    padding: "0.75rem",
-                    borderRadius: "0.75rem",
-                    border: "1px solid var(--p-color-border, #d2d5d8)",
-                    background: "var(--p-color-bg-surface, #fff)",
-                    color: "var(--p-color-text, #303030)",
-                    font: "inherit",
-                  }}
-                >
-                  <option value="">No artist association</option>
-                  {artists.map((artist: (typeof artists)[number]) => (
-                    <option key={artist.id} value={artist.id}>
-                      {artist.displayName} ({artist.creditName}){artist.status === "draft" ? " - draft" : ""}
-                    </option>
-                  ))}
-                </select>
+                <strong>Artist</strong>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                  <span style={{ color: selectedAttributionArtist ? "inherit" : "var(--p-color-text-subdued, #6d7175)" }}>
+                    {selectedAttributionArtist
+                      ? `${selectedAttributionArtist.displayName} (${selectedAttributionArtist.creditName})${selectedAttributionArtist.status === "draft" ? " - draft" : ""}`
+                      : "No artist association"}
+                  </span>
+                  <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                    <AssignmentPicker
+                      id="order-artist-attribution-picker"
+                      label="Choose Artist"
+                      triggerLabel={selectedAttributionArtist ? "Change Artist" : "Choose Artist"}
+                      options={artists.map((artist: (typeof artists)[number]) => ({
+                        id: artist.id,
+                        label: artist.displayName,
+                        description: artist.creditName,
+                        meta: [artist.status],
+                      }))}
+                      selectedIds={selectedAttributionArtistId ? new Set([selectedAttributionArtistId]) : new Set()}
+                      onAdd={(ids) => setSelectedAttributionArtistId(ids[0] ?? "")}
+                      multi={false}
+                      hideSelected={false}
+                      searchPlaceholder="Search Artists"
+                      emptyText="No Artists match that search."
+                    />
+                    {selectedAttributionArtistId ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedAttributionArtistId("")}
+                        style={{
+                          border: "1px solid var(--p-color-border, #d2d5d8)",
+                          borderRadius: "0.5rem",
+                          background: "var(--p-color-bg-surface, #fff)",
+                          padding: "0.55rem 0.75rem",
+                          cursor: "pointer",
+                          font: "inherit",
+                        }}
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
               </div>
               <div style={{ display: "grid", gap: "0.35rem" }}>
                 <label htmlFor="artist-attribution-notes">Notes</label>

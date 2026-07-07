@@ -101,14 +101,6 @@ export async function saveArtistProfileFromForm({
   }
 
   const totalCausePercentage = causeAssignments.reduce((sum, assignment) => sum + assignment.percentage, 0);
-  if (parsed.data.status === "active" && totalCausePercentage !== 100) {
-    return {
-      ok: false,
-      message: "Active Artists must have Cause percentages totaling 100%.",
-      fieldErrors: { causes: ["Active Artists must have Cause percentages totaling 100%."] },
-    } satisfies ArtistProfileActionData;
-  }
-
   if (totalCausePercentage > 100) {
     return {
       ok: false,

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useLocation, useRouteError } from "@remix-run/react";
 import { z } from "zod";
+import { AssignmentPicker } from "../components/AssignmentControls";
 import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
@@ -438,6 +439,8 @@ export default function ProductsPage() {
   const [selectedArtistId, setSelectedArtistId] = useState(artists[0]?.id ?? "");
   const allSelected = products.length > 0 && selectedProductIds.length === products.length;
   const isBulkSubmitting = bulkFetcher.state !== "idle";
+  const selectedArtist = artists.find((artist: ArtistOption) => artist.id === selectedArtistId) ?? null;
+  const selectedCause = causes.find((cause: CauseOption) => cause.id === selectedCauseId) ?? null;
 
   useEffect(() => {
     setSelectedProductIds((current) => current.filter((id) => products.some((product: ProductRow) => product.id === id)));
@@ -588,31 +591,45 @@ export default function ProductsPage() {
 
                     {bulkMode === "artist" ? (
                       <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor="bulk-artist">Artist</label>
-                        <select
-                          id="bulk-artist"
-                          value={selectedArtistId}
-                          onChange={(event) => setSelectedArtistId(event.currentTarget.value)}
-                          style={fieldStyle}
-                        >
-                          {artists.map((artist: ArtistOption) => (
-                            <option key={artist.id} value={artist.id}>{artist.displayName}</option>
-                          ))}
-                        </select>
+                        <strong>Artist</strong>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                          <span style={{ color: selectedArtist ? "inherit" : "var(--p-color-text-subdued, #6d7175)" }}>
+                            {selectedArtist?.displayName ?? "No Artist selected"}
+                          </span>
+                          <AssignmentPicker
+                            id="products-bulk-artist-picker"
+                            label="Choose Artist"
+                            triggerLabel={selectedArtist ? "Change Artist" : "Choose Artist"}
+                            options={artists.map((artist: ArtistOption) => ({ id: artist.id, label: artist.displayName }))}
+                            selectedIds={selectedArtistId ? new Set([selectedArtistId]) : new Set()}
+                            onAdd={(ids) => setSelectedArtistId(ids[0] ?? "")}
+                            multi={false}
+                            hideSelected={false}
+                            searchPlaceholder="Search Artists"
+                            emptyText="No Artists match that search."
+                          />
+                        </div>
                       </div>
                     ) : (
                       <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor="bulk-cause">Cause</label>
-                        <select
-                          id="bulk-cause"
-                          value={selectedCauseId}
-                          onChange={(event) => setSelectedCauseId(event.currentTarget.value)}
-                          style={fieldStyle}
-                        >
-                          {causes.map((cause: CauseOption) => (
-                            <option key={cause.id} value={cause.id}>{cause.name}</option>
-                          ))}
-                        </select>
+                        <strong>Cause</strong>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                          <span style={{ color: selectedCause ? "inherit" : "var(--p-color-text-subdued, #6d7175)" }}>
+                            {selectedCause?.name ?? "No Cause selected"}
+                          </span>
+                          <AssignmentPicker
+                            id="products-bulk-cause-picker"
+                            label="Choose Cause"
+                            triggerLabel={selectedCause ? "Change Cause" : "Choose Cause"}
+                            options={causes.map((cause: CauseOption) => ({ id: cause.id, label: cause.name }))}
+                            selectedIds={selectedCauseId ? new Set([selectedCauseId]) : new Set()}
+                            onAdd={(ids) => setSelectedCauseId(ids[0] ?? "")}
+                            multi={false}
+                            hideSelected={false}
+                            searchPlaceholder="Search Causes"
+                            emptyText="No Causes match that search."
+                          />
+                        </div>
                       </div>
                     )}
 

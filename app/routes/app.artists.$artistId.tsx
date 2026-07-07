@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useActionData, useFetcher, useLoaderData, useRouteError } from "@remix-run/react";
 import { z } from "zod";
+import { AssignmentPicker, CompactAssignmentList } from "../components/AssignmentControls";
 import { ArtistProfileForm } from "../components/ArtistProfileForm";
 import { prisma } from "../db.server";
 import {
@@ -42,13 +43,6 @@ const fieldStyle = {
   background: "var(--p-color-bg-surface, #fff)",
   color: "var(--p-color-text, #303030)",
   font: "inherit",
-};
-
-const compactGridStyle = {
-  display: "grid",
-  gap: "0.75rem",
-  gridTemplateColumns: "minmax(12rem, 2fr) minmax(6rem, 0.5fr) minmax(12rem, 1fr) auto",
-  alignItems: "end",
 };
 
 type ProductMappingRow = {
@@ -413,42 +407,33 @@ function ProductMappingsEditor({
 }) {
   const mappingFetcher = useFetcher<ProductMappingActionData>();
   const [rows, setRows] = useState<ProductMappingRow[]>(() => artist.productMappings);
-  const [query, setQuery] = useState("");
-  const [resultsOpen, setResultsOpen] = useState(false);
   const selectedProductIds = useMemo(() => new Set(rows.map((row) => row.productId)), [rows]);
   const isSubmitting = mappingFetcher.state !== "idle";
 
-  const filteredProducts = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    if (!normalized) return [];
-    return products
-      .filter((product) => !selectedProductIds.has(product.id))
-      .filter((product) => {
-        const haystack = `${product.title} ${product.handle} ${product.status}`.toLowerCase();
-        return haystack.includes(normalized);
-      })
-      .slice(0, 8);
-  }, [products, query, selectedProductIds]);
-
-  function addProduct(product: (typeof products)[number]) {
-    const otherArtistShares = product.artistShares.filter((share) => share.artistId !== artist.id);
-    const otherShareTotal = otherArtistShares.reduce((sum, share) => sum + (Number(share.collaborationShare) || 0), 0);
+  function addProducts(productIds: string[]) {
+    const productsToAdd = productIds
+      .map((productId) => products.find((product) => product.id === productId))
+      .filter((product): product is ProductSearchOption => Boolean(product));
     setRows((current) => [
       ...current,
-      {
-        productId: product.id,
-        productTitle: product.title,
-        productHandle: product.handle,
-        productStatus: product.status,
-        collaborationShare: Math.max(0, 100 - otherShareTotal).toString(),
-        creditOverride: "",
-        payoutEnabledOverride: "inherit",
-        payoutRateOverride: "",
-        otherArtistShares,
-      },
+      ...productsToAdd
+        .filter((product) => !current.some((row) => row.productId === product.id))
+        .map((product) => {
+          const otherArtistShares = product.artistShares.filter((share) => share.artistId !== artist.id);
+          const otherShareTotal = otherArtistShares.reduce((sum, share) => sum + (Number(share.collaborationShare) || 0), 0);
+          return {
+            productId: product.id,
+            productTitle: product.title,
+            productHandle: product.handle,
+            productStatus: product.status,
+            collaborationShare: Math.max(0, 100 - otherShareTotal).toString(),
+            creditOverride: "",
+            payoutEnabledOverride: "inherit" as const,
+            payoutRateOverride: "",
+            otherArtistShares,
+          };
+        }),
     ]);
-    setQuery("");
-    setResultsOpen(false);
   }
 
   function updateRow(index: number, patch: Partial<ProductMappingRow>) {
@@ -491,175 +476,125 @@ function ProductMappingsEditor({
         </s-banner>
       ) : null}
 
-      <div style={{ display: "grid", gap: "0.45rem" }}>
-        <label htmlFor={`product-search-${artist.id}`}>Add product</label>
-        <input
-          id={`product-search-${artist.id}`}
-          type="text"
-          value={query}
-          placeholder="Search products by title or handle"
-          autoComplete="off"
-          onFocus={() => setResultsOpen(true)}
-          onClick={() => setResultsOpen(true)}
-          onChange={(event) => {
-            setQuery(event.currentTarget.value);
-            setResultsOpen(true);
-          }}
-          style={fieldStyle}
+      <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap", alignItems: "center" }}>
+        <span style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>{rows.length} selected</span>
+        <AssignmentPicker
+          id={`product-picker-${artist.id}`}
+          label="Add products"
+          triggerLabel="Add products"
+          options={products.map((product) => {
+            const otherArtistShares = product.artistShares.filter((share) => share.artistId !== artist.id);
+            const otherShareTotal = otherArtistShares.reduce((sum, share) => sum + (Number(share.collaborationShare) || 0), 0);
+            return {
+              id: product.id,
+              label: product.title,
+              description: `/${product.handle}`,
+              meta: [
+                product.status,
+                ...(otherArtistShares.length > 0 ? [`${otherShareTotal.toFixed(2)}% already assigned`] : []),
+              ],
+            };
+          })}
+          selectedIds={selectedProductIds}
+          onAdd={addProducts}
+          searchPlaceholder="Search products by title, handle, or status"
+          emptyText="No products match that search."
         />
-        {resultsOpen && query.trim() ? (
-          <div
-            style={{
-              width: "100%",
-              maxHeight: "16rem",
-              border: "1px solid var(--p-color-border, #d2d5d8)",
-              borderRadius: "0.5rem",
-              background: "var(--p-color-bg-surface, #fff)",
-              boxShadow: "0 12px 24px rgba(0, 0, 0, 0.12)",
-              overflowY: "auto",
-            }}
-          >
-            {filteredProducts.length === 0 ? (
-              <div style={{ padding: "0.75rem 1rem" }}>No products match that search.</div>
-            ) : (
-              filteredProducts.map((product) => {
-                const otherArtistShares = product.artistShares.filter((share) => share.artistId !== artist.id);
-                const otherShareTotal = otherArtistShares.reduce((sum, share) => sum + (Number(share.collaborationShare) || 0), 0);
-                return (
-                  <button
-                    key={product.id}
-                    type="button"
-                    onClick={() => addProduct(product)}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      border: 0,
-                      borderBottom: "1px solid var(--p-color-border-subdued, #ebebeb)",
-                      background: "var(--p-color-bg-surface, #fff)",
-                      padding: "0.75rem 1rem",
-                      textAlign: "left",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <strong>{product.title}</strong>
-                    <div style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>
-                      /{product.handle} · {product.status}
-                      {otherArtistShares.length > 0 ? ` · ${otherShareTotal.toFixed(2)}% already assigned` : ""}
-                    </div>
-                  </button>
-                );
-              })
-            )}
-          </div>
-        ) : null}
       </div>
 
-      {rows.length === 0 ? (
-        <s-text color="subdued">No products are assigned to this Artist.</s-text>
-      ) : (
-        <div style={{ display: "grid", gap: "0.75rem" }}>
-          {rows.map((row, index) => {
-            const otherShareTotal = row.otherArtistShares.reduce((sum, share) => sum + (Number(share.collaborationShare) || 0), 0);
-            const productTotal = otherShareTotal + (Number(row.collaborationShare) || 0);
-            return (
+      <CompactAssignmentList
+        emptyText="No products are assigned to this Artist."
+        searchPlaceholder="Filter selected products"
+        items={rows.map((row, index) => {
+          const otherShareTotal = row.otherArtistShares.reduce((sum, share) => sum + (Number(share.collaborationShare) || 0), 0);
+          const productTotal = otherShareTotal + (Number(row.collaborationShare) || 0);
+          return {
+            id: row.productId,
+            title: row.productTitle,
+            subtitle: `/${row.productHandle} · ${row.productStatus}`,
+            searchText: `${row.productTitle} ${row.productHandle} ${row.productStatus}`,
+            summary: (
+              <span style={{ color: productTotal !== 100 ? "var(--p-color-text-critical, #8e1f1f)" : "var(--p-color-text-subdued, #6d7175)" }}>
+                {Number(row.collaborationShare || 0).toFixed(2)}% share
+              </span>
+            ),
+            tone: productTotal !== 100 ? "critical" as const : "default" as const,
+            details: (
               <div
-                key={row.productId}
                 style={{
                   display: "grid",
                   gap: "0.75rem",
-                  padding: "0.85rem",
-                  border: "1px solid var(--p-color-border, #d2d5d8)",
-                  borderRadius: "0.5rem",
-                  background: "var(--p-color-bg-surface, #fff)",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))",
                 }}
               >
-                <div style={compactGridStyle}>
-                  <div style={{ display: "grid", gap: "0.2rem" }}>
-                    <strong>{row.productTitle}</strong>
-                    <s-text color="subdued">/{row.productHandle} · {row.productStatus}</s-text>
-                  </div>
-                  <div style={{ display: "grid", gap: "0.35rem" }}>
-                    <label htmlFor={`product-share-${artist.id}-${index}`}>Share</label>
-                    <input
-                      id={`product-share-${artist.id}-${index}`}
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.01"
-                      value={row.collaborationShare}
-                      onChange={(event) => updateRow(index, { collaborationShare: event.currentTarget.value })}
-                      style={fieldStyle}
-                    />
-                  </div>
-                  <div style={{ display: "grid", gap: "0.2rem" }}>
-                    <span style={{ color: productTotal !== 100 ? "var(--p-color-text-critical, #8e1f1f)" : "var(--p-color-text-subdued, #6d7175)" }}>
-                      Product total: {productTotal.toFixed(2)}%
-                    </span>
-                    <s-text color="subdued">
-                      {row.otherArtistShares.length > 0
-                        ? `Other Artists: ${row.otherArtistShares.map((share) => `${share.artistName} ${Number(share.collaborationShare).toFixed(2)}%`).join(", ")}`
-                        : "No other Artists assigned"}
-                    </s-text>
-                  </div>
-                  <s-button variant="secondary" tone="critical" onClick={() => removeRow(index)}>
-                    Remove
-                  </s-button>
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor={`product-share-${artist.id}-${index}`}>Share</label>
+                  <input
+                    id={`product-share-${artist.id}-${index}`}
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={row.collaborationShare}
+                    onChange={(event) => updateRow(index, { collaborationShare: event.currentTarget.value })}
+                    style={fieldStyle}
+                  />
+                  <span style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>
+                    Product total: {productTotal.toFixed(2)}%
+                  </span>
                 </div>
-
-                <details>
-                  <summary>Overrides</summary>
-                  <div
-                    style={{
-                      display: "grid",
-                      gap: "0.75rem",
-                      gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))",
-                      paddingTop: "0.75rem",
-                    }}
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor={`product-credit-${artist.id}-${index}`}>Credit override</label>
+                  <input
+                    id={`product-credit-${artist.id}-${index}`}
+                    type="text"
+                    value={row.creditOverride}
+                    onChange={(event) => updateRow(index, { creditOverride: event.currentTarget.value })}
+                    style={fieldStyle}
+                  />
+                </div>
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor={`product-payout-enabled-${artist.id}-${index}`}>Payout rule</label>
+                  <select
+                    id={`product-payout-enabled-${artist.id}-${index}`}
+                    value={row.payoutEnabledOverride}
+                    onChange={(event) => updateRow(index, { payoutEnabledOverride: event.currentTarget.value as ProductMappingRow["payoutEnabledOverride"] })}
+                    style={fieldStyle}
                   >
-                    <div style={{ display: "grid", gap: "0.35rem" }}>
-                      <label htmlFor={`product-credit-${artist.id}-${index}`}>Credit override</label>
-                      <input
-                        id={`product-credit-${artist.id}-${index}`}
-                        type="text"
-                        value={row.creditOverride}
-                        onChange={(event) => updateRow(index, { creditOverride: event.currentTarget.value })}
-                        style={fieldStyle}
-                      />
-                    </div>
-                    <div style={{ display: "grid", gap: "0.35rem" }}>
-                      <label htmlFor={`product-payout-enabled-${artist.id}-${index}`}>Payout rule</label>
-                      <select
-                        id={`product-payout-enabled-${artist.id}-${index}`}
-                        value={row.payoutEnabledOverride}
-                        onChange={(event) => updateRow(index, { payoutEnabledOverride: event.currentTarget.value as ProductMappingRow["payoutEnabledOverride"] })}
-                        style={fieldStyle}
-                      >
-                        <option value="inherit">Artist default</option>
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
-                      </select>
-                    </div>
-                    <div style={{ display: "grid", gap: "0.35rem" }}>
-                      <label htmlFor={`product-payout-rate-${artist.id}-${index}`}>Payout rate override</label>
-                      <input
-                        id={`product-payout-rate-${artist.id}-${index}`}
-                        type="number"
-                        min="0"
-                        max="100"
-                        step="0.01"
-                        placeholder="Use Artist default"
-                        value={row.payoutRateOverride}
-                        onChange={(event) => updateRow(index, { payoutRateOverride: event.currentTarget.value })}
-                        style={fieldStyle}
-                      />
-                    </div>
-                  </div>
-                </details>
+                    <option value="inherit">Artist default</option>
+                    <option value="true">Enabled</option>
+                    <option value="false">Disabled</option>
+                  </select>
+                </div>
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor={`product-payout-rate-${artist.id}-${index}`}>Payout rate override</label>
+                  <input
+                    id={`product-payout-rate-${artist.id}-${index}`}
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    placeholder="Use Artist default"
+                    value={row.payoutRateOverride}
+                    onChange={(event) => updateRow(index, { payoutRateOverride: event.currentTarget.value })}
+                    style={fieldStyle}
+                  />
+                </div>
+                <div style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>
+                  {row.otherArtistShares.length > 0
+                    ? `Other Artists: ${row.otherArtistShares.map((share) => `${share.artistName} ${Number(share.collaborationShare).toFixed(2)}%`).join(", ")}`
+                    : "No other Artists assigned"}
+                </div>
               </div>
-            );
-          })}
-        </div>
-      )}
+            ),
+            actions: (
+              <button type="button" onClick={() => removeRow(index)} style={{ ...fieldStyle, width: "auto", padding: "0.55rem 0.75rem", color: "var(--p-color-text-critical, #8e1f1f)" }}>
+                Remove
+              </button>
+            ),
+          };
+        })}
+      />
 
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <s-button type="button" variant="primary" disabled={isSubmitting} onClick={saveProductMappings}>

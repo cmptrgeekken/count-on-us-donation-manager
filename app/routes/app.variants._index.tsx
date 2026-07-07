@@ -2,6 +2,7 @@ import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
+import { AssignmentPicker } from "../components/AssignmentControls";
 import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
@@ -540,6 +541,7 @@ export default function VariantsPage() {
   const statusMessage = fetcher.data?.message ?? "";
   const assignmentMismatches = fetcher.data?.ok ? (fetcher.data.mismatches ?? []) : [];
   const allSelected = variants.length > 0 && selectedVariantIds.length === variants.length;
+  const selectedTemplate = templates.find((template: { id: string; name: string }) => template.id === selectedTemplateId) ?? null;
 
   const selectedConfiguredCount = useMemo(
     () => variants.filter((variant: VariantRow) => selectedVariantIds.includes(variant.id) && variant.hasConfig).length,
@@ -978,26 +980,24 @@ export default function VariantsPage() {
             <s-text>No active templates are available. Create a template first.</s-text>
           ) : (
             <div style={{ display: "grid", gap: "0.35rem" }}>
-              <label htmlFor="variant-template-assign">Template</label>
-              <select
-                id="variant-template-assign"
-                value={selectedTemplateId}
-                onChange={(event) => setSelectedTemplateId(event.currentTarget.value)}
-                style={{
-                  width: "100%",
-                  boxSizing: "border-box",
-                  padding: "0.75rem",
-                  borderRadius: "0.75rem",
-                  border: "1px solid var(--p-color-border, #d2d5d8)",
-                  background: "var(--p-color-bg-surface, #fff)",
-                  color: "var(--p-color-text, #303030)",
-                  font: "inherit",
-                }}
-	              >
-	                {templates.map((template: { id: string; name: string }) => (
-	                  <option key={template.id} value={template.id}>{template.name}</option>
-	                ))}
-	              </select>
+              <strong>Template</strong>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                <span style={{ color: selectedTemplate ? "inherit" : "var(--p-color-text-subdued, #6d7175)" }}>
+                  {selectedTemplate?.name ?? "No template selected"}
+                </span>
+                <AssignmentPicker
+                  id="variants-bulk-template-picker"
+                  label="Choose template"
+                  triggerLabel={selectedTemplate ? "Change template" : "Choose template"}
+                  options={templates.map((template: { id: string; name: string }) => ({ id: template.id, label: template.name }))}
+                  selectedIds={selectedTemplateId ? new Set([selectedTemplateId]) : new Set()}
+                  onAdd={(ids) => setSelectedTemplateId(ids[0] ?? "")}
+                  multi={false}
+                  hideSelected={false}
+                  searchPlaceholder="Search templates"
+                  emptyText="No templates match that search."
+                />
+              </div>
               <label style={{ display: "flex", gap: "0.5rem", alignItems: "start" }}>
                 <input
                   type="checkbox"

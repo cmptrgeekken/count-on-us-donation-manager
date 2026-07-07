@@ -4,6 +4,7 @@ import { Link, useFetcher, useLoaderData, useRouteError } from "@remix-run/react
 import { Prisma } from "@prisma/client";
 import { useEffect, useState } from "react";
 import { z } from "zod";
+import { AssignmentPicker } from "../components/AssignmentControls";
 import { prisma } from "../db.server";
 import { createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { calculatePackageMaterialCost } from "../services/packaging.server";
@@ -281,6 +282,58 @@ function Field({ label, name, defaultValue = "", type = "text" }: { label: strin
   );
 }
 
+function PackageMaterialLineForm({
+  packageId,
+  shippingMaterials,
+  isSubmitting,
+}: {
+  packageId: string;
+  shippingMaterials: ShippingMaterialRow[];
+  isSubmitting: boolean;
+}) {
+  const lineFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const [selectedMaterialId, setSelectedMaterialId] = useState(shippingMaterials[0]?.id ?? "");
+  const selectedMaterial = shippingMaterials.find((material) => material.id === selectedMaterialId) ?? null;
+  const isLineSubmitting = isSubmitting || lineFetcher.state !== "idle";
+
+  useEffect(() => {
+    if (shippingMaterials.length > 0 && !shippingMaterials.some((material) => material.id === selectedMaterialId)) {
+      setSelectedMaterialId(shippingMaterials[0].id);
+    }
+  }, [selectedMaterialId, shippingMaterials]);
+
+  return (
+    <lineFetcher.Form method="post" style={{ display: "grid", gridTemplateColumns: "minmax(12rem, 1fr) 90px auto", gap: "0.5rem", alignItems: "center" }}>
+      <input type="hidden" name="intent" value="add-material-line" />
+      <input type="hidden" name="packageId" value={packageId} />
+      <input type="hidden" name="materialId" value={selectedMaterialId} />
+      <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ color: selectedMaterial ? "inherit" : "var(--p-color-text-subdued, #6d7175)" }}>
+          {selectedMaterial?.name ?? "No material selected"}
+        </span>
+        <AssignmentPicker
+          id={`package-material-picker-${packageId}`}
+          label="Choose shipping material"
+          triggerLabel={selectedMaterial ? "Change" : "Choose"}
+          options={shippingMaterials.map((material) => ({
+            id: material.id,
+            label: material.name,
+            meta: [`${material.perUnitCost} per unit`],
+          }))}
+          selectedIds={selectedMaterialId ? new Set([selectedMaterialId]) : new Set()}
+          onAdd={(ids) => setSelectedMaterialId(ids[0] ?? "")}
+          multi={false}
+          hideSelected={false}
+          searchPlaceholder="Search shipping materials"
+          emptyText="No shipping materials match that search."
+        />
+      </div>
+      <input name="quantity" type="number" step="0.001" defaultValue="1" style={{ padding: "0.5rem", border: "1px solid #d2d5d8", borderRadius: "0.5rem" }} />
+      <s-button type="submit" variant="secondary" disabled={isLineSubmitting || !selectedMaterialId}>Add</s-button>
+    </lineFetcher.Form>
+  );
+}
+
 export default function PackagesPage() {
   const { packages, shippingMaterials: loadedShippingMaterials, reviewItems } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{
@@ -415,17 +468,7 @@ export default function PackagesPage() {
                             </div>
                           ))}
                           {shippingMaterials.length > 0 ? (
-                            <fetcher.Form method="post" style={{ display: "grid", gridTemplateColumns: "1fr 90px auto", gap: "0.5rem" }}>
-                              <input type="hidden" name="intent" value="add-material-line" />
-                              <input type="hidden" name="packageId" value={pkg.id} />
-                              <select name="materialId" style={{ padding: "0.5rem", border: "1px solid #d2d5d8", borderRadius: "0.5rem" }}>
-                                {shippingMaterials.map((material: ShippingMaterialRow) => (
-                                  <option key={material.id} value={material.id}>{material.name}</option>
-                                ))}
-                              </select>
-                              <input name="quantity" type="number" step="0.001" defaultValue="1" style={{ padding: "0.5rem", border: "1px solid #d2d5d8", borderRadius: "0.5rem" }} />
-                              <s-button type="submit" variant="secondary" disabled={isSubmitting}>Add</s-button>
-                            </fetcher.Form>
+                            <PackageMaterialLineForm packageId={pkg.id} shippingMaterials={shippingMaterials} isSubmitting={isSubmitting} />
                           ) : (
                             <s-text color="subdued">Create active shipping materials first.</s-text>
                           )}
