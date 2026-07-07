@@ -7,6 +7,7 @@ import { detectAndUpsertExternalSettlementReview } from "./orderSettlement.serve
 import { decryptProviderCredential } from "./providerCredentials.server";
 import { listPrintifyProducts } from "./printify.server";
 import { recomputeTaxOffsetCache } from "./taxOffsetCache.server";
+import { hashNormalizedCustomerEmail } from "../utils/customer-identity.server";
 
 type SnapshotLineItemPayload = {
   admin_graphql_api_id?: string;
@@ -51,6 +52,9 @@ export type ShopifyOrderPayload = {
   presentment_currency?: string | null;
   total_price?: string | number | null;
   current_total_price?: string | number | null;
+  total_line_items_price?: string | number | null;
+  current_total_discounts?: string | number | null;
+  total_discounts?: string | number | null;
   subtotal_price?: string | number | null;
   current_subtotal_price?: string | number | null;
   total_received?: string | number | null;
@@ -69,6 +73,50 @@ export type ShopifyOrderPayload = {
       currency_code?: string | null;
     } | null;
   } | null;
+  subtotal_price_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
+  current_subtotal_price_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
+  total_line_items_price_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
+  current_total_discounts_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
+  total_discounts_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
+  total_shipping_price_set?: {
+    shop_money?: {
+      amount?: string | number | null;
+    } | null;
+  } | null;
+  shipping_lines?: Array<{
+    price?: string | number | null;
+    discounted_price?: string | number | null;
+    price_set?: {
+      shop_money?: {
+        amount?: string | number | null;
+      } | null;
+    } | null;
+    discounted_price_set?: {
+      shop_money?: {
+        amount?: string | number | null;
+      } | null;
+    } | null;
+  }>;
   total_tax?: string | number | null;
   current_total_tax?: string | number | null;
   total_tax_set?: {
@@ -80,6 +128,25 @@ export type ShopifyOrderPayload = {
     shop_money?: {
       amount?: string | number | null;
     } | null;
+  } | null;
+  contact_email?: string | null;
+  email?: string | null;
+  customer?: {
+    id?: string | number | null;
+    admin_graphql_api_id?: string | null;
+    email?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+  } | null;
+  billing_address?: {
+    name?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+  } | null;
+  shipping_address?: {
+    name?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
   } | null;
   line_items?: SnapshotLineItemPayload[];
 };
@@ -123,6 +190,24 @@ function getDiscountedUnitPrice(lineItem: SnapshotLineItemPayload, quantity: num
   return getDiscountedLineSubtotal(lineItem, quantity).div(quantity);
 }
 
+function getOrderDiscount(order: ShopifyOrderPayload) {
+  return toDecimal(
+    order.current_total_discounts ??
+      order.current_total_discounts_set?.shop_money?.amount ??
+      order.total_discounts ??
+      order.total_discounts_set?.shop_money?.amount,
+  );
+}
+
+function getOrderTotal(order: ShopifyOrderPayload) {
+  return toDecimal(
+    order.current_total_price ??
+      order.current_total_price_set?.shop_money?.amount ??
+      order.total_price ??
+      order.total_price_set?.shop_money?.amount,
+  );
+}
+
 function getOrderSalesTax(order: ShopifyOrderPayload) {
   return toDecimal(
     order.current_total_tax ??
@@ -132,11 +217,115 @@ function getOrderSalesTax(order: ShopifyOrderPayload) {
   );
 }
 
+function getOrderShipping(order: ShopifyOrderPayload) {
+  const explicitShipping = order.total_shipping_price_set?.shop_money?.amount;
+  if (explicitShipping !== null && explicitShipping !== undefined && explicitShipping !== "") {
+    return toDecimal(explicitShipping);
+  }
+
+  return (order.shipping_lines ?? []).reduce((sum, line) => {
+    const amount =
+      line.discounted_price ??
+      line.discounted_price_set?.shop_money?.amount ??
+      line.price ??
+      line.price_set?.shop_money?.amount;
+    return sum.add(toDecimal(amount));
+  }, ZERO);
+}
+
+function getOrderDiscountedSubtotal(order: ShopifyOrderPayload) {
+  const explicitSubtotal =
+    order.current_subtotal_price ??
+    order.current_subtotal_price_set?.shop_money?.amount ??
+    order.subtotal_price ??
+    order.subtotal_price_set?.shop_money?.amount;
+
+  if (explicitSubtotal !== null && explicitSubtotal !== undefined && explicitSubtotal !== "") {
+    return toDecimal(explicitSubtotal);
+  }
+
+  const preDiscountSubtotal = toDecimal(
+    order.total_line_items_price ?? order.total_line_items_price_set?.shop_money?.amount,
+  );
+  const discount = getOrderDiscount(order);
+  if (preDiscountSubtotal.greaterThan(ZERO) || discount.greaterThan(ZERO)) {
+    return Prisma.Decimal.max(preDiscountSubtotal.sub(discount), ZERO);
+  }
+
+  const total = getOrderTotal(order);
+  if (total.greaterThan(ZERO)) {
+    return Prisma.Decimal.max(total.sub(getOrderShipping(order)).sub(getOrderSalesTax(order)), ZERO);
+  }
+
+  return null;
+}
+
+function buildName(parts: Array<string | null | undefined>) {
+  return parts
+    .map((part) => part?.trim())
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+}
+
+function getCustomerDisplayName(order: ShopifyOrderPayload) {
+  const customerName = buildName([order.customer?.first_name, order.customer?.last_name]);
+  if (customerName) return customerName;
+
+  const billingName = order.billing_address?.name?.trim() ||
+    buildName([order.billing_address?.first_name, order.billing_address?.last_name]);
+  if (billingName) return billingName;
+
+  const shippingName = order.shipping_address?.name?.trim() ||
+    buildName([order.shipping_address?.first_name, order.shipping_address?.last_name]);
+  return shippingName || null;
+}
+
+function allocateOrderLevelDiscounts<T extends { subtotal: Prisma.Decimal; quantity: number; salePrice: Prisma.Decimal }>(
+  lines: T[],
+  orderDiscountedSubtotal: Prisma.Decimal | null,
+): T[] {
+  if (!orderDiscountedSubtotal || lines.length === 0) return lines;
+
+  const currentSubtotal = lines.reduce((sum, line) => sum.add(line.subtotal), ZERO);
+  if (currentSubtotal.lessThanOrEqualTo(ZERO) || orderDiscountedSubtotal.greaterThanOrEqualTo(currentSubtotal)) {
+    return lines;
+  }
+
+  const ratio = orderDiscountedSubtotal.div(currentSubtotal);
+  let allocatedSubtotal = ZERO;
+
+  return lines.map((line, index) => {
+    const subtotal =
+      index === lines.length - 1
+        ? Prisma.Decimal.max(orderDiscountedSubtotal.sub(allocatedSubtotal), ZERO)
+        : line.subtotal.mul(ratio).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+    allocatedSubtotal = allocatedSubtotal.add(subtotal);
+    return {
+      ...line,
+      subtotal,
+      salePrice: line.quantity > 0 ? subtotal.div(line.quantity) : ZERO,
+    };
+  });
+}
+
 function getOrderCreatedAt(order: ShopifyOrderPayload) {
   const value = order.created_at ?? order.createdAt;
   if (!value) return undefined;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}
+
+function toCustomerGid(order: ShopifyOrderPayload) {
+  const explicitGid = order.customer?.admin_graphql_api_id;
+  if (explicitGid) return explicitGid;
+  const id = order.customer?.id;
+  if (typeof id === "string" && id.startsWith("gid://")) return id;
+  if (id !== null && id !== undefined && id !== "") return `gid://shopify/Customer/${id}`;
+  return null;
+}
+
+function getCustomerEmailHash(order: ShopifyOrderPayload) {
+  return hashNormalizedCustomerEmail(order.customer?.email ?? order.contact_email ?? order.email);
 }
 
 function toVariantGid(lineItem: SnapshotLineItemPayload) {
@@ -195,6 +384,7 @@ type SnapshotResolution = {
     payoutRate: Prisma.Decimal;
     payoutBasis: Prisma.Decimal;
     payoutAmount: Prisma.Decimal;
+    payoutExclusionReason: string | null;
     donationRoutableAmount: Prisma.Decimal;
   }>;
 };
@@ -452,14 +642,47 @@ export async function createSnapshot(
   );
   const initialVariantIds = variants.map((variant: { id: string }) => variant.id);
   const podOverrides = await fetchSnapshotPodOverrides(shopId, initialVariantIds, db, fetchImpl);
+  const shopifyCustomerId = toCustomerGid(order);
+  const normalizedCustomerEmailHash = getCustomerEmailHash(order);
+  const customerArtistAssociation =
+    db.customerArtistAssociation?.findFirst && (shopifyCustomerId || normalizedCustomerEmailHash)
+      ? await db.customerArtistAssociation.findFirst({
+          where: {
+            shopId,
+            OR: [
+              ...(shopifyCustomerId ? [{ shopifyCustomerId }] : []),
+              ...(normalizedCustomerEmailHash ? [{ normalizedCustomerEmailHash }] : []),
+            ],
+          },
+          select: { artistId: true },
+      })
+      : null;
+  const orderDiscountedSubtotal = getOrderDiscountedSubtotal(order);
+  const adjustedLinePricing = allocateOrderLevelDiscounts(
+    lineItems.map((lineItem) => {
+      const quantity = Math.max(0, Number(lineItem.quantity ?? 0));
+      const subtotal = getDiscountedLineSubtotal(lineItem, quantity);
+      return {
+        quantity,
+        subtotal,
+        salePrice: quantity > 0 ? subtotal.div(quantity) : ZERO,
+      };
+    }),
+    orderDiscountedSubtotal,
+  );
 
   const firstPassResolutions = await Promise.all(
-    lineItems.map(async (lineItem): Promise<SnapshotResolution> => {
+    lineItems.map(async (lineItem, index): Promise<SnapshotResolution> => {
       const variantGid = toVariantGid(lineItem);
       const productGid = toProductGid(lineItem);
-      const quantity = Math.max(0, Number(lineItem.quantity ?? 0));
-      const salePrice = getDiscountedUnitPrice(lineItem, quantity);
-      const subtotal = getDiscountedLineSubtotal(lineItem, quantity);
+      const pricing = adjustedLinePricing[index] ?? {
+        quantity: Math.max(0, Number(lineItem.quantity ?? 0)),
+        salePrice: getDiscountedUnitPrice(lineItem, Math.max(0, Number(lineItem.quantity ?? 0))),
+        subtotal: getDiscountedLineSubtotal(lineItem, Math.max(0, Number(lineItem.quantity ?? 0))),
+      };
+      const quantity = pricing.quantity;
+      const salePrice = pricing.salePrice;
+      const subtotal = pricing.subtotal;
 
       const variant =
         (variantGid ? variantByGid.get(variantGid) : null) ??
@@ -575,7 +798,10 @@ export async function createSnapshot(
           for (const assignment of productArtistAssignments) {
             const artist = assignment.artist;
             const collaborationShare = new Prisma.Decimal(assignment.collaborationShare);
-            const payoutEnabled = assignment.payoutEnabledOverride ?? artist.paymentEnabled;
+            const selfPurchaseExcluded = customerArtistAssociation?.artistId === artist.id;
+            const payoutEnabled = selfPurchaseExcluded
+              ? false
+              : assignment.payoutEnabledOverride ?? artist.paymentEnabled;
             const payoutRate = new Prisma.Decimal(assignment.payoutRateOverride ?? artist.defaultPayoutRate);
             const payoutBasis = line.subtotal.mul(collaborationShare).div(100);
             const payoutAmount = payoutEnabled ? payoutBasis.mul(payoutRate).div(100) : ZERO;
@@ -594,6 +820,7 @@ export async function createSnapshot(
               payoutRate,
               payoutBasis,
               payoutAmount,
+              payoutExclusionReason: selfPurchaseExcluded ? "SELF_PURCHASE" : null,
               donationRoutableAmount,
             });
 
@@ -656,14 +883,31 @@ export async function createSnapshot(
           shopId,
           shopifyOrderId,
           orderNumber: order.name ?? order.order_number?.toString() ?? null,
+          customerDisplayName: getCustomerDisplayName(order),
           origin,
           periodId: metadata.periodId ?? null,
           importBatchId: metadata.importBatchId ?? null,
           importedAt: metadata.importedAt ?? null,
+          subtotalAmount: orderDiscountedSubtotal ?? orderSubtotal,
+          discountAmount: getOrderDiscount(order),
+          shippingAmount: getOrderShipping(order),
+          totalAmount: getOrderTotal(order),
           salesTaxCollected: getOrderSalesTax(order),
+          shopifyCustomerId,
+          normalizedCustomerEmailHash,
           createdAt: getOrderCreatedAt(order),
         },
       });
+      if (customerArtistAssociation) {
+        await tx.orderArtistAttribution.create({
+          data: {
+            shopId,
+            snapshotId: snapshot.id,
+            artistId: customerArtistAssociation.artistId,
+            source: "customer_association",
+          },
+        });
+      }
       const packagingLines: Array<{
         id: string;
         variantId: string | null;
@@ -678,6 +922,7 @@ export async function createSnapshot(
             shopId,
             snapshotId: snapshot.id,
             shopifyLineItemId: line.lineItemId,
+            shopifyProductId: line.productGid,
             shopifyVariantId: line.variantGid ?? "unknown",
             variantTitle: line.variantTitle,
             productTitle: line.productTitle,
@@ -822,6 +1067,7 @@ export async function createSnapshot(
               payoutRate: allocation.payoutRate,
               payoutBasis: allocation.payoutBasis,
               payoutAmount: allocation.payoutAmount,
+              payoutExclusionReason: allocation.payoutExclusionReason,
               donationRoutableAmount: allocation.donationRoutableAmount,
             })),
           });

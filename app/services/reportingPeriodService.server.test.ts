@@ -4,6 +4,7 @@ import {
   closeReportingPeriod,
   createOrOpenReportingPeriod,
   createReportingPeriodFromPayout,
+  materializeArtistAllocationsForPeriod,
   materializeCauseAllocationsForPeriod,
 } from "./reportingPeriodService.server";
 
@@ -201,6 +202,92 @@ describe("materializeCauseAllocationsForPeriod", () => {
       where: {
         shopId: "shop-1",
         id: { in: ["stale-unpaid-cause"] },
+      },
+    });
+  });
+});
+
+describe("materializeArtistAllocationsForPeriod", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("excludes payouts when the order is attributed to the same artist", async () => {
+    const deleteMany = vi.fn().mockResolvedValue(undefined);
+    const create = vi.fn().mockResolvedValue(undefined);
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const db = {
+      lineArtistAllocation: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            artistId: "artist-1",
+            artistName: "Ada Artist",
+            creditName: "Ada",
+            payoutAmount: decimal("12.00"),
+            snapshotLine: {
+              snapshot: {
+                artistAttribution: { artistId: "artist-1" },
+              },
+            },
+          },
+          {
+            artistId: "artist-2",
+            artistName: "Bea Artist",
+            creditName: "Bea",
+            payoutAmount: decimal("8.00"),
+            snapshotLine: {
+              snapshot: {
+                artistAttribution: { artistId: "artist-1" },
+              },
+            },
+          },
+        ]),
+      },
+      artistAllocation: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: "stale-unpaid-artist",
+            artistId: "artist-1",
+            _count: { applications: 0 },
+          },
+        ]),
+        updateMany,
+        deleteMany,
+        create,
+      },
+    };
+
+    const result = await materializeArtistAllocationsForPeriod(
+      "shop-1",
+      {
+        id: "period-1",
+        startDate: new Date("2026-04-01T00:00:00.000Z"),
+        endDate: new Date("2026-04-08T00:00:00.000Z"),
+      },
+      db as any,
+    );
+
+    expect(db.lineArtistAllocation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          payoutEnabled: true,
+          payoutExclusionReason: null,
+        }),
+      }),
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]?.artistId).toBe("artist-2");
+    expect(result[0]?.allocated.toString()).toBe("8");
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        artistId: "artist-2",
+        allocated: expect.any(Prisma.Decimal),
+      }),
+    });
+    expect(deleteMany).toHaveBeenCalledWith({
+      where: {
+        shopId: "shop-1",
+        id: { in: ["stale-unpaid-artist"] },
       },
     });
   });

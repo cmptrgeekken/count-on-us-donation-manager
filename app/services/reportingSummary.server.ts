@@ -134,6 +134,9 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
               id: true,
               shopifyOrderId: true,
               orderNumber: true,
+              artistAttribution: {
+                select: { artistId: true },
+              },
             },
           },
           adjustments: { select: { netContribAdj: true } },
@@ -147,6 +150,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
               creditName: true,
               payoutAmount: true,
               payoutEnabled: true,
+              payoutExclusionReason: true,
             },
           },
         },
@@ -568,6 +572,8 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
 
     for (const allocation of line.artistAllocations ?? []) {
       if (!allocation.payoutEnabled) continue;
+      if (allocation.payoutExclusionReason) continue;
+      if (line.snapshot.artistAttribution?.artistId === allocation.artistId) continue;
       const current = artistAllocationMap.get(allocation.artistId) ?? {
         artistId: allocation.artistId,
         artistName: allocation.artistName,

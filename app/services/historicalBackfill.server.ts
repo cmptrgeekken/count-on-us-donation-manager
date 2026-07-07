@@ -297,8 +297,30 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
       admin_graphql_api_id: toOrderGid(explicitOrderId || orderKey),
       name: orderName,
       created_at: getCsvValue(row, "Created at"),
+      subtotal_price: getCsvValue(row, "Subtotal") || undefined,
+      current_subtotal_price: getCsvValue(row, "Subtotal") || undefined,
+      total_discounts: getCsvValue(row, "Discount Amount", "Discount") || undefined,
+      current_total_discounts: getCsvValue(row, "Discount Amount", "Discount") || undefined,
+      total_price: getCsvValue(row, "Total") || undefined,
+      current_total_price: getCsvValue(row, "Total") || undefined,
+      total_shipping_price_set: {
+        shop_money: {
+          amount: getCsvValue(row, "Shipping") || "0",
+        },
+      },
       total_tax: getCsvValue(row, "Taxes") || "0",
       current_total_tax: getCsvValue(row, "Taxes") || "0",
+      email: getCsvValue(row, "Email") || null,
+      billing_address: {
+        name: getCsvValue(row, "Billing Name") || null,
+        first_name: getCsvValue(row, "Billing First Name") || null,
+        last_name: getCsvValue(row, "Billing Last Name") || null,
+      },
+      shipping_address: {
+        name: getCsvValue(row, "Shipping Name") || null,
+        first_name: getCsvValue(row, "Shipping First Name") || null,
+        last_name: getCsvValue(row, "Shipping Last Name") || null,
+      },
       line_items: [],
     };
     if (!existing) {

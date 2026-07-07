@@ -6,7 +6,9 @@ import { z } from "zod";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { createManualAdjustment } from "../services/adjustmentService.server";
+import { saveOrderArtistAttribution } from "../services/orderArtistAttribution.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { shopifyAdminOrderUrl, shopifyAdminVariantUrl } from "../utils/shopify-admin-url";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const decimalField = z
@@ -25,6 +27,12 @@ const manualAdjustmentSchema = z.object({
   equipmentAdj: decimalField,
 });
 
+const artistAttributionSchema = z.object({
+  artistId: z.string().trim(),
+  notes: z.string().trim().max(500, "Notes must be 500 characters or fewer.").optional(),
+  persistCustomerAssociation: z.enum(["on"]).optional(),
+});
+
 function sumDecimals(values: Array<Prisma.Decimal | null | undefined>, zero: Prisma.Decimal) {
   return values.reduce<Prisma.Decimal>((sum, value) => sum.add(value ?? zero), zero);
 }
@@ -41,7 +49,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
 
-  if (intent !== "create-manual-adjustment") {
+  if (intent !== "create-manual-adjustment" && intent !== "save-artist-attribution") {
     return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
   }
 
@@ -52,6 +60,41 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   if (!snapshot) {
     return jsonResponse({ ok: false, message: "Snapshot not found." }, { status: 404 });
+  }
+
+  if (intent === "save-artist-attribution") {
+    const parsed = artistAttributionSchema.safeParse({
+      artistId: formData.get("artistId")?.toString() ?? "",
+      notes: formData.get("notes")?.toString() ?? "",
+      persistCustomerAssociation: formData.get("persistCustomerAssociation")?.toString(),
+    });
+
+    if (!parsed.success) {
+      return jsonResponse(
+        { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid artist attribution." },
+        { status: 400 },
+      );
+    }
+
+    try {
+      await saveOrderArtistAttribution(
+        {
+          shopId,
+          snapshotId,
+          artistId: parsed.data.artistId || null,
+          notes: parsed.data.notes,
+          persistCustomerAssociation: parsed.data.persistCustomerAssociation === "on",
+        },
+        prisma,
+      );
+    } catch (error) {
+      return jsonResponse(
+        { ok: false, message: error instanceof Error ? error.message : "Unable to save artist association." },
+        { status: 400 },
+      );
+    }
+
+    return jsonResponse({ ok: true, message: parsed.data.artistId ? "Artist association saved." : "Artist association removed." });
   }
 
   const parsed = manualAdjustmentSchema.safeParse({
@@ -110,6 +153,16 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       packageAllocations: {
         orderBy: { createdAt: "asc" },
       },
+      artistAttribution: {
+        include: {
+          artist: {
+            select: {
+              displayName: true,
+              creditName: true,
+            },
+          },
+        },
+      },
       packagingReviewItems: {
         orderBy: { createdAt: "desc" },
       },
@@ -136,8 +189,25 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     snapshot: {
       id: snapshot.id,
       orderNumber: snapshot.orderNumber ?? "Unnumbered order",
+      customerDisplayName: snapshot.customerDisplayName ?? null,
+      shopifyAdminUrl: shopifyAdminOrderUrl(shopId, snapshot.shopifyOrderId),
       origin: snapshot.origin,
       createdAt: snapshot.createdAt.toISOString(),
+      subtotalAmount: snapshot.subtotalAmount.toString(),
+      discountAmount: snapshot.discountAmount.toString(),
+      shippingAmount: snapshot.shippingAmount.toString(),
+      salesTaxCollected: snapshot.salesTaxCollected.toString(),
+      totalAmount: snapshot.totalAmount.toString(),
+      canPersistCustomerAssociation: Boolean(snapshot.shopifyCustomerId || snapshot.normalizedCustomerEmailHash),
+      artistAttribution: snapshot.artistAttribution
+        ? {
+            artistId: snapshot.artistAttribution.artistId,
+            artistName: snapshot.artistAttribution.artist.displayName,
+            creditName: snapshot.artistAttribution.artist.creditName,
+            source: snapshot.artistAttribution.source,
+            notes: snapshot.artistAttribution.notes ?? "",
+          }
+        : null,
       packageAllocations: snapshot.packageAllocations.map((allocation) => ({
         id: allocation.id,
         packageName: allocation.packageName,
@@ -181,8 +251,14 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         return {
           id: line.id,
           shopifyLineItemId: line.shopifyLineItemId,
+          shopifyProductId: line.shopifyProductId,
           productTitle: line.productTitle,
           variantTitle: line.variantTitle,
+          shopifyAdminUrl: shopifyAdminVariantUrl({
+            shopDomain: shopId,
+            shopifyProductId: line.shopifyProductId,
+            shopifyVariantId: line.shopifyVariantId,
+          }),
           quantity: line.quantity,
           subtotal: line.subtotal.toString(),
           laborCost: line.laborCost.toString(),
@@ -249,6 +325,23 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         };
       }),
     },
+    artists: (
+      await prisma.artist.findMany({
+        where: { shopId, status: { in: ["active", "draft"] } },
+        orderBy: { displayName: "asc" },
+        select: {
+          id: true,
+          displayName: true,
+          creditName: true,
+          status: true,
+        },
+      })
+    ).map((artist) => ({
+      id: artist.id,
+      displayName: artist.displayName,
+      creditName: artist.creditName,
+      status: artist.status,
+    })),
   });
 };
 
@@ -276,8 +369,9 @@ function formatOrigin(origin: string) {
 }
 
 export default function OrderSnapshotDetailPage() {
-  const { snapshot } = useLoaderData<typeof loader>();
+  const { artists, snapshot } = useLoaderData<typeof loader>();
   const adjustmentFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const attributionFetcher = useFetcher<{ ok: boolean; message: string }>();
   const { formatMoney } = useAppLocalization();
   const effectiveNetContributionTotal = snapshot.lines.reduce(
     (sum: number, line: (typeof snapshot.lines)[number]) => sum + moneyNumber(line.effectiveNetContribution),
@@ -294,6 +388,14 @@ export default function OrderSnapshotDetailPage() {
             <s-text>{adjustmentFetcher.data.message}</s-text>
           </s-banner>
         ) : null}
+        {attributionFetcher.data ? (
+          <s-banner tone={attributionFetcher.data.ok ? "success" : "critical"}>
+            <s-text>{attributionFetcher.data.message}</s-text>
+          </s-banner>
+        ) : null}
+        <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}>
+          {adjustmentFetcher.data?.message ?? attributionFetcher.data?.message ?? ""}
+        </div>
 
         <s-section heading="Snapshot metadata">
           <div style={{ display: "grid", gap: "1rem" }}>
@@ -308,6 +410,7 @@ export default function OrderSnapshotDetailPage() {
               }}
             >
               <SummaryTile label="Origin" value={formatOrigin(snapshot.origin)} />
+              <SummaryTile label="Customer" value={snapshot.customerDisplayName ?? "-"} />
               <SummaryTile label="Created" value={new Date(snapshot.createdAt).toLocaleString()} />
               <SummaryTile label="Line count" value={snapshot.lines.length.toString()} />
               <SummaryTile
@@ -315,6 +418,98 @@ export default function OrderSnapshotDetailPage() {
                 value={formatMoney(effectiveNetContributionTotal)}
               />
             </div>
+            {snapshot.shopifyAdminUrl ? (
+              <div>
+                <a href={snapshot.shopifyAdminUrl} target="_blank" rel="noreferrer">Open order in Shopify</a>
+              </div>
+            ) : null}
+          </div>
+        </s-section>
+
+        <s-section heading="Shopify order totals">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: "1rem",
+            }}
+          >
+            <SummaryTile label="Subtotal" value={formatMoney(snapshot.subtotalAmount)} />
+            <SummaryTile label="Discounts" value={formatMoney(snapshot.discountAmount)} />
+            <SummaryTile label="Shipping" value={formatMoney(snapshot.shippingAmount)} />
+            <SummaryTile label="Sales tax" value={formatMoney(snapshot.salesTaxCollected)} />
+            <SummaryTile label="Total" value={formatMoney(snapshot.totalAmount)} />
+          </div>
+        </s-section>
+
+        <s-section heading="Artist association">
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <HelpText>Associate this order with the purchasing customer&apos;s artist relationship. If this order includes payout allocations for the same artist, reporting excludes those artist payouts as self-purchases.</HelpText>
+            {snapshot.artistAttribution ? (
+              <s-banner tone="info">
+                <s-text>
+                  Associated with {snapshot.artistAttribution.artistName} ({snapshot.artistAttribution.creditName}) via {snapshot.artistAttribution.source.replaceAll("_", " ")}.
+                </s-text>
+              </s-banner>
+            ) : null}
+            <attributionFetcher.Form method="post" style={{ display: "grid", gap: "0.75rem", maxWidth: "42rem" }}>
+              <input type="hidden" name="intent" value="save-artist-attribution" />
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor="artist-attribution">Artist</label>
+                <select
+                  id="artist-attribution"
+                  name="artistId"
+                  defaultValue={snapshot.artistAttribution?.artistId ?? ""}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "0.75rem",
+                    borderRadius: "0.75rem",
+                    border: "1px solid var(--p-color-border, #d2d5d8)",
+                    background: "var(--p-color-bg-surface, #fff)",
+                    color: "var(--p-color-text, #303030)",
+                    font: "inherit",
+                  }}
+                >
+                  <option value="">No artist association</option>
+                  {artists.map((artist: (typeof artists)[number]) => (
+                    <option key={artist.id} value={artist.id}>
+                      {artist.displayName} ({artist.creditName}){artist.status === "draft" ? " - draft" : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor="artist-attribution-notes">Notes</label>
+                <textarea
+                  id="artist-attribution-notes"
+                  name="notes"
+                  defaultValue={snapshot.artistAttribution?.notes ?? ""}
+                  rows={3}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "0.75rem",
+                    borderRadius: "0.75rem",
+                    border: "1px solid var(--p-color-border, #d2d5d8)",
+                    background: "var(--p-color-bg-surface, #fff)",
+                    color: "var(--p-color-text, #303030)",
+                    font: "inherit",
+                  }}
+                />
+              </div>
+              {snapshot.canPersistCustomerAssociation ? (
+                <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+                  <input type="checkbox" name="persistCustomerAssociation" defaultChecked />
+                  <span>Apply this artist association to this customer&apos;s future orders.</span>
+                </label>
+              ) : null}
+              <div>
+                <s-button type="submit" variant="primary" disabled={attributionFetcher.state !== "idle"}>
+                  Save artist association
+                </s-button>
+              </div>
+            </attributionFetcher.Form>
           </div>
         </s-section>
 
@@ -376,7 +571,10 @@ export default function OrderSnapshotDetailPage() {
                   <s-text color="subdued">
                     {line.variantTitle} · Qty {line.quantity} · Subtotal {formatMoney(line.subtotal)}
                   </s-text>
-                  <HelpText>Subtotal is sales revenue for this line before costs. Net contribution is what remains after effective costs, POD cost, and buffer.</HelpText>
+                  {line.shopifyAdminUrl ? (
+                    <a href={line.shopifyAdminUrl} target="_blank" rel="noreferrer">Open variant in Shopify</a>
+                  ) : null}
+                  <HelpText>Subtotal is discounted sales revenue allocated to this line before costs. Net contribution is what remains after effective costs, POD cost, and buffer.</HelpText>
                 </div>
 
                 <div

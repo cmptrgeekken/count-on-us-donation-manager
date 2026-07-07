@@ -307,6 +307,7 @@ export async function materializeArtistAllocationsForPeriod(
     where: {
       shopId,
       payoutEnabled: true,
+      payoutExclusionReason: null,
       snapshotLine: {
         snapshot: {
           createdAt: {
@@ -321,12 +322,27 @@ export async function materializeArtistAllocationsForPeriod(
       artistName: true,
       creditName: true,
       payoutAmount: true,
+      snapshotLine: {
+        select: {
+          snapshot: {
+            select: {
+              artistAttribution: {
+                select: { artistId: true },
+              },
+            },
+          },
+        },
+      },
     },
   });
 
   const allocations = new Map<string, ArtistAllocationDraft>();
 
   for (const allocation of lineArtistAllocations) {
+    if (allocation.snapshotLine?.snapshot.artistAttribution?.artistId === allocation.artistId) {
+      continue;
+    }
+
     addArtistAllocation(allocations, {
       artistId: allocation.artistId,
       artistName: allocation.artistName,

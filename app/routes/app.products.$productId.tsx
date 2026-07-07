@@ -14,6 +14,7 @@ import {
 } from "../services/productArtistAssignmentService.server";
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
+import { shopifyAdminProductUrl, shopifyAdminVariantUrl } from "../utils/shopify-admin-url";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
@@ -64,6 +65,7 @@ const fieldStyle = {
 
 type ProductVariantRow = {
   id: string;
+  shopifyAdminUrl: string | null;
   title: string;
   sku: string;
   price: string;
@@ -267,12 +269,18 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     product: {
       id: product.id,
       shopifyId: product.shopifyId,
+      shopifyAdminUrl: shopifyAdminProductUrl(shopId, product.shopifyId),
       title: product.title,
       handle: product.handle,
       status: product.status,
     },
     variants: product.variants.map((variant, index) => ({
       id: variant.id,
+      shopifyAdminUrl: shopifyAdminVariantUrl({
+        shopDomain: shopId,
+        shopifyProductId: product.shopifyId,
+        shopifyVariantId: variant.shopifyId,
+      }),
       title: variant.title,
       sku: variant.sku ?? "",
       price: variant.price.toString(),
@@ -708,6 +716,9 @@ export default function ProductDetailPage() {
           <div style={{ display: "grid", gap: "0.35rem" }}>
             <s-text color="subdued">/{product.handle}</s-text>
             <s-text color="subdued">Status: {product.status}</s-text>
+            {product.shopifyAdminUrl ? (
+              <a href={product.shopifyAdminUrl} target="_blank" rel="noreferrer">Open product in Shopify</a>
+            ) : null}
           </div>
         </s-section>
 
@@ -768,7 +779,14 @@ export default function ProductDetailPage() {
                 <s-table-body>
                   {variants.map((variant: ProductVariantRow) => (
                     <s-table-row key={variant.id}>
-                      <s-table-cell>{variant.title}</s-table-cell>
+                      <s-table-cell>
+                        <div style={{ display: "grid", gap: "0.25rem" }}>
+                          <span>{variant.title}</span>
+                          {variant.shopifyAdminUrl ? (
+                            <a href={variant.shopifyAdminUrl} target="_blank" rel="noreferrer">Open in Shopify</a>
+                          ) : null}
+                        </div>
+                      </s-table-cell>
                       <s-table-cell>{variant.sku || "-"}</s-table-cell>
                       <s-table-cell>{formatMoney(variant.price)}</s-table-cell>
                       <s-table-cell>
