@@ -5,11 +5,14 @@ import { Prisma } from "@prisma/client";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { shopifyAdminOrderUrl } from "../utils/shopify-admin-url";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 type SnapshotListRow = {
   id: string;
   orderNumber: string;
+  customerDisplayName: string | null;
+  shopifyAdminUrl: string | null;
   origin: string;
   createdAt: string;
   lineCount: number;
@@ -98,6 +101,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     snapshots: pageSnapshots.map<SnapshotListRow>((snapshot) => ({
       id: snapshot.id,
       orderNumber: snapshot.orderNumber ?? "Unnumbered order",
+      customerDisplayName: snapshot.customerDisplayName ?? null,
+      shopifyAdminUrl: shopifyAdminOrderUrl(shopId, snapshot.shopifyOrderId),
       origin: snapshot.origin,
       createdAt: snapshot.createdAt.toISOString(),
       lineCount: snapshot.lines.length,
@@ -316,6 +321,7 @@ export default function OrderHistoryPage() {
               <s-table>
                 <s-table-header-row>
                   <s-table-header listSlot="primary">Order</s-table-header>
+                  <s-table-header listSlot="inline">Customer</s-table-header>
                   <s-table-header listSlot="inline">Origin</s-table-header>
                   <s-table-header listSlot="inline">Created</s-table-header>
                   <s-table-header listSlot="secondary" format="numeric">Lines</s-table-header>
@@ -326,7 +332,15 @@ export default function OrderHistoryPage() {
                 <s-table-body>
                   {snapshots.map((snapshot: SnapshotListRow) => (
                     <s-table-row key={snapshot.id}>
-                      <s-table-cell>{snapshot.orderNumber}</s-table-cell>
+                      <s-table-cell>
+                        <div style={{ display: "grid", gap: "0.25rem" }}>
+                          <span>{snapshot.orderNumber}</span>
+                          {snapshot.shopifyAdminUrl ? (
+                            <a href={snapshot.shopifyAdminUrl} target="_blank" rel="noreferrer">Open in Shopify</a>
+                          ) : null}
+                        </div>
+                      </s-table-cell>
+                      <s-table-cell>{snapshot.customerDisplayName ?? "-"}</s-table-cell>
                       <s-table-cell>
                         <s-badge tone={originTone(snapshot.origin)}>{formatOrigin(snapshot.origin)}</s-badge>
                       </s-table-cell>

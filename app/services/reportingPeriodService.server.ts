@@ -339,7 +339,7 @@ export async function materializeArtistAllocationsForPeriod(
   const allocations = new Map<string, ArtistAllocationDraft>();
 
   for (const allocation of lineArtistAllocations) {
-    if (allocation.snapshotLine.snapshot.artistAttribution?.artistId === allocation.artistId) {
+    if (allocation.snapshotLine?.snapshot.artistAttribution?.artistId === allocation.artistId) {
       continue;
     }
 

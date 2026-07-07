@@ -503,6 +503,94 @@ describe("createSnapshot", () => {
     );
   });
 
+  it("allocates order-level discounts before resolving snapshot costs", async () => {
+    resolveCosts
+      .mockResolvedValueOnce({
+        laborCost: decimal("10"),
+        materialCost: decimal("5"),
+        packagingCost: decimal("0"),
+        equipmentCost: decimal("0"),
+        mistakeBufferAmount: decimal("0"),
+        podCost: decimal("0"),
+        podLines: [],
+        podCostEstimated: false,
+        podCostMissing: false,
+        totalCost: decimal("15"),
+        netContribution: decimal("166.50"),
+        materialLines: [],
+        equipmentLines: [],
+      })
+      .mockResolvedValueOnce({
+        laborCost: decimal("10"),
+        materialCost: decimal("5"),
+        packagingCost: decimal("0"),
+        equipmentCost: decimal("0"),
+        mistakeBufferAmount: decimal("0"),
+        podCost: decimal("0"),
+        podLines: [],
+        podCostEstimated: false,
+        podCostMissing: false,
+        totalCost: decimal("15"),
+        netContribution: decimal("166.50"),
+        materialLines: [],
+        equipmentLines: [],
+      });
+
+    const db = createDb();
+
+    await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/order-discounted",
+        total_line_items_price: "363.00",
+        subtotal_price: "181.50",
+        total_discounts: "181.50",
+        total_price: "181.50",
+        line_items: [
+          {
+            admin_graphql_api_id: "gid://shopify/LineItem/order-discounted",
+            variant_id: 100,
+            product_id: 200,
+            title: "Large artwork",
+            variant_title: "Default",
+            quantity: 1,
+            price: "363.00",
+          },
+        ],
+      },
+      db,
+    );
+
+    expect(resolveCosts).toHaveBeenNthCalledWith(
+      1,
+      "shop-1",
+      "variant-1",
+      decimal("181.50"),
+      "snapshot",
+      db,
+      undefined,
+      undefined,
+    );
+    expect(db.__spies.orderSnapshotCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          subtotalAmount: decimal("181.50"),
+          discountAmount: decimal("181.50"),
+          totalAmount: decimal("181.50"),
+        }),
+      }),
+    );
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          salePrice: decimal("181.50"),
+          subtotal: decimal("181.50"),
+          netContribution: decimal("166.50"),
+        }),
+      }),
+    );
+  });
+
   it("keeps signed negative snapshot net contribution but clamps cause allocations to zero", async () => {
     resolveCosts
       .mockResolvedValueOnce({

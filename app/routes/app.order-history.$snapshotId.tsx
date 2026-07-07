@@ -8,6 +8,7 @@ import { prisma } from "../db.server";
 import { createManualAdjustment } from "../services/adjustmentService.server";
 import { saveOrderArtistAttribution } from "../services/orderArtistAttribution.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { shopifyAdminOrderUrl, shopifyAdminVariantUrl } from "../utils/shopify-admin-url";
 import { useAppLocalization } from "../utils/use-app-localization";
 
 const decimalField = z
@@ -188,8 +189,15 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
     snapshot: {
       id: snapshot.id,
       orderNumber: snapshot.orderNumber ?? "Unnumbered order",
+      customerDisplayName: snapshot.customerDisplayName ?? null,
+      shopifyAdminUrl: shopifyAdminOrderUrl(shopId, snapshot.shopifyOrderId),
       origin: snapshot.origin,
       createdAt: snapshot.createdAt.toISOString(),
+      subtotalAmount: snapshot.subtotalAmount.toString(),
+      discountAmount: snapshot.discountAmount.toString(),
+      shippingAmount: snapshot.shippingAmount.toString(),
+      salesTaxCollected: snapshot.salesTaxCollected.toString(),
+      totalAmount: snapshot.totalAmount.toString(),
       canPersistCustomerAssociation: Boolean(snapshot.shopifyCustomerId || snapshot.normalizedCustomerEmailHash),
       artistAttribution: snapshot.artistAttribution
         ? {
@@ -243,8 +251,14 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         return {
           id: line.id,
           shopifyLineItemId: line.shopifyLineItemId,
+          shopifyProductId: line.shopifyProductId,
           productTitle: line.productTitle,
           variantTitle: line.variantTitle,
+          shopifyAdminUrl: shopifyAdminVariantUrl({
+            shopDomain: shopId,
+            shopifyProductId: line.shopifyProductId,
+            shopifyVariantId: line.shopifyVariantId,
+          }),
           quantity: line.quantity,
           subtotal: line.subtotal.toString(),
           laborCost: line.laborCost.toString(),
@@ -396,6 +410,7 @@ export default function OrderSnapshotDetailPage() {
               }}
             >
               <SummaryTile label="Origin" value={formatOrigin(snapshot.origin)} />
+              <SummaryTile label="Customer" value={snapshot.customerDisplayName ?? "-"} />
               <SummaryTile label="Created" value={new Date(snapshot.createdAt).toLocaleString()} />
               <SummaryTile label="Line count" value={snapshot.lines.length.toString()} />
               <SummaryTile
@@ -403,6 +418,27 @@ export default function OrderSnapshotDetailPage() {
                 value={formatMoney(effectiveNetContributionTotal)}
               />
             </div>
+            {snapshot.shopifyAdminUrl ? (
+              <div>
+                <a href={snapshot.shopifyAdminUrl} target="_blank" rel="noreferrer">Open order in Shopify</a>
+              </div>
+            ) : null}
+          </div>
+        </s-section>
+
+        <s-section heading="Shopify order totals">
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+              gap: "1rem",
+            }}
+          >
+            <SummaryTile label="Subtotal" value={formatMoney(snapshot.subtotalAmount)} />
+            <SummaryTile label="Discounts" value={formatMoney(snapshot.discountAmount)} />
+            <SummaryTile label="Shipping" value={formatMoney(snapshot.shippingAmount)} />
+            <SummaryTile label="Sales tax" value={formatMoney(snapshot.salesTaxCollected)} />
+            <SummaryTile label="Total" value={formatMoney(snapshot.totalAmount)} />
           </div>
         </s-section>
 
@@ -535,7 +571,10 @@ export default function OrderSnapshotDetailPage() {
                   <s-text color="subdued">
                     {line.variantTitle} · Qty {line.quantity} · Subtotal {formatMoney(line.subtotal)}
                   </s-text>
-                  <HelpText>Subtotal is sales revenue for this line before costs. Net contribution is what remains after effective costs, POD cost, and buffer.</HelpText>
+                  {line.shopifyAdminUrl ? (
+                    <a href={line.shopifyAdminUrl} target="_blank" rel="noreferrer">Open variant in Shopify</a>
+                  ) : null}
+                  <HelpText>Subtotal is discounted sales revenue allocated to this line before costs. Net contribution is what remains after effective costs, POD cost, and buffer.</HelpText>
                 </div>
 
                 <div

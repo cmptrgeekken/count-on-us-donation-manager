@@ -26,6 +26,7 @@ import { resolveEquipmentEffectiveRates, type EquipmentForCosting } from "../ser
 import { createEquipmentLibraryItem, createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { buildAdminVariantEstimate, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { shopifyAdminProductUrl, shopifyAdminVariantUrl } from "../utils/shopify-admin-url";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import {
   defaultUsageModeForBasis,
@@ -316,7 +317,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const variant = await prisma.variant.findFirst({
     where: { id: variantId, shopId },
     include: {
-      product: { select: { title: true } },
+      product: { select: { shopifyId: true, title: true } },
       providerMappings: {
         orderBy: [{ updatedAt: "desc" }],
         include: {
@@ -540,6 +541,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   return jsonResponse({
     variant: {
       id: variant.id,
+      shopifyAdminUrl: shopifyAdminVariantUrl({
+        shopDomain: shopId,
+        shopifyProductId: variant.product.shopifyId,
+        shopifyVariantId: variant.shopifyId,
+      }),
+      productShopifyAdminUrl: shopifyAdminProductUrl(shopId, variant.product.shopifyId),
       productTitle: variant.product.title,
       title: variant.title,
       sku: variant.sku ?? "",
@@ -3169,6 +3176,12 @@ export default function VariantDetailPage() {
             <InlineStack gap="400">
               <Text as="p" variant="bodyMd" tone="subdued">SKU: {variant.sku || "-"}</Text>
               <Text as="p" variant="bodyMd" tone="subdued">Price: {formatMoney(variant.price)}</Text>
+              {variant.shopifyAdminUrl ? (
+                <a href={variant.shopifyAdminUrl} target="_blank" rel="noreferrer">Open variant in Shopify</a>
+              ) : null}
+              {variant.productShopifyAdminUrl ? (
+                <a href={variant.productShopifyAdminUrl} target="_blank" rel="noreferrer">Open product in Shopify</a>
+              ) : null}
             </InlineStack>
           </BlockStack>
         </Card>
