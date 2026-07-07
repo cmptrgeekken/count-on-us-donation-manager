@@ -118,6 +118,7 @@ export type VariantDraft = {
   productionTemplateId?: string | null;
   shippingTemplateId?: string | null;
   preferredPackageId?: string | null;
+  templateProductYield: string;
   packedLength: string;
   packedWidth: string;
   packedHeight: string;
@@ -205,6 +206,7 @@ export function applyTemplateSelectionToVariantDraft(
   return {
     ...draft,
     productionTemplateId: template?.id ?? null,
+    templateProductYield: template ? draft.templateProductYield : "",
     templateMaterialLines: buildVariantTemplateMaterialDraftLines(template),
     templateEquipmentLines: buildVariantTemplateEquipmentDraftLines(template),
   };
@@ -225,6 +227,7 @@ export function normalizeVariantDraft(draft: VariantDraft) {
     productionTemplateId: draft.productionTemplateId ?? "",
     shippingTemplateId: draft.shippingTemplateId ?? "",
     preferredPackageId: draft.preferredPackageId ?? "",
+    templateProductYield: draft.templateProductYield,
     packedLength: draft.packedLength,
     packedWidth: draft.packedWidth,
     packedHeight: draft.packedHeight,
@@ -275,6 +278,7 @@ export function hasMeaningfulVariantDraft(draft: VariantDraft) {
     draft.productionTemplateId ||
       draft.shippingTemplateId ||
       draft.preferredPackageId ||
+      draft.templateProductYield ||
       draft.packedLength ||
       draft.packedWidth ||
       draft.packedHeight ||

@@ -2,11 +2,13 @@ import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
+import { Prisma } from "@prisma/client";
 import { AssignmentPicker } from "../components/AssignmentControls";
 import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { parseOptionalPositiveWholeNumber } from "../utils/number-parsing";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
@@ -50,6 +52,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           select: {
             productionTemplateId: true,
             shippingTemplateId: true,
+            templateProductYield: true,
             productionTemplate: { select: { name: true } },
             _count: {
               select: {
@@ -204,6 +207,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       price: v.price.toString(),
       hasConfig: isVariantCostConfigured(v.costConfig),
       templateName: v.costConfig?.productionTemplate?.name ?? null,
+      templateProductYield: v.costConfig?.templateProductYield?.toString() ?? null,
       mappedProviders: Array.from(new Set(v.providerMappings.map((mapping) => mapping.provider))),
       latestProviderSyncAt: v.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? null,
       estimate: estimates[index],
@@ -224,6 +228,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "bulk-assign-template") {
     const templateId = formData.get("templateId")?.toString() ?? "";
+    const templateProductYieldInput = formData.get("templateProductYield")?.toString() ?? "";
+    let templateProductYield: number | null;
+    try {
+      templateProductYield = parseOptionalPositiveWholeNumber(templateProductYieldInput, "Template product yield");
+    } catch (error) {
+      if (error instanceof Response) {
+        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
+      }
+      throw error;
+    }
     const variantIds = [...new Set(formData.getAll("variantId").map(String))];
     const cleanupExactDuplicates = formData.get("cleanupExactDuplicates")?.toString() === "true";
 
@@ -245,7 +259,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             quantity: true,
             yield: true,
             usesPerVariant: true,
-            material: { select: { name: true } },
+            material: { select: { name: true, costingModel: true } },
           },
         },
         equipmentLines: {
@@ -329,9 +343,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         if (matchingTemplateLines.length !== 1) continue;
 
         const templateLine = matchingTemplateLines[0];
+        const effectiveTemplateYield =
+          templateProductYield && templateLine.material.costingModel === "yield"
+            ? new Prisma.Decimal(templateProductYield)
+            : templateLine.yield;
         const isExactDuplicate =
           nullableDecimalEqual(variantLine.quantity, templateLine.quantity) &&
-          nullableDecimalEqual(variantLine.yield, templateLine.yield) &&
+          nullableDecimalEqual(variantLine.yield, effectiveTemplateYield) &&
           nullableDecimalEqual(variantLine.usesPerVariant, templateLine.usesPerVariant);
 
         if (isExactDuplicate) {
@@ -346,13 +364,17 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         if (matchingTemplateLines.length !== 1) continue;
 
         const templateLine = matchingTemplateLines[0];
+        const effectiveTemplateYieldQuantity =
+          templateProductYield && (templateLine.usageMode === "duration_yield" || templateLine.usageMode === "use_yield")
+            ? new Prisma.Decimal(templateProductYield)
+            : templateLine.yieldQuantity;
         const isExactDuplicate =
           variantLine.usageMode === templateLine.usageMode &&
           nullableDecimalEqual(variantLine.minutes, templateLine.minutes) &&
           nullableDecimalEqual(variantLine.uses, templateLine.uses) &&
           nullableDecimalEqual(variantLine.yieldDurationMinutes, templateLine.yieldDurationMinutes) &&
           nullableDecimalEqual(variantLine.yieldUses, templateLine.yieldUses) &&
-          nullableDecimalEqual(variantLine.yieldQuantity, templateLine.yieldQuantity);
+          nullableDecimalEqual(variantLine.yieldQuantity, effectiveTemplateYieldQuantity);
 
         if (isExactDuplicate) {
           exactDuplicateEquipmentLineIds.push(variantLine.id);
@@ -371,10 +393,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         if (variant.costConfig) {
           await tx.variantCostConfig.updateMany({
             where: { id: variant.costConfig.id, shopId },
-            data: { productionTemplateId: templateId },
+            data: { productionTemplateId: templateId, templateProductYield },
           });
         } else {
-          await tx.variantCostConfig.create({ data: { shopId, variantId: variant.id, productionTemplateId: templateId } });
+          await tx.variantCostConfig.create({
+            data: { shopId, variantId: variant.id, productionTemplateId: templateId, templateProductYield },
+          });
         }
       }
 
@@ -425,6 +449,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           actor: "merchant",
           payload: {
             templateId,
+            templateProductYield,
             variantCount: variantIds.length,
             cleanupExactDuplicates,
             cleanedMaterialLineCount: cleanupExactDuplicates ? exactDuplicateMaterialLineIds.length : 0,
@@ -462,6 +487,7 @@ type VariantRow = {
   price: string;
   hasConfig: boolean;
   templateName: string | null;
+  templateProductYield: string | null;
   mappedProviders: string[];
   latestProviderSyncAt: string | null;
   estimate: VariantEstimatePayload | null;
@@ -503,6 +529,7 @@ export default function VariantsPage() {
 
   const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState(templates[0]?.id ?? "");
+  const [templateProductYield, setTemplateProductYield] = useState("");
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
   const [pendingAssign, setPendingAssign] = useState<string[]>([]);
@@ -564,6 +591,7 @@ export default function VariantsPage() {
 
   function openAssignDialog() {
     setSelectedTemplateId(templates[0]?.id ?? "");
+    setTemplateProductYield("");
     setAssignDialogOpen(true);
   }
 
@@ -581,6 +609,7 @@ export default function VariantsPage() {
     const fd = new FormData();
     fd.append("intent", "bulk-assign-template");
     fd.append("templateId", selectedTemplateId);
+    fd.append("templateProductYield", templateProductYield);
     if (cleanupExactDuplicates) fd.append("cleanupExactDuplicates", "true");
     ids.forEach((id) => fd.append("variantId", id));
     fetcher.submit(fd, { method: "post" });
@@ -904,7 +933,18 @@ export default function VariantsPage() {
                           <s-text color="subdued">Unavailable</s-text>
                         )}
                       </s-table-cell>
-                      <s-table-cell>{variant.templateName ?? "—"}</s-table-cell>
+                      <s-table-cell>
+                        {variant.templateName ? (
+                          <div style={{ display: "grid", gap: "0.2rem" }}>
+                            <span>{variant.templateName}</span>
+                            {variant.templateProductYield ? (
+                              <s-text color="subdued">Yield {variant.templateProductYield}</s-text>
+                            ) : null}
+                          </div>
+                        ) : (
+                          "—"
+                        )}
+                      </s-table-cell>
                       <s-table-cell>
                         {variant.mappedProviders.length > 0 ? (
                           <div style={{ display: "grid", gap: "0.2rem" }}>
@@ -1008,6 +1048,30 @@ export default function VariantsPage() {
                   Remove exact duplicate variant lines already included in this template.
                 </span>
               </label>
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor="bulk-template-product-yield">Products yielded by this template assignment</label>
+                <input
+                  id="bulk-template-product-yield"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={templateProductYield}
+                  onChange={(event) => setTemplateProductYield(event.currentTarget.value)}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "0.75rem",
+                    borderRadius: "0.75rem",
+                    border: "1px solid var(--p-color-border, #d2d5d8)",
+                    background: "var(--p-color-bg-surface, #fff)",
+                    color: "var(--p-color-text, #303030)",
+                    font: "inherit",
+                  }}
+                />
+                <s-text color="subdued">
+                  Optional. Applies one finished-product yield to yield-based template materials and equipment.
+                </s-text>
+              </div>
             </div>
           )}
 

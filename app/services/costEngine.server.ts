@@ -599,10 +599,14 @@ export async function resolveCosts(
     const explicitOverride = explicitMaterialOverrideMap.get(tl.id);
     const legacyOverride = explicitOverride ? null : legacyMaterialOverrides.get(tl.materialId);
     const override = explicitOverride ?? legacyOverride;
+    const assignmentYield =
+      !override && tl.material.costingModel === "yield"
+        ? config.templateProductYield
+        : null;
     allMaterialLines.push({
       materialId: tl.materialId,
       material: override?.material ?? tl.material,
-      yield_: override?.yield ?? tl.yield,
+      yield_: override?.yield ?? assignmentYield ?? tl.yield,
       quantity: override?.quantity ?? tl.quantity,
       usesPerVariant: override?.usesPerVariant ?? tl.usesPerVariant,
     });
@@ -709,15 +713,20 @@ export async function resolveCosts(
     const explicitOverride = explicitEquipmentOverrideMap.get(tl.id);
     const legacyOverride = explicitOverride ? null : legacyEquipmentOverrides.get(tl.equipmentId);
     const override = explicitOverride ?? legacyOverride;
+    const effectiveUsageMode = override?.usageMode ?? tl.usageMode;
+    const assignmentYieldQuantity =
+      !override && (effectiveUsageMode === "duration_yield" || effectiveUsageMode === "use_yield")
+        ? config.templateProductYield
+        : null;
     allEquipmentLines.push({
       equipmentId: tl.equipmentId,
       equipment: override?.equipment ?? tl.equipment,
-      usageMode: override?.usageMode ?? tl.usageMode,
+      usageMode: effectiveUsageMode,
       minutes: override?.minutes ?? tl.minutes,
       uses: override?.uses ?? tl.uses,
       yieldDurationMinutes: override?.yieldDurationMinutes ?? tl.yieldDurationMinutes,
       yieldUses: override?.yieldUses ?? tl.yieldUses,
-      yieldQuantity: override?.yieldQuantity ?? tl.yieldQuantity,
+      yieldQuantity: override?.yieldQuantity ?? assignmentYieldQuantity ?? tl.yieldQuantity,
     });
     if (override) consumedVariantEquipmentLineIds.add(override.id);
   }

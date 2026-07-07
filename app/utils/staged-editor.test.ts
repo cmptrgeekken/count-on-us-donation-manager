@@ -92,6 +92,7 @@ describe("staged editor helpers", () => {
     const draft: VariantDraft = {
       productionTemplateId: "old-template",
       preferredPackageId: null,
+      templateProductYield: "7",
       packedLength: "",
       packedWidth: "",
       packedHeight: "",
@@ -124,6 +125,7 @@ describe("staged editor helpers", () => {
     expect(applyTemplateSelectionToVariantDraft(draft, catalogEntry)).toEqual({
       ...draft,
       productionTemplateId: "template-1",
+      templateProductYield: "7",
       templateMaterialLines: [
         {
           templateLineId: "mat-line-1",
@@ -168,6 +170,7 @@ describe("staged editor helpers", () => {
     const emptyDraft: VariantDraft = {
       productionTemplateId: null,
       preferredPackageId: null,
+      templateProductYield: "",
       packedLength: "",
       packedWidth: "",
       packedHeight: "",

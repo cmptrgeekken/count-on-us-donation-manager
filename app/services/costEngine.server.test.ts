@@ -185,6 +185,96 @@ describe("resolveCosts", () => {
     expect(result.materialCost.toString()).toBe("60");
   });
 
+  it("uses assignment product yield as the denominator for yield-based template materials", async () => {
+    const stickerSheet = createMaterial({ id: "sticker-sheet", purchasePrice: "12" });
+    const laminateSheet = createMaterial({ id: "laminate-sheet", purchasePrice: "9" });
+    const config = {
+      templateProductYield: decimal("6"),
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: {
+        materialLines: [
+          {
+            id: "sticker-line",
+            materialId: "sticker-sheet",
+            material: stickerSheet,
+            quantity: decimal("1"),
+            yield: decimal("1"),
+            usesPerVariant: null,
+          },
+          {
+            id: "laminate-line",
+            materialId: "laminate-sheet",
+            material: laminateSheet,
+            quantity: decimal("2"),
+            yield: decimal("1"),
+            usesPerVariant: null,
+          },
+        ],
+        equipmentLines: [],
+      },
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts("shop-1", "variant-1", decimal("50"), "preview", createDb(config));
+
+    expect(result.materialLines.map((line) => ({
+      materialId: line.materialId,
+      quantity: line.quantity.toString(),
+      yield: line.yield?.toString() ?? null,
+      lineCost: line.lineCost.toString(),
+    }))).toEqual([
+      { materialId: "sticker-sheet", quantity: "1", yield: "6", lineCost: "2" },
+      { materialId: "laminate-sheet", quantity: "2", yield: "6", lineCost: "3" },
+    ]);
+    expect(result.materialCost.toString()).toBe("5");
+  });
+
+  it("keeps explicit material line overrides ahead of assignment product yield", async () => {
+    const stickerSheet = createMaterial({ id: "sticker-sheet", purchasePrice: "12" });
+    const config = {
+      templateProductYield: decimal("6"),
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: {
+        materialLines: [
+          {
+            id: "sticker-line",
+            materialId: "sticker-sheet",
+            material: stickerSheet,
+            quantity: decimal("1"),
+            yield: decimal("1"),
+            usesPerVariant: null,
+          },
+        ],
+        equipmentLines: [],
+      },
+      shippingTemplate: null,
+      materialLines: [
+        {
+          id: "override-line",
+          configId: "config-1",
+          materialId: "sticker-sheet",
+          material: stickerSheet,
+          templateLineId: "sticker-line",
+          quantity: decimal("1"),
+          yield: decimal("4"),
+          usesPerVariant: null,
+        },
+      ],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts("shop-1", "variant-1", decimal("50"), "preview", createDb(config));
+
+    expect(result.materialLines[0]?.yield?.toString()).toBe("4");
+    expect(result.materialCost.toString()).toBe("3");
+  });
+
   it("only treats legacy overrides as template overrides when the template material is unique", async () => {
     const uniqueMaterial = createMaterial({ id: "mat-unique" });
     const duplicatedMaterial = createMaterial({ id: "mat-duplicate" });
@@ -400,6 +490,65 @@ describe("resolveCosts", () => {
         yieldQuantity: decimal("6"),
       }),
     );
+  });
+
+  it("uses assignment product yield as the denominator for yield-based template equipment", async () => {
+    const printer = {
+      ...createEquipment("printer"),
+      hourlyRate: decimal("60"),
+    };
+    const cutter = {
+      ...createEquipment("cutter"),
+      perUseCost: decimal("9"),
+    };
+    const config = {
+      templateProductYield: decimal("6"),
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: {
+        materialLines: [],
+        equipmentLines: [
+          {
+            id: "printer-line",
+            equipmentId: "printer",
+            equipment: printer,
+            usageMode: "duration_yield",
+            minutes: null,
+            uses: null,
+            yieldDurationMinutes: decimal("12"),
+            yieldUses: null,
+            yieldQuantity: decimal("1"),
+          },
+          {
+            id: "cutter-line",
+            equipmentId: "cutter",
+            equipment: cutter,
+            usageMode: "use_yield",
+            minutes: null,
+            uses: null,
+            yieldDurationMinutes: null,
+            yieldUses: decimal("1"),
+            yieldQuantity: decimal("1"),
+          },
+        ],
+      },
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts("shop-1", "variant-1", decimal("50"), "preview", createDb(config));
+
+    expect(result.equipmentLines.map((line) => ({
+      equipmentId: line.equipmentId,
+      yieldQuantity: line.yieldQuantity?.toString() ?? null,
+      lineCost: line.lineCost.toString(),
+    }))).toEqual([
+      { equipmentId: "printer", yieldQuantity: "6", lineCost: "2" },
+      { equipmentId: "cutter", yieldQuantity: "6", lineCost: "1.5" },
+    ]);
+    expect(result.equipmentCost.toString()).toBe("3.5");
   });
 
   it("calculates equipment rates from electricity, depreciation, and consumables", async () => {
