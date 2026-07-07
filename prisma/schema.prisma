@@ -264,15 +264,18 @@ model CostTemplateEquipmentLine {
 }
 
 model Product {
-  id        String   @id @default(cuid())
-  shopId    String
-  shopifyId String // full GID: "gid://shopify/Product/123"
-  title     String
-  handle    String
-  status    String // "active" | "archived" | "draft"
-  syncedAt  DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  shopId              String
+  shopifyId           String // full GID: "gid://shopify/Product/123"
+  title               String
+  handle              String
+  status              String // "active" | "archived" | "draft"
+  productCategoryId   String?
+  productCategoryName String?
+  productCategoryPath String?
+  syncedAt            DateTime
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   variants         Variant[]
   causeAssignments ProductCauseAssignment[]
@@ -280,6 +283,7 @@ model Product {
 
   @@unique([shopId, shopifyId])
   @@index([shopId])
+  @@index([shopId, productCategoryPath])
 }
 
 model Variant {

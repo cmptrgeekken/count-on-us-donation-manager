@@ -59,6 +59,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         title: "Configured Product",
         handle: "configured-product",
         status: "active",
+        productCategoryId: "gid://shopify/TaxonomyCategory/aa-1",
+        productCategoryName: "Stickers",
+        productCategoryPath: "Arts & Entertainment > Hobbies & Creative Arts > Stickers",
         syncedAt,
       },
     }),
@@ -69,6 +72,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         title: "Partial Product",
         handle: "partial-product",
         status: "active",
+        productCategoryId: "gid://shopify/TaxonomyCategory/aa-2",
+        productCategoryName: "Earrings",
+        productCategoryPath: "Apparel & Accessories > Jewelry > Earrings",
         syncedAt,
       },
     }),
@@ -139,5 +145,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return jsonResponse({
     productsUrl: `${baseUrl}/app/products?__playwrightShop=${encodeURIComponent(shopId)}`,
+    variantsUrl: `${baseUrl}/app/variants?__playwrightShop=${encodeURIComponent(shopId)}`,
   });
 };

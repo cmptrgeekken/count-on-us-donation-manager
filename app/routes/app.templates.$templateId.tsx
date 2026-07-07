@@ -466,7 +466,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     for (const line of draft.materialLines) {
       const data = {
         quantity: parseRequiredNonNegativeWholeNumber(line.quantity, "Material quantity"),
-        yield: parseOptionalNonNegativeWholeNumber(line.yield, "Items made from one purchased unit"),
+        yield: parseOptionalNonNegativeWholeNumber(line.yield, "Default products made per purchased unit"),
         usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Portions used per item"),
       };
 
@@ -572,7 +572,7 @@ function describeMaterialLine(line: TemplateDraftMaterialLine) {
   }
 
   if (line.costingModel === "yield") {
-    return `Variable yield: ${line.quantity} purchased unit(s), ${line.yield ?? "-"} items per purchased unit`;
+    return `Variable yield: ${line.quantity} purchased unit(s), ${line.yield ?? "-"} default product(s)`;
   }
 
   if (line.costingModel === "uses") {
@@ -1271,13 +1271,14 @@ export default function TemplateDetailPage() {
                   autoComplete="off"
                 />
                 <TextField
-                  label="Items made from one purchased unit"
+                  label="Default products made per purchased unit"
                   type="number"
                   min={0}
                   step={1}
                   value={matYield}
                   onChange={setMatYield}
                   autoComplete="off"
+                  helpText="Used when a variant assignment does not set its own products-made value. For variable layouts, enter your most common yield."
                 />
               </>
             )}
