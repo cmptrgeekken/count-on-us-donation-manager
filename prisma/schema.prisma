@@ -319,6 +319,7 @@ model VariantCostConfig {
   packedHeight         Decimal?      @db.Decimal(10, 3)
   packedWeightGrams    Decimal?      @db.Decimal(10, 3)
   canSharePackage      Boolean       @default(true)
+  templateProductYield Decimal?      @db.Decimal(10, 4)
   laborMinutes         Decimal?      @db.Decimal(10, 4)
   laborRate            Decimal?      @db.Decimal(10, 4) // overrides Shop.defaultLaborRate when set
   mistakeBuffer        Decimal?      @db.Decimal(5, 4) // overrides Shop.mistakeBuffer when set

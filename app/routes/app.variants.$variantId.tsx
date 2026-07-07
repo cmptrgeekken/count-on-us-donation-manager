@@ -234,6 +234,7 @@ const variantDraftSchema = z.object({
   productionTemplateId: z.string().nullable().optional(),
   shippingTemplateId: z.string().nullable().optional(),
   preferredPackageId: z.string().nullable().optional(),
+  templateProductYield: z.string(),
   packedLength: z.string(),
   packedWidth: z.string(),
   packedHeight: z.string(),
@@ -563,6 +564,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           productionTemplateId: config.productionTemplateId,
           shippingTemplateId: config.shippingTemplateId,
           preferredPackageId: config.preferredPackageId,
+          templateProductYield: config.templateProductYield?.toString() ?? "",
           packedLength: config.packedLength?.toString() ?? "",
           packedWidth: config.packedWidth?.toString() ?? "",
           packedHeight: config.packedHeight?.toString() ?? "",
@@ -959,6 +961,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         draft.laborMinutes ||
         draft.laborRate ||
         draft.mistakeBuffer ||
+        draft.templateProductYield ||
         normalizedPreferredPackageId ||
         draft.packedLength ||
         draft.packedWidth ||
@@ -1084,6 +1087,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
             preferredPackageId: normalizedPreferredPackageId,
+            templateProductYield: normalizedProductionTemplateId
+              ? parseOptionalPositiveWholeNumber(draft.templateProductYield, "Template product yield")
+              : null,
             packedLength: parseOptionalNonNegativeNumber(draft.packedLength, "Packed length"),
             packedWidth: parseOptionalNonNegativeNumber(draft.packedWidth, "Packed width"),
             packedHeight: parseOptionalNonNegativeNumber(draft.packedHeight, "Packed height"),
@@ -1103,6 +1109,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             productionTemplateId: normalizedProductionTemplateId,
             shippingTemplateId: normalizedShippingTemplateId,
             preferredPackageId: normalizedPreferredPackageId,
+            templateProductYield: normalizedProductionTemplateId
+              ? parseOptionalPositiveWholeNumber(draft.templateProductYield, "Template product yield")
+              : null,
             packedLength: parseOptionalNonNegativeNumber(draft.packedLength, "Packed length"),
             packedWidth: parseOptionalNonNegativeNumber(draft.packedWidth, "Packed width"),
             packedHeight: parseOptionalNonNegativeNumber(draft.packedHeight, "Packed height"),
@@ -1190,6 +1199,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         productionTemplateId: sourceConfig.productionTemplateId,
         shippingTemplateId: sourceConfig.shippingTemplateId,
         preferredPackageId: sourceConfig.preferredPackageId,
+        templateProductYield: sourceConfig.templateProductYield,
         packedLength: sourceConfig.packedLength,
         packedWidth: sourceConfig.packedWidth,
         packedHeight: sourceConfig.packedHeight,
@@ -1393,10 +1403,14 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       for (const line of templateMaterialSource) {
         const override = explicitMaterialOverrides.get(line.id) ?? legacyMaterialOverrides.get(line.materialId) ?? null;
         if (override) consumedMaterialLineIds.add(override.id);
+        const assignmentYield =
+          !override && line.material.costingModel === "yield"
+            ? sourceConfig.templateProductYield
+            : null;
         const effectiveLine = {
           materialId: line.materialId,
           quantity: override?.quantity ?? line.quantity,
-          yield: override?.yield ?? line.yield,
+          yield: override?.yield ?? assignmentYield ?? line.yield,
           usesPerVariant: override?.usesPerVariant ?? line.usesPerVariant,
         };
         if (promotion.includeMaterials && selectedMaterialLineKeys.has(`template:${line.id}`)) {
@@ -1469,14 +1483,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       for (const line of templateEquipmentSource) {
         const override = explicitEquipmentOverrides.get(line.id) ?? legacyEquipmentOverrides.get(line.equipmentId) ?? null;
         if (override) consumedEquipmentLineIds.add(override.id);
+        const usageMode = override?.usageMode ?? line.usageMode ?? "direct";
+        const assignmentYieldQuantity =
+          !override && (usageMode === "duration_yield" || usageMode === "use_yield")
+            ? sourceConfig.templateProductYield
+            : null;
         const effectiveLine = {
           equipmentId: line.equipmentId,
-          usageMode: override?.usageMode ?? line.usageMode ?? "direct",
+          usageMode,
           minutes: override?.minutes ?? line.minutes,
           uses: override?.uses ?? line.uses,
           yieldDurationMinutes: override?.yieldDurationMinutes ?? line.yieldDurationMinutes,
           yieldUses: override?.yieldUses ?? line.yieldUses,
-          yieldQuantity: override?.yieldQuantity ?? line.yieldQuantity,
+          yieldQuantity: override?.yieldQuantity ?? assignmentYieldQuantity ?? line.yieldQuantity,
         };
         if (promotion.includeEquipment && selectedEquipmentLineKeys.has(`template:${line.id}`)) {
           promotedEquipmentLines.push({
@@ -1592,6 +1611,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           where: { id: sourceConfig.id, shopId },
           data: {
             productionTemplateId: createdTemplate.id,
+            templateProductYield: null,
             lineItemCount: retainedMaterialLineCount + retainedEquipmentLineCount,
           },
         });
@@ -1928,7 +1948,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     await prisma.$transaction([
       prisma.variantCostConfig.updateMany({
         where: { id: config.id, shopId },
-        data: { productionTemplateId: templateId },
+        data: { productionTemplateId: templateId, templateProductYield: null },
       }),
       prisma.variantMaterialLine.deleteMany({
         where: {
@@ -1982,7 +2002,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       await prisma.$transaction([
         prisma.variantCostConfig.updateMany({
           where: { id: config.id, shopId },
-          data: { productionTemplateId: null },
+          data: { productionTemplateId: null, templateProductYield: null },
         }),
         prisma.variantMaterialLine.deleteMany({
           where: {
@@ -2413,6 +2433,7 @@ function buildVariantDraft(config: {
   productionTemplateId?: string | null;
   shippingTemplateId?: string | null;
   preferredPackageId?: string | null;
+  templateProductYield: string;
   packedLength: string;
   packedWidth: string;
   packedHeight: string;
@@ -2430,6 +2451,7 @@ function buildVariantDraft(config: {
     productionTemplateId: config?.productionTemplateId ?? null,
     shippingTemplateId: config?.shippingTemplateId ?? null,
     preferredPackageId: config?.preferredPackageId ?? null,
+    templateProductYield: config?.templateProductYield ?? "",
     packedLength: config?.packedLength ?? "",
     packedWidth: config?.packedWidth ?? "",
     packedHeight: config?.packedHeight ?? "",
@@ -2484,6 +2506,7 @@ export default function VariantDetailPage() {
       templates.find((template: TemplateCatalogEntry) => template.type !== "shipping")?.id ??
       "",
   );
+  const [selectedTemplateProductYield, setSelectedTemplateProductYield] = useState(config?.templateProductYield ?? "");
   const [assignShippingTemplateOpen, setAssignShippingTemplateOpen] = useState(false);
   const [selectedShippingTemplateId, setSelectedShippingTemplateId] = useState(
     config?.shippingTemplateId ??
@@ -3031,7 +3054,10 @@ export default function VariantDetailPage() {
 
   function applySelectedTemplate() {
     const nextTemplate = templates.find((template: TemplateCatalogEntry) => template.id === selectedTemplateId) ?? null;
-    setDraft((current) => applyTemplateSelectionToVariantDraft(current, nextTemplate));
+    setDraft((current) => ({
+      ...applyTemplateSelectionToVariantDraft(current, nextTemplate),
+      templateProductYield: nextTemplate ? selectedTemplateProductYield : "",
+    }));
     setAssignTemplateOpen(false);
   }
 
@@ -3421,6 +3447,7 @@ export default function VariantDetailPage() {
                       <Button
                         onClick={() => {
                           setSelectedTemplateId(draft.productionTemplateId ?? productionTemplates[0]?.id ?? "");
+                          setSelectedTemplateProductYield(draft.templateProductYield);
                           setAssignTemplateOpen(true);
                         }}
                         disabled={productionTemplates.length === 0}
@@ -3432,6 +3459,18 @@ export default function VariantDetailPage() {
                   <Text as="p" variant="bodyMd" tone={assignedProductionTemplate ? undefined : "subdued"}>
                     {assignedProductionTemplate?.name ?? "No production template assigned"}
                   </Text>
+                  {assignedProductionTemplate ? (
+                    <TextField
+                      label="Products yielded by this template assignment"
+                      type="number"
+                      min={1}
+                      step={1}
+                      value={draft.templateProductYield}
+                      onChange={(value) => setDraft((current) => ({ ...current, templateProductYield: value }))}
+                      autoComplete="off"
+                      helpText="Used as the finished-product denominator for yield-based template materials and equipment unless a line override is active."
+                    />
+                  ) : null}
                 </BlockStack>
               </div>
               <div style={{ flex: 1 }}>
@@ -3515,6 +3554,11 @@ export default function VariantDetailPage() {
                           <Text as="p" variant="bodyMd" tone="subdued">
                             Default: {describeMaterialLine(line)}
                           </Text>
+                          {!line.hasOverride && draft.templateProductYield && line.costingModel === "yield" ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              Assignment yield: {draft.templateProductYield} products; quantity stays {line.quantity}.
+                            </Text>
+                          ) : null}
                           {line.hasOverride ? (
                             <Text as="p" variant="bodyMd" tone="subdued">
                               Override: {describeMaterialLine({
@@ -3641,6 +3685,13 @@ export default function VariantDetailPage() {
                           <Text as="p" variant="bodyMd" tone="subdued">
                             Default: {describeEquipmentLine(line)}
                           </Text>
+                          {!line.hasOverride &&
+                          draft.templateProductYield &&
+                          (line.usageMode === "duration_yield" || line.usageMode === "use_yield") ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              Assignment yield: {draft.templateProductYield} products.
+                            </Text>
+                          ) : null}
                           {line.hasOverride ? (
                             <Text as="p" variant="bodyMd" tone="subdued">
                               Override: {describeEquipmentLine({
@@ -3951,6 +4002,16 @@ export default function VariantDetailPage() {
                 emptyText="No production templates match that search."
               />
             </InlineStack>
+            <TextField
+              label="Products yielded by this template assignment"
+              type="number"
+              min={1}
+              step={1}
+              value={selectedTemplateProductYield}
+              onChange={setSelectedTemplateProductYield}
+              autoComplete="off"
+              helpText="For a batch that uses one sticker sheet and two laminate sheets to make six stickers, enter 6."
+            />
           </BlockStack>
         </Modal.Section>
       </Modal>
