@@ -583,8 +583,26 @@ model Artist {
   periodAllocations     ArtistAllocation[]
   payments              ArtistPayment[]
   convertedSubmissions  ArtistSubmission[]
+  orderAttributions     OrderArtistAttribution[]
+  customerAssociations  CustomerArtistAssociation[]
 
   @@index([shopId, status])
+}
+
+model CustomerArtistAssociation {
+  id                          String   @id @default(cuid())
+  shopId                      String
+  shopifyCustomerId           String?
+  normalizedCustomerEmailHash String?
+  artistId                    String
+  artist                      Artist   @relation(fields: [artistId], references: [id], onDelete: Restrict)
+  source                      String   @default("manual")
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  @@index([shopId, artistId])
+  @@index([shopId, shopifyCustomerId])
+  @@index([shopId, normalizedCustomerEmailHash])
 }
 
 model ArtistSubmission {
@@ -715,6 +733,8 @@ model OrderSnapshot {
   shopId         String
   shopifyOrderId String
   orderNumber    String?
+  shopifyCustomerId String?
+  normalizedCustomerEmailHash String?
   origin         String   @default("webhook")
   periodId       String?
   period         ReportingPeriod? @relation(fields: [periodId], references: [id], onDelete: SetNull)
@@ -728,11 +748,30 @@ model OrderSnapshot {
   packageAllocations OrderPackageAllocation[]
   packagingReviewItems PackagingReviewItem[]
   settlements OrderSettlement[]
+  artistAttribution OrderArtistAttribution?
 
   @@unique([shopId, shopifyOrderId])
   @@index([shopId])
+  @@index([shopId, shopifyCustomerId])
+  @@index([shopId, normalizedCustomerEmailHash])
   @@index([shopId, periodId])
   @@index([shopId, importBatchId])
+}
+
+model OrderArtistAttribution {
+  id          String        @id @default(cuid())
+  shopId      String
+  snapshotId  String        @unique
+  snapshot    OrderSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+  artistId    String
+  artist      Artist        @relation(fields: [artistId], references: [id], onDelete: Restrict)
+  source      String        @default("manual")
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([shopId, artistId])
+  @@index([shopId, source])
 }
 
 model OrderSettlement {
@@ -941,6 +980,7 @@ model LineArtistAllocation {
   payoutRate             Decimal           @db.Decimal(5, 2)
   payoutBasis            Decimal           @db.Decimal(10, 4)
   payoutAmount           Decimal           @db.Decimal(10, 4)
+  payoutExclusionReason  String?
   donationRoutableAmount Decimal           @db.Decimal(10, 4)
   createdAt              DateTime          @default(now())
 

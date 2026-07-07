@@ -7,6 +7,7 @@ import { detectAndUpsertExternalSettlementReview } from "./orderSettlement.serve
 import { decryptProviderCredential } from "./providerCredentials.server";
 import { listPrintifyProducts } from "./printify.server";
 import { recomputeTaxOffsetCache } from "./taxOffsetCache.server";
+import { hashNormalizedCustomerEmail } from "../utils/customer-identity.server";
 
 type SnapshotLineItemPayload = {
   admin_graphql_api_id?: string;
@@ -81,6 +82,13 @@ export type ShopifyOrderPayload = {
       amount?: string | number | null;
     } | null;
   } | null;
+  contact_email?: string | null;
+  email?: string | null;
+  customer?: {
+    id?: string | number | null;
+    admin_graphql_api_id?: string | null;
+    email?: string | null;
+  } | null;
   line_items?: SnapshotLineItemPayload[];
 };
 
@@ -139,6 +147,19 @@ function getOrderCreatedAt(order: ShopifyOrderPayload) {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 }
 
+function toCustomerGid(order: ShopifyOrderPayload) {
+  const explicitGid = order.customer?.admin_graphql_api_id;
+  if (explicitGid) return explicitGid;
+  const id = order.customer?.id;
+  if (typeof id === "string" && id.startsWith("gid://")) return id;
+  if (id !== null && id !== undefined && id !== "") return `gid://shopify/Customer/${id}`;
+  return null;
+}
+
+function getCustomerEmailHash(order: ShopifyOrderPayload) {
+  return hashNormalizedCustomerEmail(order.customer?.email ?? order.contact_email ?? order.email);
+}
+
 function toVariantGid(lineItem: SnapshotLineItemPayload) {
   if (lineItem.admin_graphql_api_id?.includes("ProductVariant")) {
     return lineItem.admin_graphql_api_id;
@@ -195,6 +216,7 @@ type SnapshotResolution = {
     payoutRate: Prisma.Decimal;
     payoutBasis: Prisma.Decimal;
     payoutAmount: Prisma.Decimal;
+    payoutExclusionReason: string | null;
     donationRoutableAmount: Prisma.Decimal;
   }>;
 };
@@ -452,6 +474,21 @@ export async function createSnapshot(
   );
   const initialVariantIds = variants.map((variant: { id: string }) => variant.id);
   const podOverrides = await fetchSnapshotPodOverrides(shopId, initialVariantIds, db, fetchImpl);
+  const shopifyCustomerId = toCustomerGid(order);
+  const normalizedCustomerEmailHash = getCustomerEmailHash(order);
+  const customerArtistAssociation =
+    db.customerArtistAssociation?.findFirst && (shopifyCustomerId || normalizedCustomerEmailHash)
+      ? await db.customerArtistAssociation.findFirst({
+          where: {
+            shopId,
+            OR: [
+              ...(shopifyCustomerId ? [{ shopifyCustomerId }] : []),
+              ...(normalizedCustomerEmailHash ? [{ normalizedCustomerEmailHash }] : []),
+            ],
+          },
+          select: { artistId: true },
+        })
+      : null;
 
   const firstPassResolutions = await Promise.all(
     lineItems.map(async (lineItem): Promise<SnapshotResolution> => {
@@ -575,7 +612,10 @@ export async function createSnapshot(
           for (const assignment of productArtistAssignments) {
             const artist = assignment.artist;
             const collaborationShare = new Prisma.Decimal(assignment.collaborationShare);
-            const payoutEnabled = assignment.payoutEnabledOverride ?? artist.paymentEnabled;
+            const selfPurchaseExcluded = customerArtistAssociation?.artistId === artist.id;
+            const payoutEnabled = selfPurchaseExcluded
+              ? false
+              : assignment.payoutEnabledOverride ?? artist.paymentEnabled;
             const payoutRate = new Prisma.Decimal(assignment.payoutRateOverride ?? artist.defaultPayoutRate);
             const payoutBasis = line.subtotal.mul(collaborationShare).div(100);
             const payoutAmount = payoutEnabled ? payoutBasis.mul(payoutRate).div(100) : ZERO;
@@ -594,6 +634,7 @@ export async function createSnapshot(
               payoutRate,
               payoutBasis,
               payoutAmount,
+              payoutExclusionReason: selfPurchaseExcluded ? "SELF_PURCHASE" : null,
               donationRoutableAmount,
             });
 
@@ -661,9 +702,21 @@ export async function createSnapshot(
           importBatchId: metadata.importBatchId ?? null,
           importedAt: metadata.importedAt ?? null,
           salesTaxCollected: getOrderSalesTax(order),
+          shopifyCustomerId,
+          normalizedCustomerEmailHash,
           createdAt: getOrderCreatedAt(order),
         },
       });
+      if (customerArtistAssociation) {
+        await tx.orderArtistAttribution.create({
+          data: {
+            shopId,
+            snapshotId: snapshot.id,
+            artistId: customerArtistAssociation.artistId,
+            source: "customer_association",
+          },
+        });
+      }
       const packagingLines: Array<{
         id: string;
         variantId: string | null;
@@ -822,6 +875,7 @@ export async function createSnapshot(
               payoutRate: allocation.payoutRate,
               payoutBasis: allocation.payoutBasis,
               payoutAmount: allocation.payoutAmount,
+              payoutExclusionReason: allocation.payoutExclusionReason,
               donationRoutableAmount: allocation.donationRoutableAmount,
             })),
           });
