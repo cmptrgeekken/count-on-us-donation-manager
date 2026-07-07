@@ -4,7 +4,6 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import {
-  Autocomplete,
   Badge,
   Banner,
   BlockStack,
@@ -20,6 +19,7 @@ import {
   TitleBar,
 } from "../components/polaris-shim";
 import { z } from "zod";
+import { AssignmentPicker } from "../components/AssignmentControls";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
 import { resolveEquipmentEffectiveRates, type EquipmentForCosting } from "../services/costEngine.server";
@@ -2600,35 +2600,50 @@ export default function VariantDetailPage() {
   const equipmentOverrideUsageModeOptions = usageModeOptionsForBasis(equipmentOverrideUsageBasis);
   const unavailableMaterialIds = new Set(draft.materialLines.map((line: SerializedMaterialLine) => line.materialId));
   const unavailableEquipmentIds = new Set(draft.equipmentLines.map((line: SerializedEquipmentLine) => line.equipmentId));
-  const filteredMaterialOptions = availableMaterials
-    .filter((material: AvailableMaterial) => !unavailableMaterialIds.has(material.id))
-    .filter((material: AvailableMaterial) =>
-      material.name.toLowerCase().includes(materialSearchValue.trim().toLowerCase()),
-    )
-    .map((material: AvailableMaterial) => ({ label: material.name, value: material.id }));
-  const filteredEquipmentOptions = availableEquipment
-    .filter((equipment: AvailableEquipment) => !unavailableEquipmentIds.has(equipment.id))
-    .filter((equipment: AvailableEquipment) =>
-      equipment.name.toLowerCase().includes(equipmentSearchValue.trim().toLowerCase()),
-    )
-    .map((equipment: AvailableEquipment) => ({ label: equipment.name, value: equipment.id }));
-  const filteredCopySourceOptions = copySourceVariants
-    .filter((sourceVariant: CopySourceVariant) => {
-      const query = copySourceSearchValue.trim().toLowerCase();
-      if (!query) return true;
-      return [
-        sourceVariant.productTitle,
-        sourceVariant.title,
-        sourceVariant.sku,
-        sourceVariant.templateName ?? "",
-      ].some((value) => value.toLowerCase().includes(query));
-    })
-    .map((sourceVariant: CopySourceVariant) => ({
-      value: sourceVariant.id,
-      label: `${sourceVariant.productTitle} - ${sourceVariant.title}${
-        sourceVariant.sku ? ` (${sourceVariant.sku})` : ""
-      }`,
+  const materialPickerOptions = availableMaterials
+    .filter((material: AvailableMaterial) => !unavailableMaterialIds.has(material.id) || material.id === selectedMaterialId)
+    .map((material: AvailableMaterial) => ({
+      id: material.id,
+      label: material.name,
+      meta: [
+        material.type,
+        material.costingModel ?? "counted",
+        `${formatMoney(material.perUnitCost)} per unit`,
+      ],
     }));
+  const equipmentPickerOptions = availableEquipment
+    .filter((equipment: AvailableEquipment) => !unavailableEquipmentIds.has(equipment.id) || equipment.id === selectedEquipmentId)
+    .map((equipment: AvailableEquipment) => ({
+      id: equipment.id,
+      label: equipment.name,
+      meta: [
+        equipment.usageBasis,
+        equipment.hourlyRate ? `${formatMoney(equipment.hourlyRate)}/hr` : "",
+        equipment.perUseCost ? `${formatMoney(equipment.perUseCost)} per use` : "",
+      ].filter(Boolean),
+    }));
+  const copySourcePickerOptions = copySourceVariants.map((sourceVariant: CopySourceVariant) => ({
+    id: sourceVariant.id,
+    label: `${sourceVariant.productTitle} - ${sourceVariant.title}`,
+    description: sourceVariant.sku ? `SKU ${sourceVariant.sku}` : undefined,
+    meta: [
+      sourceVariant.templateName ? `Production template: ${sourceVariant.templateName}` : "No production template",
+      `${sourceVariant.lineItemCount} saved line item${sourceVariant.lineItemCount === 1 ? "" : "s"}`,
+    ],
+  }));
+  const productionTemplatePickerOptions = productionTemplates.map((template: TemplateCatalogEntry) => ({
+    id: template.id,
+    label: template.name,
+    meta: [
+      `${template.materialLines.length} material line${template.materialLines.length === 1 ? "" : "s"}`,
+      `${template.equipmentLines.length} equipment line${template.equipmentLines.length === 1 ? "" : "s"}`,
+    ],
+  }));
+  const shippingTemplatePickerOptions = shippingTemplates.map((template: TemplateCatalogEntry) => ({
+    id: template.id,
+    label: template.name,
+    meta: [`${template.materialLines.length} material line${template.materialLines.length === 1 ? "" : "s"}`],
+  }));
   const additionalProductionMaterialLines = draft.materialLines.filter(
     (line: SerializedMaterialLine) => line.materialType === "production",
   );
@@ -2982,6 +2997,36 @@ export default function VariantDetailPage() {
     formData.append("equipmentCost", quickEquipmentForm.equipmentCost);
     formData.append("purchaseLink", quickEquipmentForm.purchaseLink);
     quickCreateFetcher.submit(formData, { method: "post" });
+  }
+
+  function selectCopySource(nextId: string) {
+    const nextSource = copySourceVariants.find((sourceVariant: CopySourceVariant) => sourceVariant.id === nextId);
+    setSelectedCopySourceId(nextId);
+    setCopySourceSearchValue(
+      nextSource
+        ? `${nextSource.productTitle} - ${nextSource.title}${nextSource.sku ? ` (${nextSource.sku})` : ""}`
+        : "",
+    );
+  }
+
+  function selectAdditionalMaterial(nextId: string) {
+    const nextMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === nextId);
+    setSelectedMaterialId(nextId);
+    setMaterialSearchValue(nextMaterial?.name ?? "");
+    setMatYield(nextMaterial?.costingModel === "yield" ? "1" : "");
+    setMatUses("");
+  }
+
+  function selectAdditionalEquipment(nextId: string) {
+    const nextEquipment = availableEquipment.find((equipment: AvailableEquipment) => equipment.id === nextId);
+    setSelectedEquipmentId(nextId);
+    setEquipmentSearchValue(nextEquipment?.name ?? "");
+    setEqUsageMode(defaultUsageModeForBasis(nextEquipment?.usageBasis));
+    setEqMinutes("");
+    setEqUses("");
+    setEqYieldDurationMinutes("");
+    setEqYieldUses("");
+    setEqYieldQuantity("");
   }
 
   function applySelectedTemplate() {
@@ -3837,37 +3882,26 @@ export default function VariantDetailPage() {
               This will overwrite the production template, shipping override, package settings, labor, mistake buffer,
               material lines, and equipment lines on this variant.
             </Text>
-            <Autocomplete
-              options={filteredCopySourceOptions}
-              selected={selectedCopySourceId ? [selectedCopySourceId] : []}
-              onSelect={(selected) => {
-                const nextId = selected[0] ?? "";
-                const nextSource = copySourceVariants.find((sourceVariant: CopySourceVariant) => sourceVariant.id === nextId);
-                setSelectedCopySourceId(nextId);
-                setCopySourceSearchValue(
-                  nextSource
-                    ? `${nextSource.productTitle} - ${nextSource.title}${nextSource.sku ? ` (${nextSource.sku})` : ""}`
-                    : "",
-                );
-              }}
-              textField={
-                <Autocomplete.TextField
-                  label="Source variant"
-                  value={copySourceSearchValue}
-                  onChange={(value) => {
-                    setCopySourceSearchValue(value);
-                    if (selectedCopySourceId) setSelectedCopySourceId("");
-                  }}
-                  autoComplete="off"
-                  placeholder="Search configured variants"
-                />
-              }
-              emptyState={
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  No matching configured variants found.
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd" fontWeight="semibold">Source variant</Text>
+              <InlineStack align="space-between" blockAlign="center">
+                <Text as="p" variant="bodyMd" tone={selectedCopySource ? undefined : "subdued"}>
+                  {selectedCopySource ? copySourceSearchValue : "No source variant selected"}
                 </Text>
-              }
-            />
+                <AssignmentPicker
+                  id="variant-copy-source-picker"
+                  label="Choose source variant"
+                  triggerLabel={selectedCopySource ? "Change source" : "Choose source"}
+                  options={copySourcePickerOptions}
+                  selectedIds={selectedCopySourceId ? new Set([selectedCopySourceId]) : new Set()}
+                  onAdd={(ids) => selectCopySource(ids[0] ?? "")}
+                  multi={false}
+                  hideSelected={false}
+                  searchPlaceholder="Search configured variants"
+                  emptyText="No matching configured variants found."
+                />
+              </InlineStack>
+            </BlockStack>
             {selectedCopySource ? (
               <BlockStack gap="100">
                 <Text as="p" variant="bodyMd" fontWeight="semibold">
@@ -3898,12 +3932,26 @@ export default function VariantDetailPage() {
         secondaryActions={[{ content: "Cancel", onAction: () => setAssignTemplateOpen(false) }]}
       >
         <Modal.Section>
-          <Select
-            label="Production template"
-            options={productionTemplates.map((template: { id: string; name: string }) => ({ label: template.name, value: template.id }))}
-            value={selectedTemplateId}
-            onChange={setSelectedTemplateId}
-          />
+          <BlockStack gap="200">
+            <Text as="p" variant="bodyMd" fontWeight="semibold">Production template</Text>
+            <InlineStack align="space-between" blockAlign="center">
+              <Text as="p" variant="bodyMd" tone={selectedTemplateId ? undefined : "subdued"}>
+                {productionTemplates.find((template: TemplateCatalogEntry) => template.id === selectedTemplateId)?.name ?? "No template selected"}
+              </Text>
+              <AssignmentPicker
+                id="variant-production-template-picker"
+                label="Choose production template"
+                triggerLabel={selectedTemplateId ? "Change template" : "Choose template"}
+                options={productionTemplatePickerOptions}
+                selectedIds={selectedTemplateId ? new Set([selectedTemplateId]) : new Set()}
+                onAdd={(ids) => setSelectedTemplateId(ids[0] ?? "")}
+                multi={false}
+                hideSelected={false}
+                searchPlaceholder="Search production templates"
+                emptyText="No production templates match that search."
+              />
+            </InlineStack>
+          </BlockStack>
         </Modal.Section>
       </Modal>
 
@@ -3923,12 +3971,26 @@ export default function VariantDetailPage() {
             <Text as="p" variant="bodyMd" tone="subdued">
               Leave the Shipping template unassigned to inherit the default from the Production template when one exists.
             </Text>
-            <Select
-              label="Shipping template"
-              options={shippingTemplates.map((template: { id: string; name: string }) => ({ label: template.name, value: template.id }))}
-              value={selectedShippingTemplateId}
-              onChange={setSelectedShippingTemplateId}
-            />
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd" fontWeight="semibold">Shipping template</Text>
+              <InlineStack align="space-between" blockAlign="center">
+                <Text as="p" variant="bodyMd" tone={selectedShippingTemplateId ? undefined : "subdued"}>
+                  {shippingTemplates.find((template: TemplateCatalogEntry) => template.id === selectedShippingTemplateId)?.name ?? "No shipping template selected"}
+                </Text>
+                <AssignmentPicker
+                  id="variant-shipping-template-picker"
+                  label="Choose shipping template"
+                  triggerLabel={selectedShippingTemplateId ? "Change template" : "Choose template"}
+                  options={shippingTemplatePickerOptions}
+                  selectedIds={selectedShippingTemplateId ? new Set([selectedShippingTemplateId]) : new Set()}
+                  onAdd={(ids) => setSelectedShippingTemplateId(ids[0] ?? "")}
+                  multi={false}
+                  hideSelected={false}
+                  searchPlaceholder="Search shipping templates"
+                  emptyText="No shipping templates match that search."
+                />
+              </InlineStack>
+            </BlockStack>
           </BlockStack>
         </Modal.Section>
       </Modal>
@@ -4249,32 +4311,26 @@ export default function VariantDetailPage() {
       >
         <Modal.Section>
           <BlockStack gap="400">
-            <Autocomplete
-              options={filteredMaterialOptions}
-              selected={selectedMaterialId ? [selectedMaterialId] : []}
-              onSelect={(selected) => {
-                const nextId = selected[0] ?? "";
-                const nextMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === nextId);
-                setSelectedMaterialId(nextId);
-                setMaterialSearchValue(nextMaterial?.name ?? "");
-                setMatYield(nextMaterial?.costingModel === "yield" ? "1" : "");
-                setMatUses("");
-              }}
-              textField={
-                <Autocomplete.TextField
-                  label="Material"
-                  value={materialSearchValue}
-                  onChange={setMaterialSearchValue}
-                  autoComplete="off"
-                  placeholder="Search materials"
-                />
-              }
-              emptyState={
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  No matching materials found.
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd" fontWeight="semibold">Material</Text>
+              <InlineStack align="space-between" blockAlign="center">
+                <Text as="p" variant="bodyMd" tone={selectedMaterial ? undefined : "subdued"}>
+                  {selectedMaterial ? selectedMaterial.name : "No material selected"}
                 </Text>
-              }
-            />
+                <AssignmentPicker
+                  id="variant-material-picker"
+                  label="Choose material"
+                  triggerLabel={selectedMaterial ? "Change material" : "Choose material"}
+                  options={materialPickerOptions}
+                  selectedIds={selectedMaterialId ? new Set([selectedMaterialId]) : new Set()}
+                  onAdd={(ids) => selectAdditionalMaterial(ids[0] ?? "")}
+                  multi={false}
+                  hideSelected={false}
+                  searchPlaceholder="Search materials"
+                  emptyText="No matching materials found."
+                />
+              </InlineStack>
+            </BlockStack>
             <Button
               onClick={() => {
                 setQuickMaterialForm((current) => ({
@@ -4471,36 +4527,26 @@ export default function VariantDetailPage() {
       >
         <Modal.Section>
           <BlockStack gap="400">
-            <Autocomplete
-              options={filteredEquipmentOptions}
-              selected={selectedEquipmentId ? [selectedEquipmentId] : []}
-              onSelect={(selected) => {
-                const nextId = selected[0] ?? "";
-                const nextEquipment = availableEquipment.find((equipment: AvailableEquipment) => equipment.id === nextId);
-                setSelectedEquipmentId(nextId);
-                setEquipmentSearchValue(nextEquipment?.name ?? "");
-                setEqUsageMode(defaultUsageModeForBasis(nextEquipment?.usageBasis));
-                setEqMinutes("");
-                setEqUses("");
-                setEqYieldDurationMinutes("");
-                setEqYieldUses("");
-                setEqYieldQuantity("");
-              }}
-              textField={
-                <Autocomplete.TextField
-                  label="Equipment"
-                  value={equipmentSearchValue}
-                  onChange={setEquipmentSearchValue}
-                  autoComplete="off"
-                  placeholder="Search equipment"
-                />
-              }
-              emptyState={
-                <Text as="p" variant="bodyMd" tone="subdued">
-                  No matching equipment found.
+            <BlockStack gap="200">
+              <Text as="p" variant="bodyMd" fontWeight="semibold">Equipment</Text>
+              <InlineStack align="space-between" blockAlign="center">
+                <Text as="p" variant="bodyMd" tone={selectedEquipment ? undefined : "subdued"}>
+                  {selectedEquipment ? selectedEquipment.name : "No equipment selected"}
                 </Text>
-              }
-            />
+                <AssignmentPicker
+                  id="variant-equipment-picker"
+                  label="Choose equipment"
+                  triggerLabel={selectedEquipment ? "Change equipment" : "Choose equipment"}
+                  options={equipmentPickerOptions}
+                  selectedIds={selectedEquipmentId ? new Set([selectedEquipmentId]) : new Set()}
+                  onAdd={(ids) => selectAdditionalEquipment(ids[0] ?? "")}
+                  multi={false}
+                  hideSelected={false}
+                  searchPlaceholder="Search equipment"
+                  emptyText="No matching equipment found."
+                />
+              </InlineStack>
+            </BlockStack>
             <Button
               onClick={() => {
                 setQuickEquipmentForm((current) => ({

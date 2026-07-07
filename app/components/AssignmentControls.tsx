@@ -56,6 +56,7 @@ export function AssignmentPicker({
   selectedIds,
   onAdd,
   multi = true,
+  hideSelected = true,
   searchPlaceholder = "Search",
   emptyText = "No matching items.",
   disabled = false,
@@ -67,6 +68,7 @@ export function AssignmentPicker({
   selectedIds: Set<string>;
   onAdd: (ids: string[]) => void;
   multi?: boolean;
+  hideSelected?: boolean;
   searchPlaceholder?: string;
   emptyText?: string;
   disabled?: boolean;
@@ -78,12 +80,12 @@ export function AssignmentPicker({
   const visibleOptions = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return options.filter((option) => {
-      if (selectedIds.has(option.id)) return false;
+      if (hideSelected && selectedIds.has(option.id)) return false;
       if (!normalized) return true;
       const haystack = [option.label, option.description, ...(option.meta ?? [])].filter(Boolean).join(" ").toLowerCase();
       return haystack.includes(normalized);
     });
-  }, [options, query, selectedIds]);
+  }, [hideSelected, options, query, selectedIds]);
 
   function togglePending(optionId: string) {
     setPendingIds((current) => {
@@ -166,7 +168,7 @@ export function AssignmentPicker({
                 <div style={{ padding: "1rem", color: "var(--p-color-text-subdued, #6d7175)" }}>{emptyText}</div>
               ) : (
                 visibleOptions.map((option) => {
-                  const checked = pendingIds.includes(option.id);
+                  const checked = pendingIds.includes(option.id) || (pendingIds.length === 0 && selectedIds.has(option.id));
                   return (
                     <label
                       key={option.id}
