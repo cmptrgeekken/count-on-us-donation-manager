@@ -5,6 +5,7 @@ import { boundary } from "@shopify/shopify-app-remix/server";
 import { AppProvider } from "@shopify/shopify-app-remix/react";
 
 import { AdminShell, getAdminCompatibilityNavItems } from "../components/AdminShell";
+import { EmbeddedAppLinkContext } from "../components/EmbeddedAppLinkContext";
 import { prisma } from "../db.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { getLocaleFromRequest } from "../utils/localization.server";
@@ -43,6 +44,7 @@ export default function App() {
 
   return (
     <AppProvider isEmbeddedApp apiKey={apiKey}>
+      <EmbeddedAppLinkContext apiKey={apiKey} />
       {/* Shopify sidebar compatibility; primary navigation is rendered by AdminShell. */}
       <ui-nav-menu>
         {compatibilityNavItems.map((item) => (
