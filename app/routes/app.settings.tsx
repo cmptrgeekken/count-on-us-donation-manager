@@ -100,6 +100,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       taxDeductionMode: true,
       postPurchaseEmailEnabled: true,
       artistSubmissionNotificationEmail: true,
+      artistOverlayEnabled: true,
+      productDescriptionDonationSummaryEnabled: true,
     },
   });
 
@@ -115,6 +117,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     taxDeductionMode: shop?.taxDeductionMode ?? "dont_deduct",
     postPurchaseEmailEnabled: shop?.postPurchaseEmailEnabled ?? false,
     artistSubmissionNotificationEmail: shop?.artistSubmissionNotificationEmail ?? "",
+    artistOverlayEnabled: shop?.artistOverlayEnabled ?? false,
+    productDescriptionDonationSummaryEnabled: shop?.productDescriptionDonationSummaryEnabled ?? false,
   });
 };
 
@@ -393,6 +397,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
+  if (intent === "update-customer-merchandising-settings") {
+    const artistOverlayEnabled = formData.get("artistOverlayEnabled") === "on";
+    const productDescriptionDonationSummaryEnabled =
+      formData.get("productDescriptionDonationSummaryEnabled") === "on";
+
+    await prisma.shop.update({
+      where: { shopId },
+      data: {
+        artistOverlayEnabled,
+        productDescriptionDonationSummaryEnabled,
+      },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "Shop",
+        action: "CUSTOMER_MERCHANDISING_SETTINGS_UPDATED",
+        actor: "merchant",
+        payload: {
+          artistOverlayEnabled,
+          productDescriptionDonationSummaryEnabled,
+        },
+      },
+    });
+
+    return jsonResponse({ ok: true, message: "Customer merchandising settings updated." });
+  }
+
   if (intent === "refresh-shop-currency") {
     if (!admin) {
       return jsonResponse(
@@ -444,6 +477,8 @@ export default function Settings() {
     taxDeductionMode,
     postPurchaseEmailEnabled,
     artistSubmissionNotificationEmail,
+    artistOverlayEnabled,
+    productDescriptionDonationSummaryEnabled,
   } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{ ok: boolean; message: string }>();
   const [searchParams] = useSearchParams();
@@ -460,6 +495,10 @@ export default function Settings() {
   const [postPurchaseEmailEnabledInput, setPostPurchaseEmailEnabledInput] = useState(postPurchaseEmailEnabled ?? false);
   const [artistSubmissionNotificationEmailInput, setArtistSubmissionNotificationEmailInput] = useState(
     artistSubmissionNotificationEmail ?? "",
+  );
+  const [artistOverlayEnabledInput, setArtistOverlayEnabledInput] = useState(artistOverlayEnabled ?? false);
+  const [productDescriptionDonationSummaryEnabledInput, setProductDescriptionDonationSummaryEnabledInput] = useState(
+    productDescriptionDonationSummaryEnabled ?? false,
   );
   const activeTab = parseSettingsTab(searchParams.get("section"));
 
@@ -785,6 +824,70 @@ export default function Settings() {
         {activeTab === "advanced" ? (
         <s-section heading="Advanced">
           <div style={{ display: "grid", gap: "0.75rem" }}>
+            <SectionHeader
+              title="Customer merchandising"
+              description="Optional storefront and Shopify-native content enhancements for Artists, Causes, and donation summaries."
+            />
+            <fetcher.Form method="post">
+              <input type="hidden" name="intent" value="update-customer-merchandising-settings" />
+              <div style={{ display: "grid", gap: "0.85rem" }}>
+                <label
+                  htmlFor="artist-overlay-enabled"
+                  style={{ display: "flex", alignItems: "start", gap: "0.75rem", cursor: "pointer" }}
+                >
+                  <input
+                    id="artist-overlay-enabled"
+                    type="checkbox"
+                    name="artistOverlayEnabled"
+                    checked={artistOverlayEnabledInput}
+                    onChange={(event) => setArtistOverlayEnabledInput(event.currentTarget.checked)}
+                    style={{ marginTop: "0.2rem" }}
+                  />
+                  <span style={{ display: "grid", gap: "0.25rem" }}>
+                    <strong>Enable Artist product-card overlay support</strong>
+                    <s-text>
+                      Allows the storefront app embed to show Artist credit badges on product images when the theme embed is enabled.
+                    </s-text>
+                  </span>
+                </label>
+                <label
+                  htmlFor="product-description-summary-enabled"
+                  style={{ display: "flex", alignItems: "start", gap: "0.75rem", cursor: "pointer" }}
+                >
+                  <input
+                    id="product-description-summary-enabled"
+                    type="checkbox"
+                    name="productDescriptionDonationSummaryEnabled"
+                    checked={productDescriptionDonationSummaryEnabledInput}
+                    onChange={(event) => setProductDescriptionDonationSummaryEnabledInput(event.currentTarget.checked)}
+                    style={{ marginTop: "0.2rem" }}
+                  />
+                  <span style={{ display: "grid", gap: "0.25rem" }}>
+                    <strong>Inject donation summaries into product descriptions</strong>
+                    <s-text>
+                      Opt-in fallback for Shop and external channels. Count On Us only replaces its own marked block.
+                    </s-text>
+                  </span>
+                </label>
+                <div>
+                  <s-button type="submit" disabled={isSubmitting}>Save customer merchandising settings</s-button>
+                </div>
+              </div>
+            </fetcher.Form>
+            <s-banner tone="info">
+              <div style={{ display: "grid", gap: "0.45rem" }}>
+                <strong>Storefront filter setup required</strong>
+                <s-text>
+                  Artist and Cause directory links use Shopify product metafields:
+                  {" "}donation_manager.artist_names and donation_manager.cause_names.
+                </s-text>
+                <s-text>
+                  After assigning Artists or Causes to products, open Shopify Admin, go to Search &amp; Discovery, add both
+                  metafields as collection filters, then save. If existing products were assigned before this feature was
+                  enabled, re-save the product or artist mappings so Count On Us syncs the metafields.
+                </s-text>
+              </div>
+            </s-banner>
             <SectionHeader
               title="Audit Log"
               description="Browse financial change history, filter by event type, and inspect payload details."

@@ -49,6 +49,8 @@ model Shop {
   taxDeductionMode String   @default("dont_deduct")
   postPurchaseEmailEnabled Boolean @default(false)
   artistSubmissionNotificationEmail String?
+  artistOverlayEnabled Boolean @default(false)
+  productDescriptionDonationSummaryEnabled Boolean @default(false)
   wizardStep       Int      @default(0)
   catalogSynced    Boolean  @default(false)
   createdAt        DateTime @default(now())
@@ -540,6 +542,7 @@ model Cause {
   is501c3             Boolean  @default(false)
   description         String?
   iconUrl             String?
+  iconStorageKey      String?
   donationLink        String?
   websiteUrl          String?
   instagramUrl        String?
@@ -560,10 +563,13 @@ model Cause {
 model Artist {
   id                    String   @id @default(cuid())
   shopId                String
+  shopifyMetaobjectId   String?
   displayName           String
   creditName            String
   creditPreference      String   @default("artist_name")
   publicBio             String?
+  iconUrl               String?
+  iconStorageKey        String?
   websiteUrl            String?
   instagramUrl          String?
   contactName           String?

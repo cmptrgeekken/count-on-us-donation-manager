@@ -1,0 +1,66 @@
+<div
+  class="count-on-us-widget count-on-us-widget--directory"
+  data-count-on-us-artists-directory
+  data-proxy-base="/apps/count-on-us"
+  data-layout="{{ block.settings.layout | escape }}"
+  data-show-links="{{ block.settings.show_links | json }}"
+  data-show-causes="{{ block.settings.show_causes | json }}"
+>
+  <div class="count-on-us-widget__header">
+    <div class="count-on-us-widget__heading" role="heading" aria-level="2">{{ block.settings.heading | escape }}</div>
+    {% if block.settings.description != blank %}
+      <div class="count-on-us-widget__description">{{ block.settings.description | escape }}</div>
+    {% endif %}
+  </div>
+  <div class="count-on-us-widget__panel" data-count-on-us-directory-panel>
+    <div class="count-on-us-widget__status">Loading artists...</div>
+  </div>
+</div>
+
+{% schema %}
+{
+  "name": "Artists directory",
+  "target": "section",
+  "enabled_on": {
+    "templates": ["page"]
+  },
+  "stylesheet": "donation-widget.css",
+  "javascript": "public-directory.js",
+  "settings": [
+    {
+      "type": "text",
+      "id": "heading",
+      "label": "Heading",
+      "default": "Our artists"
+    },
+    {
+      "type": "textarea",
+      "id": "description",
+      "label": "Description",
+      "default": "Meet the artists collaborating on products that support community causes."
+    },
+    {
+      "type": "select",
+      "id": "layout",
+      "label": "Layout",
+      "default": "cards",
+      "options": [
+        { "value": "cards", "label": "Cards" },
+        { "value": "list", "label": "List" }
+      ]
+    },
+    {
+      "type": "checkbox",
+      "id": "show_links",
+      "label": "Show public links",
+      "default": true
+    },
+    {
+      "type": "checkbox",
+      "id": "show_causes",
+      "label": "Show supported causes",
+      "default": true
+    }
+  ]
+}
+{% endschema %}

@@ -11,9 +11,10 @@ import {
   auditProductShopifySyncFailure,
   canSyncProductToShopify,
   saveProductArtistAssignmentsLocally,
-  syncProductArtistAssignmentsToShopify,
+  syncFullProductPublicAssignmentsToShopify,
 } from "../services/productArtistAssignmentService.server";
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
+import { syncProductDescriptionDonationSummary } from "../services/productDescriptionSummary.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 import { shopifyAdminProductUrl, shopifyAdminVariantUrl } from "../utils/shopify-admin-url";
 import { useAppLocalization } from "../utils/use-app-localization";
@@ -402,11 +403,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
       if (admin && canSyncProductToShopify(product.shopifyId)) {
         try {
-          await syncProductArtistAssignmentsToShopify({
+          await syncFullProductPublicAssignmentsToShopify({
             admin,
+            shopId,
             product,
             derivedAssignments,
           });
+          const shop = await prisma.shop.findUnique({
+            where: { shopId },
+            select: { productDescriptionDonationSummaryEnabled: true },
+          });
+          if (shop?.productDescriptionDonationSummaryEnabled) {
+            await syncProductDescriptionDonationSummary({
+              admin,
+              shopId,
+              product,
+              enabled: true,
+            });
+          }
         } catch (error) {
           console.error("[ProductDonations] Shopify sync failed after saving artist assignments:", error);
           await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);
@@ -537,6 +551,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           product.shopifyId,
           assignments.map((assignment) => ({
             causeId: assignment.causeId,
+            name: causeMap.get(assignment.causeId)?.name ?? assignment.causeId,
             metaobjectId: causeMap.get(assignment.causeId)?.shopifyMetaobjectId ?? null,
             percentage: Number(assignment.percentage).toFixed(2),
           })),
@@ -554,6 +569,19 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             },
           },
         });
+
+        const shop = await prisma.shop.findUnique({
+          where: { shopId },
+          select: { productDescriptionDonationSummaryEnabled: true },
+        });
+        if (shop?.productDescriptionDonationSummaryEnabled) {
+          await syncProductDescriptionDonationSummary({
+            admin,
+            shopId,
+            product,
+            enabled: true,
+          });
+        }
       }
 
       return jsonResponse({

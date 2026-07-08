@@ -6,14 +6,23 @@ import { z } from "zod";
 import { AssignmentPicker, CompactAssignmentList } from "../components/AssignmentControls";
 import { ArtistProfileForm } from "../components/ArtistProfileForm";
 import { prisma } from "../db.server";
+import { upsertArtistMetaobject } from "../services/artistMetaobjectService.server";
 import {
   auditProductShopifySyncFailure,
   canSyncProductToShopify,
   saveProductArtistAssignmentsLocally,
-  syncProductArtistAssignmentsToShopify,
+  syncFullProductPublicAssignmentsToShopify,
   type ProductArtistAssignmentInput,
 } from "../services/productArtistAssignmentService.server";
 import { saveArtistProfileFromForm, type ArtistProfileActionData } from "../services/artistProfile.server";
+import { syncProductDescriptionDonationSummary } from "../services/productDescriptionSummary.server";
+import {
+  deletePublicIcon,
+  getPublicIconUrl,
+  getUploadedIconFile,
+  PublicIconUploadError,
+  uploadPublicIcon,
+} from "../services/publicIconStorage.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 
 const productMappingSchema = z.object({
@@ -44,6 +53,17 @@ const fieldStyle = {
   color: "var(--p-color-text, #303030)",
   font: "inherit",
 };
+
+function buildArtistPublicIconUrl(shopId: string, artistId: string, iconStorageKey: string | null | undefined) {
+  return iconStorageKey
+    ? getPublicIconUrl({
+        type: "artist",
+        id: artistId,
+        shopDomain: shopId,
+        version: iconStorageKey,
+      })
+    : null;
+}
 
 type ProductMappingRow = {
   productId: string;
@@ -161,6 +181,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       creditName: artist.creditName,
       creditPreference: artist.creditPreference,
       publicBio: artist.publicBio ?? "",
+      iconPreviewUrl: artist.iconStorageKey ? buildArtistPublicIconUrl(shopId, artist.id, artist.iconStorageKey) ?? "" : "",
       websiteUrl: artist.websiteUrl ?? "",
       instagramUrl: artist.instagramUrl ?? "",
       contactName: artist.contactName ?? "",
@@ -231,6 +252,106 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       intent: "update",
     });
 
+    if (result.ok) {
+      const artist = await prisma.artist.findFirst({
+        where: { id: result.artistId, shopId },
+        select: {
+          id: true,
+          shopifyMetaobjectId: true,
+          displayName: true,
+          creditName: true,
+          publicBio: true,
+          iconUrl: true,
+          iconStorageKey: true,
+          websiteUrl: true,
+          instagramUrl: true,
+          status: true,
+        },
+      });
+
+      let artistForSync = artist;
+      if (artist) {
+        const iconFile = getUploadedIconFile(formData);
+        if (iconFile) {
+          try {
+            const icon = await uploadPublicIcon({
+              shopId,
+              ownerType: "artist",
+              ownerId: artist.id,
+              file: iconFile,
+            });
+            await prisma.artist.update({
+              where: { id: artist.id, shopId },
+              data: {
+                iconStorageKey: icon.key,
+                iconUrl: null,
+              },
+            });
+            if (artist.iconStorageKey) {
+              await deletePublicIcon(artist.iconStorageKey);
+            }
+            artistForSync = { ...artist, iconUrl: null, iconStorageKey: icon.key };
+          } catch (error) {
+            if (error instanceof PublicIconUploadError) {
+              return jsonResponse(
+                { ok: false, message: error.message, fieldErrors: { iconFile: [error.message] } } satisfies ArtistProfileActionData,
+                { status: 400 },
+              );
+            }
+            throw error;
+          }
+        }
+      }
+
+      if (artistForSync && admin) {
+        try {
+          const artistMetaobjectInput = {
+            ...artistForSync,
+            iconUrl: artistForSync.iconStorageKey
+              ? buildArtistPublicIconUrl(shopId, artistForSync.id, artistForSync.iconStorageKey)
+              : artistForSync.iconUrl,
+          };
+          const metaobjectId = await upsertArtistMetaobject({
+            admin,
+            existingMetaobjectId: artistForSync.shopifyMetaobjectId,
+            input: artistMetaobjectInput,
+          });
+          await prisma.artist.update({
+            where: { id: artistForSync.id, shopId },
+            data: { shopifyMetaobjectId: metaobjectId },
+          });
+          await prisma.auditLog.create({
+            data: {
+              shopId,
+              entity: "Artist",
+              entityId: artistForSync.id,
+              action: "ARTIST_SHOPIFY_SYNCED",
+              actor: "merchant",
+              payload: { shopifyMetaobjectId: metaobjectId },
+            },
+          });
+        } catch (error) {
+          await prisma.auditLog.create({
+            data: {
+              shopId,
+              entity: "Artist",
+              entityId: artistForSync.id,
+              action: "ARTIST_SHOPIFY_SYNC_FAILED",
+              actor: "merchant",
+              payload: { message: error instanceof Error ? error.message : "Unknown Shopify sync failure" },
+            },
+          });
+          return jsonResponse(
+            {
+              ok: true,
+              message: `${result.message} Shopify storefront sync failed; save again later to retry.`,
+            },
+            { status: 200 },
+          );
+        }
+      }
+    }
+
     return jsonResponse(result, { status: result.ok ? 200 : 400 });
   }
 
@@ -265,7 +386,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const artist = await prisma.artist.findFirst({
     where: { id: parsed.data.artistId, shopId, status: "active" },
-    select: { id: true, displayName: true },
+    select: {
+      id: true,
+      displayName: true,
+      _count: {
+        select: { causeAssignments: true },
+      },
+    },
   });
 
   if (!artist) {
@@ -312,6 +439,10 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const mappingByProductId = new Map(parsed.data.mappings.map((mapping) => [mapping.productId, mapping]));
   const syncFailures: string[] = [];
   const syncSkipped: string[] = [];
+  const shop = await prisma.shop.findUnique({
+    where: { shopId },
+    select: { productDescriptionDonationSummaryEnabled: true },
+  });
 
   try {
     for (const product of products) {
@@ -359,7 +490,15 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         }
 
         try {
-          await syncProductArtistAssignmentsToShopify({ admin, product, derivedAssignments });
+          await syncFullProductPublicAssignmentsToShopify({ admin, shopId, product, derivedAssignments });
+          if (shop?.productDescriptionDonationSummaryEnabled) {
+            await syncProductDescriptionDonationSummary({
+              admin,
+              shopId,
+              product,
+              enabled: true,
+            });
+          }
         } catch (error) {
           console.error("[ArtistDetails] Shopify sync failed after saving product mappings:", {
             productId: product.id,
@@ -374,6 +513,11 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     const messageParts = [`Product mappings saved for ${artist.displayName}.`];
+    if (artist._count.causeAssignments === 0) {
+      messageParts.push(
+        "Add at least one Cause to this Artist before product descriptions can show Cause names or estimated donations.",
+      );
+    }
     if (syncSkipped.length > 0) {
       messageParts.push(
         `Skipped Shopify storefront sync for ${syncSkipped.length} local-only product${syncSkipped.length === 1 ? "" : "s"}.`,

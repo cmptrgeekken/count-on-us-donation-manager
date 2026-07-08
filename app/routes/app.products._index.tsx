@@ -11,9 +11,10 @@ import {
   auditProductShopifySyncFailure,
   canSyncProductToShopify,
   saveProductArtistAssignmentsLocally,
-  syncProductArtistAssignmentsToShopify,
+  syncFullProductPublicAssignmentsToShopify,
 } from "../services/productArtistAssignmentService.server";
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
+import { syncProductDescriptionDonationSummary } from "../services/productDescriptionSummary.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
@@ -240,6 +241,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const syncFailures: string[] = [];
     const syncSkipped: string[] = [];
+    const shop = await prisma.shop.findUnique({
+      where: { shopId },
+      select: { productDescriptionDonationSummaryEnabled: true },
+    });
     if (admin) {
       for (const product of products) {
         if (!canSyncProductToShopify(product.shopifyId)) {
@@ -251,10 +256,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           await syncProductCauseAssignmentsMetafield(admin, product.shopifyId, [
             {
               causeId: cause.id,
+              name: cause.name,
               metaobjectId: cause.shopifyMetaobjectId ?? null,
               percentage: "100.00",
             },
           ]);
+          if (shop?.productDescriptionDonationSummaryEnabled) {
+            await syncProductDescriptionDonationSummary({
+              admin,
+              shopId,
+              product,
+              enabled: true,
+            });
+          }
         } catch (error) {
           console.error("[Products] Shopify sync failed after bulk Cause assignment:", {
             productId: product.id,
@@ -316,6 +330,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const syncFailures: string[] = [];
     const syncSkipped: string[] = [];
+    const shop = await prisma.shop.findUnique({
+      where: { shopId },
+      select: { productDescriptionDonationSummaryEnabled: true },
+    });
 
     try {
       for (const product of products) {
@@ -343,7 +361,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
 
         try {
-          await syncProductArtistAssignmentsToShopify({ admin, product, derivedAssignments });
+          await syncFullProductPublicAssignmentsToShopify({ admin, shopId, product, derivedAssignments });
+          if (shop?.productDescriptionDonationSummaryEnabled) {
+            await syncProductDescriptionDonationSummary({
+              admin,
+              shopId,
+              product,
+              enabled: true,
+            });
+          }
         } catch (error) {
           console.error("[Products] Shopify sync failed after bulk Artist assignment:", {
             productId: product.id,

@@ -1,32 +1,33 @@
-const CAUSE_METAOBJECT_TYPE = "$app:cause";
+const ARTIST_METAOBJECT_TYPE = "$app:artist";
 
 type AdminContext = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
 };
 
-type CauseMetaobjectInput = {
-  name: string;
-  legalName?: string | null;
-  is501c3: boolean;
-  description?: string | null;
+type ArtistMetaobjectInput = {
+  displayName: string;
+  creditName: string;
+  publicBio?: string | null;
   iconUrl?: string | null;
-  donationLink?: string | null;
   websiteUrl?: string | null;
   instagramUrl?: string | null;
   status: string;
 };
 
 const METAOBJECT_DEFINITION_BY_TYPE_QUERY = `#graphql
-  query CauseMetaobjectDefinitionByType($type: String!) {
+  query ArtistMetaobjectDefinitionByType($type: String!) {
     metaobjectDefinitionByType(type: $type) {
       id
       type
+      fieldDefinitions {
+        key
+      }
     }
   }
 `;
 
 const METAOBJECT_DEFINITION_CREATE_MUTATION = `#graphql
-  mutation CreateCauseMetaobjectDefinition($definition: MetaobjectDefinitionCreateInput!) {
+  mutation CreateArtistMetaobjectDefinition($definition: MetaobjectDefinitionCreateInput!) {
     metaobjectDefinitionCreate(definition: $definition) {
       metaobjectDefinition {
         id
@@ -42,7 +43,7 @@ const METAOBJECT_DEFINITION_CREATE_MUTATION = `#graphql
 `;
 
 const METAOBJECT_CREATE_MUTATION = `#graphql
-  mutation CreateCauseMetaobject($metaobject: MetaobjectCreateInput!) {
+  mutation CreateArtistMetaobject($metaobject: MetaobjectCreateInput!) {
     metaobjectCreate(metaobject: $metaobject) {
       metaobject {
         id
@@ -58,7 +59,7 @@ const METAOBJECT_CREATE_MUTATION = `#graphql
 `;
 
 const METAOBJECT_UPDATE_MUTATION = `#graphql
-  mutation UpdateCauseMetaobject($id: ID!, $metaobject: MetaobjectUpdateInput!) {
+  mutation UpdateArtistMetaobject($id: ID!, $metaobject: MetaobjectUpdateInput!) {
     metaobjectUpdate(id: $id, metaobject: $metaobject) {
       metaobject {
         id
@@ -72,94 +73,82 @@ const METAOBJECT_UPDATE_MUTATION = `#graphql
   }
 `;
 
-const METAOBJECT_DELETE_MUTATION = `#graphql
-  mutation DeleteCauseMetaobject($id: ID!) {
-    metaobjectDelete(id: $id) {
-      deletedId
-      userErrors {
-        field
-        message
-        code
-      }
-    }
-  }
-`;
-
 type GraphqlUserError = {
-  field?: string[] | null;
   message: string;
   code?: string | null;
 };
 
 async function parseGraphqlResponse<T>(response: Response): Promise<T> {
   const json = (await response.json()) as T & { errors?: Array<{ message?: string }> };
-
   if (Array.isArray(json.errors) && json.errors.length > 0) {
     throw new Error(json.errors.map((error) => error.message ?? "Unknown Shopify GraphQL error").join("; "));
   }
-
   return json;
 }
 
 function normalizeOptional(value?: string | null) {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : null;
-}
-
-function buildCauseFields(input: CauseMetaobjectInput) {
-  const fields = [
-    { key: "name", value: input.name.trim() },
-    { key: "legal_name", value: normalizeOptional(input.legalName) ?? "" },
-    { key: "is_501c3", value: input.is501c3 ? "true" : "false" },
-    { key: "description", value: normalizeOptional(input.description) ?? "" },
-    { key: "status", value: input.status },
-  ];
-
-  const iconUrl = normalizeOptional(input.iconUrl);
-  const donationLink = normalizeOptional(input.donationLink);
-  const websiteUrl = normalizeOptional(input.websiteUrl);
-  const instagramUrl = normalizeOptional(input.instagramUrl);
-  if (iconUrl) fields.push({ key: "icon_url", value: iconUrl });
-  if (donationLink) fields.push({ key: "donation_link", value: donationLink });
-  if (websiteUrl) fields.push({ key: "website_url", value: websiteUrl });
-  if (instagramUrl) fields.push({ key: "instagram_url", value: instagramUrl });
-
-  return fields;
+  return trimmed ? trimmed : "";
 }
 
 function getUserErrorMessage(userErrors: GraphqlUserError[]) {
   return userErrors[0]?.message ?? "Unknown Shopify metaobject error.";
 }
 
-export async function ensureCauseMetaobjectDefinition(admin: AdminContext): Promise<boolean> {
-  const existingResponse = await admin.graphql(METAOBJECT_DEFINITION_BY_TYPE_QUERY, {
-    variables: { type: CAUSE_METAOBJECT_TYPE },
-  });
-  const existingJson = await parseGraphqlResponse<{
-    data?: { metaobjectDefinitionByType?: { id: string; type: string } | null };
-  }>(existingResponse);
+function buildArtistFields(input: ArtistMetaobjectInput, supportsIconUrl: boolean) {
+  const fields = [
+    { key: "display_name", value: input.displayName.trim() },
+    { key: "credit_name", value: input.creditName.trim() },
+    { key: "public_bio", value: normalizeOptional(input.publicBio) },
+    { key: "status", value: input.status },
+  ];
+  const iconUrl = normalizeOptional(input.iconUrl);
+  const websiteUrl = normalizeOptional(input.websiteUrl);
+  const instagramUrl = normalizeOptional(input.instagramUrl);
+  if (supportsIconUrl && iconUrl) fields.push({ key: "icon_url", value: iconUrl });
+  if (websiteUrl) fields.push({ key: "website_url", value: websiteUrl });
+  if (instagramUrl) fields.push({ key: "instagram_url", value: instagramUrl });
+  return fields;
+}
 
-  if (existingJson.data?.metaobjectDefinitionByType?.id) {
+async function getArtistMetaobjectDefinitionInfo(admin: AdminContext) {
+  const response = await admin.graphql(METAOBJECT_DEFINITION_BY_TYPE_QUERY, {
+    variables: { type: ARTIST_METAOBJECT_TYPE },
+  });
+  const json = await parseGraphqlResponse<{
+    data?: {
+      metaobjectDefinitionByType?: {
+        id: string;
+        type: string;
+        fieldDefinitions: Array<{ key: string }>;
+      } | null;
+    };
+  }>(response);
+  return json.data?.metaobjectDefinitionByType ?? null;
+}
+
+export async function ensureArtistMetaobjectDefinition(admin: AdminContext): Promise<boolean> {
+  const existingDefinition = await getArtistMetaobjectDefinitionInfo(admin);
+
+  if (existingDefinition?.id) {
     return false;
   }
 
   const response = await admin.graphql(METAOBJECT_DEFINITION_CREATE_MUTATION, {
     variables: {
       definition: {
-        name: "Cause",
-        type: CAUSE_METAOBJECT_TYPE,
-        displayNameKey: "name",
+        name: "Artist",
+        type: ARTIST_METAOBJECT_TYPE,
+        displayNameKey: "credit_name",
         access: {
           admin: "MERCHANT_READ_WRITE",
           storefront: "PUBLIC_READ",
         },
         fieldDefinitions: [
-          { name: "Name", key: "name", type: "single_line_text_field", required: true },
-          { name: "Legal name", key: "legal_name", type: "single_line_text_field" },
-          { name: "Is 501(c)(3)", key: "is_501c3", type: "boolean" },
-          { name: "Description", key: "description", type: "multi_line_text_field" },
+          { name: "Display name", key: "display_name", type: "single_line_text_field", required: true },
+          { name: "Credit name", key: "credit_name", type: "single_line_text_field", required: true },
+          { name: "Public bio", key: "public_bio", type: "multi_line_text_field" },
           { name: "Icon URL", key: "icon_url", type: "url" },
-          { name: "Donation link", key: "donation_link", type: "url" },
           { name: "Website URL", key: "website_url", type: "url" },
           { name: "Instagram URL", key: "instagram_url", type: "url" },
           { name: "Status", key: "status", type: "single_line_text_field" },
@@ -176,29 +165,31 @@ export async function ensureCauseMetaobjectDefinition(admin: AdminContext): Prom
       };
     };
   }>(response);
-
   const userErrors = json.data?.metaobjectDefinitionCreate?.userErrors ?? [];
   if (userErrors.length === 0) return true;
-
-  const takenError = userErrors.some((error) => error.code === "TAKEN");
-  if (takenError) return false;
-
+  if (userErrors.some((error) => error.code === "TAKEN")) return false;
   throw new Error(getUserErrorMessage(userErrors));
 }
 
-export async function createCauseMetaobject(
+async function artistMetaobjectSupportsIconUrl(admin: AdminContext): Promise<boolean> {
+  const definition = await getArtistMetaobjectDefinitionInfo(admin);
+  return Boolean(definition?.fieldDefinitions.some((fieldDefinition) => fieldDefinition.key === "icon_url"));
+}
+
+export async function createArtistMetaobject(
   admin: AdminContext,
-  input: CauseMetaobjectInput,
+  input: ArtistMetaobjectInput,
 ): Promise<{ id: string; handle: string | null }> {
+  await ensureArtistMetaobjectDefinition(admin);
+  const supportsIconUrl = await artistMetaobjectSupportsIconUrl(admin);
   const response = await admin.graphql(METAOBJECT_CREATE_MUTATION, {
     variables: {
       metaobject: {
-        type: CAUSE_METAOBJECT_TYPE,
-        fields: buildCauseFields(input),
+        type: ARTIST_METAOBJECT_TYPE,
+        fields: buildArtistFields(input, supportsIconUrl),
       },
     },
   });
-
   const json = await parseGraphqlResponse<{
     data?: {
       metaobjectCreate?: {
@@ -207,32 +198,27 @@ export async function createCauseMetaobject(
       };
     };
   }>(response);
-
   const payload = json.data?.metaobjectCreate;
-  if (!payload?.metaobject) {
+  if (!payload?.metaobject || payload.userErrors.length > 0) {
     throw new Error(getUserErrorMessage(payload?.userErrors ?? []));
   }
-  if ((payload.userErrors ?? []).length > 0) {
-    throw new Error(getUserErrorMessage(payload.userErrors));
-  }
-
   return payload.metaobject;
 }
 
-export async function updateCauseMetaobject(
+export async function updateArtistMetaobject(
   admin: AdminContext,
   metaobjectId: string,
-  input: CauseMetaobjectInput,
+  input: ArtistMetaobjectInput,
 ): Promise<void> {
+  const supportsIconUrl = await artistMetaobjectSupportsIconUrl(admin);
   const response = await admin.graphql(METAOBJECT_UPDATE_MUTATION, {
     variables: {
       id: metaobjectId,
       metaobject: {
-        fields: buildCauseFields(input),
+        fields: buildArtistFields(input, supportsIconUrl),
       },
     },
   });
-
   const json = await parseGraphqlResponse<{
     data?: {
       metaobjectUpdate?: {
@@ -241,40 +227,26 @@ export async function updateCauseMetaobject(
       };
     };
   }>(response);
-
   const payload = json.data?.metaobjectUpdate;
-  if (!payload?.metaobject) {
+  if (!payload?.metaobject || payload.userErrors.length > 0) {
     throw new Error(getUserErrorMessage(payload?.userErrors ?? []));
-  }
-  if ((payload.userErrors ?? []).length > 0) {
-    throw new Error(getUserErrorMessage(payload.userErrors));
   }
 }
 
-export async function deleteCauseMetaobject(
-  admin: AdminContext,
-  metaobjectId: string,
-): Promise<void> {
-  const response = await admin.graphql(METAOBJECT_DELETE_MUTATION, {
-    variables: { id: metaobjectId },
-  });
-
-  const json = await parseGraphqlResponse<{
-    data?: {
-      metaobjectDelete?: {
-        deletedId?: string | null;
-        userErrors: GraphqlUserError[];
-      };
-    };
-  }>(response);
-
-  const payload = json.data?.metaobjectDelete;
-  if (!payload?.deletedId) {
-    throw new Error(getUserErrorMessage(payload?.userErrors ?? []));
+export async function upsertArtistMetaobject({
+  admin,
+  existingMetaobjectId,
+  input,
+}: {
+  admin: AdminContext;
+  existingMetaobjectId: string | null;
+  input: ArtistMetaobjectInput;
+}): Promise<string> {
+  await ensureArtistMetaobjectDefinition(admin);
+  if (existingMetaobjectId) {
+    await updateArtistMetaobject(admin, existingMetaobjectId, input);
+    return existingMetaobjectId;
   }
-  if ((payload.userErrors ?? []).length > 0) {
-    throw new Error(getUserErrorMessage(payload.userErrors));
-  }
+  const metaobject = await createArtistMetaobject(admin, input);
+  return metaobject.id;
 }
-
-export { CAUSE_METAOBJECT_TYPE };

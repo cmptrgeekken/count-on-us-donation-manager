@@ -1,0 +1,80 @@
+<script type="application/json" data-count-on-us-overlay-products>
+{
+  "products": [
+    {% assign count_on_us_overlay_first = true %}
+    {% if product %}
+      { "handle": {{ product.handle | json }}, "id": "gid://shopify/Product/{{ product.id }}", "current": true }
+      {% assign count_on_us_overlay_first = false %}
+    {% endif %}
+    {% if collection and collection.products %}
+      {% for product in collection.products limit: 100 %}
+        {% unless count_on_us_overlay_first %},{% endunless %}
+        { "handle": {{ product.handle | json }}, "id": "gid://shopify/Product/{{ product.id }}" }
+        {% assign count_on_us_overlay_first = false %}
+      {% endfor %}
+    {% endif %}
+    {% if search and search.results %}
+      {% for item in search.results limit: 100 %}
+        {% if item.object_type == 'product' %}
+          {% unless count_on_us_overlay_first %},{% endunless %}
+          { "handle": {{ item.handle | json }}, "id": "gid://shopify/Product/{{ item.id }}" }
+          {% assign count_on_us_overlay_first = false %}
+        {% endif %}
+      {% endfor %}
+    {% endif %}
+  ]
+}
+</script>
+
+<div
+  data-count-on-us-artist-overlay-config
+  data-enabled="{{ block.settings.enabled | json }}"
+  data-proxy-base="/apps/count-on-us"
+  data-position="{{ block.settings.position | escape }}"
+  data-hide-mobile="{{ block.settings.hide_mobile | json }}"
+  data-max-label-length="{{ block.settings.max_label_length }}"
+></div>
+
+{% schema %}
+{
+  "name": "Artist image overlays",
+  "target": "body",
+  "stylesheet": "donation-widget.css",
+  "javascript": "artist-overlay.js",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "enabled",
+      "label": "Show artist badges on product cards",
+      "default": false
+    },
+    {
+      "type": "select",
+      "id": "position",
+      "label": "Badge position",
+      "default": "top-left",
+      "options": [
+        { "value": "top-left", "label": "Top left" },
+        { "value": "top-right", "label": "Top right" },
+        { "value": "bottom-left", "label": "Bottom left" },
+        { "value": "bottom-right", "label": "Bottom right" }
+      ]
+    },
+    {
+      "type": "checkbox",
+      "id": "hide_mobile",
+      "label": "Hide on small screens",
+      "default": false
+    },
+    {
+      "type": "range",
+      "id": "max_label_length",
+      "label": "Maximum artist label length",
+      "min": 12,
+      "max": 48,
+      "step": 2,
+      "default": 28
+    }
+  ]
+}
+{% endschema %}

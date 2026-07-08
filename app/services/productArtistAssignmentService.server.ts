@@ -1,5 +1,6 @@
 import { prisma } from "../db.server";
 import { syncProductCauseAssignmentsMetafield } from "./productCauseAssignmentService.server";
+import { syncProductPublicDonationMetafields } from "./productPublicMetafieldService.server";
 
 type AdminContext = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
@@ -15,6 +16,7 @@ export type ProductArtistAssignmentInput = {
 
 type DerivedCauseAssignment = {
   causeId: string;
+  name: string;
   metaobjectId: string | null;
   percentage: number;
 };
@@ -90,7 +92,7 @@ export async function saveProductArtistAssignmentsLocally({
           causeAssignments: {
             include: {
               cause: {
-                select: { id: true, shopifyMetaobjectId: true },
+                select: { id: true, name: true, shopifyMetaobjectId: true },
               },
             },
           },
@@ -119,6 +121,7 @@ export async function saveProductArtistAssignmentsLocally({
     for (const causeAssignment of artist.causeAssignments) {
       const existing = derivedCauseMap.get(causeAssignment.causeId) ?? {
         causeId: causeAssignment.causeId,
+        name: causeAssignment.cause.name,
         metaobjectId: causeAssignment.cause.shopifyMetaobjectId ?? null,
         percentage: 0,
       };
@@ -209,8 +212,53 @@ export async function syncProductArtistAssignmentsToShopify({
     product.shopifyId,
     derivedAssignments.map((assignment) => ({
       causeId: assignment.causeId,
+      name: assignment.name,
       metaobjectId: assignment.metaobjectId,
       percentage: assignment.percentage.toFixed(2),
     })),
   );
+}
+
+export async function syncFullProductPublicAssignmentsToShopify({
+  admin,
+  shopId,
+  product,
+  derivedAssignments,
+}: {
+  admin: AdminContext;
+  shopId: string;
+  product: { id: string; shopifyId: string };
+  derivedAssignments: DerivedCauseAssignment[];
+}) {
+  const artistAssignments = await prisma.productArtistAssignment.findMany({
+    where: { shopId, productId: product.id, status: "active" },
+    orderBy: [{ attributionOrder: "asc" }, { createdAt: "asc" }],
+    select: {
+      creditOverride: true,
+      artist: {
+        select: {
+          id: true,
+          creditName: true,
+          displayName: true,
+          shopifyMetaobjectId: true,
+        },
+      },
+    },
+  });
+
+  await syncProductPublicDonationMetafields({
+    admin,
+    productGid: product.shopifyId,
+    causes: derivedAssignments.map((assignment) => ({
+      causeId: assignment.causeId,
+      name: assignment.name,
+      metaobjectId: assignment.metaobjectId,
+      percentage: assignment.percentage.toFixed(2),
+    })),
+    artists: artistAssignments.map((assignment) => ({
+      artistId: assignment.artist.id,
+      creditName: assignment.creditOverride?.trim() || assignment.artist.creditName || assignment.artist.displayName,
+      metaobjectId: assignment.artist.shopifyMetaobjectId,
+    })),
+  });
 }

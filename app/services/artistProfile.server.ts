@@ -38,7 +38,8 @@ function normalizeOptional(value?: string) {
 function readCauseAssignments(formData: FormData, causeIds: Set<string>) {
   return Array.from(causeIds)
     .map((causeId) => {
-      const raw = formData.get(`cause:${causeId}`)?.toString().trim() ?? "";
+      const values = formData.getAll(`cause:${causeId}`);
+      const raw = values.at(-1)?.toString().trim() ?? "";
       if (!raw) return null;
       const percentage = Number(raw);
       if (Number.isNaN(percentage) || percentage <= 0) {
