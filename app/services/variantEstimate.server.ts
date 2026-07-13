@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.server";
 import { resolveCosts } from "./costEngine.server";
+import { resolveProductDonationRoutingSource } from "./productDonationRouting.server";
 import { computeEstimatedTaxReserve, normalizeTaxDeductionMode } from "./taxReserve.server";
 
 const ZERO = new Prisma.Decimal(0);
@@ -324,6 +325,7 @@ export async function buildVariantEstimatePayload(input: {
   };
   causeAssignments: VariantEstimateCauseAssignment[];
   artistAssignments?: VariantEstimateArtistAssignment[];
+  donationRoutingMode?: string;
   shop: VariantEstimateShop;
   widgetTaxSuppressed: boolean;
   quantity?: number;
@@ -359,6 +361,10 @@ export async function buildVariantEstimatePayload(input: {
       .sub(processingFee),
   );
   const artistAssignments = input.artistAssignments ?? [];
+  const routingSource = resolveProductDonationRoutingSource(
+    input.donationRoutingMode ?? "automatic",
+    artistAssignments.length,
+  );
   const artistPayoutTotal = artistAssignments.reduce((sum, assignment) => {
     const payoutEnabled = assignment.payoutEnabledOverride ?? assignment.artist.paymentEnabled;
     if (!payoutEnabled) return sum;
@@ -369,7 +375,7 @@ export async function buildVariantEstimatePayload(input: {
   const preTaxContribution = nonNegative(preArtistContribution.sub(artistPayoutTotal));
 
   const normalizedTaxDeductionMode = normalizeTaxDeductionMode(input.shop.taxDeductionMode);
-  const taxAllocationEstimates = artistAssignments.length > 0
+  const taxAllocationEstimates = routingSource === "artist"
     ? artistAssignments.flatMap((assignment) => {
         const artistDonationBase = preTaxContribution.mul(assignment.collaborationShare).div(100);
         return assignment.artist.causeAssignments.map((causeAssignment) => ({
@@ -406,7 +412,7 @@ export async function buildVariantEstimatePayload(input: {
     is501c3: boolean;
   }>();
 
-  if (artistAssignments.length > 0) {
+  if (routingSource === "artist") {
     for (const assignment of artistAssignments) {
       const artistDonationBase = donationPool.mul(assignment.collaborationShare).div(100);
       for (const causeAssignment of assignment.artist.causeAssignments) {
@@ -521,6 +527,9 @@ export async function buildAdminVariantEstimate(
         shopifyId: true,
         price: true,
         productId: true,
+        product: {
+          select: { donationRoutingMode: true },
+        },
       },
     }),
     db.shop.findUnique({
@@ -605,6 +614,7 @@ export async function buildAdminVariantEstimate(
     variant,
     causeAssignments,
     artistAssignments,
+    donationRoutingMode: variant.product.donationRoutingMode,
     shop,
     widgetTaxSuppressed: taxOffsetCache?.widgetTaxSuppressed ?? true,
     db,

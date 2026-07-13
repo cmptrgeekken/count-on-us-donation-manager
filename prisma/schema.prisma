@@ -271,6 +271,7 @@ model Product {
   title               String
   handle              String
   status              String // "active" | "archived" | "draft"
+  donationRoutingMode String   @default("automatic")
   productCategoryId   String?
   productCategoryName String?
   productCategoryPath String?

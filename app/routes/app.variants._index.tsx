@@ -49,7 +49,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {
-        product: { select: { id: true, title: true } },
+        product: { select: { id: true, title: true, donationRoutingMode: true } },
         costConfig: {
           select: {
             productionTemplateId: true,
@@ -190,6 +190,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             variant,
             causeAssignments: causeAssignmentsByProductId.get(variant.productId) ?? [],
             artistAssignments: artistAssignmentsByProductId.get(variant.productId) ?? [],
+            donationRoutingMode: variant.product.donationRoutingMode,
             shop,
             widgetTaxSuppressed,
             db: prisma,

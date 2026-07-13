@@ -332,7 +332,10 @@
           `<div class="count-on-us-widget__list">${scaled.causes
             .map((cause) => {
               const donationLink = safeExternalUrl(cause.donationLink);
-              return `<article class="count-on-us-widget__cause"><div class="count-on-us-widget__cause-line">${donationLink ? `<a href="${donationLink}" target="_blank" rel="noreferrer" class="count-on-us-widget__cause-link"><strong>${escapeHtml(cause.name)}</strong><span class="count-on-us-widget__cause-link-text">Learn more</span></a>` : `<strong>${escapeHtml(cause.name)}</strong>`}<strong>${formatMoney(money(cause.estimatedDonationAmount), cause.donationCurrencyCode)} / ${formatPercent(cause.donationPercentage)}</strong></div><div class="count-on-us-widget__cause-line"><span class="count-on-us-widget__subdued">Estimated for this product</span></div></article>`;
+              const causeName = donationLink
+                ? `<a href="${donationLink}" target="_blank" rel="noreferrer" class="count-on-us-widget__cause-link"><strong>${escapeHtml(cause.name)}</strong></a>`
+                : `<strong>${escapeHtml(cause.name)}</strong>`;
+              return `<article class="count-on-us-widget__cause count-on-us-widget__cause--product"><div class="count-on-us-widget__cause-name">${causeName}</div><div class="count-on-us-widget__cause-impact"><span class="count-on-us-widget__cause-impact-label">Estimated donation</span><strong class="count-on-us-widget__cause-amount">${formatMoney(money(cause.estimatedDonationAmount), cause.donationCurrencyCode)}</strong><span class="count-on-us-widget__subdued">${formatPercent(cause.donationPercentage)} of estimated net profit</span></div></article>`;
             })
             .join("")}</div>`,
         )

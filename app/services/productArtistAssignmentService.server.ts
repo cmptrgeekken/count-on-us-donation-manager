@@ -1,6 +1,8 @@
 import { prisma } from "../db.server";
+import { Prisma } from "@prisma/client";
 import { syncProductCauseAssignmentsMetafield } from "./productCauseAssignmentService.server";
 import { syncProductPublicDonationMetafields } from "./productPublicMetafieldService.server";
+import { PRODUCT_OVERRIDE_ROUTING_MODE } from "./productDonationRouting.server";
 
 type AdminContext = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
@@ -18,12 +20,12 @@ type DerivedCauseAssignment = {
   causeId: string;
   name: string;
   metaobjectId: string | null;
-  percentage: number;
+  percentage: Prisma.Decimal;
 };
 
 type ProductArtistAssignmentDb = Pick<
   typeof prisma,
-  "artist" | "productArtistAssignment" | "productCauseAssignment" | "auditLog"
+  "artist" | "product" | "productArtistAssignment" | "productCauseAssignment" | "auditLog"
 >;
 
 const SHOPIFY_PRODUCT_GID_PATTERN = /^gid:\/\/shopify\/Product\/\d+$/;
@@ -62,7 +64,7 @@ export async function saveProductArtistAssignmentsLocally({
 }: {
   db?: ProductArtistAssignmentDb;
   shopId: string;
-  product: { id: string; shopifyId: string };
+  product: { id: string; shopifyId: string; donationRoutingMode?: string };
   artistAssignments: ProductArtistAssignmentInput[];
   auditSource?: string;
 }): Promise<DerivedCauseAssignment[]> {
@@ -113,37 +115,57 @@ export async function saveProductArtistAssignmentsLocally({
 
   const artistMap = new Map(artists.map((artist) => [artist.id, artist]));
   const derivedCauseMap = new Map<string, DerivedCauseAssignment>();
+  const preserveProductOverride = product.donationRoutingMode === PRODUCT_OVERRIDE_ROUTING_MODE;
 
   for (const assignment of artistAssignments) {
     const artist = artistMap.get(assignment.artistId);
     if (!artist) continue;
-    const collaborationShare = Number(assignment.collaborationShare);
+    const collaborationShare = new Prisma.Decimal(assignment.collaborationShare);
     for (const causeAssignment of artist.causeAssignments) {
       const existing = derivedCauseMap.get(causeAssignment.causeId) ?? {
         causeId: causeAssignment.causeId,
         name: causeAssignment.cause.name,
         metaobjectId: causeAssignment.cause.shopifyMetaobjectId ?? null,
-        percentage: 0,
+        percentage: new Prisma.Decimal(0),
       };
-      existing.percentage += collaborationShare * Number(causeAssignment.percentage) / 100;
+      existing.percentage = existing.percentage.add(
+        collaborationShare.mul(causeAssignment.percentage).div(100),
+      );
       derivedCauseMap.set(causeAssignment.causeId, existing);
     }
   }
 
-  const derivedAssignments = Array.from(derivedCauseMap.values());
+  let derivedAssignments = Array.from(derivedCauseMap.values());
+
+  if (preserveProductOverride) {
+    const overrideAssignments = await db.productCauseAssignment.findMany({
+      where: { shopId, productId: product.id },
+      include: {
+        cause: { select: { name: true, shopifyMetaobjectId: true } },
+      },
+    });
+    derivedAssignments = overrideAssignments.map((assignment) => ({
+      causeId: assignment.causeId,
+      name: assignment.cause.name,
+      metaobjectId: assignment.cause.shopifyMetaobjectId ?? null,
+      percentage: new Prisma.Decimal(assignment.percentage),
+    }));
+  }
 
   await db.productArtistAssignment.deleteMany({
     where: { shopId, productId: product.id },
   });
-  await db.productCauseAssignment.deleteMany({
-    where: {
-      shopId,
-      OR: [
-        { productId: product.id },
-        { shopifyProductId: product.shopifyId },
-      ],
-    },
-  });
+  if (!preserveProductOverride) {
+    await db.productCauseAssignment.deleteMany({
+      where: {
+        shopId,
+        OR: [
+          { productId: product.id },
+          { shopifyProductId: product.shopifyId },
+        ],
+      },
+    });
+  }
 
   if (artistAssignments.length > 0) {
     await db.productArtistAssignment.createMany({
@@ -167,7 +189,7 @@ export async function saveProductArtistAssignmentsLocally({
     });
   }
 
-  if (derivedAssignments.length > 0) {
+  if (!preserveProductOverride && derivedAssignments.length > 0) {
     await db.productCauseAssignment.createMany({
       data: derivedAssignments.map((assignment) => ({
         shopId,
@@ -176,6 +198,13 @@ export async function saveProductArtistAssignmentsLocally({
         causeId: assignment.causeId,
         percentage: assignment.percentage,
       })),
+    });
+  }
+
+  if (preserveProductOverride && artistAssignments.length === 0) {
+    await db.product.update({
+      where: { id: product.id, shopId },
+      data: { donationRoutingMode: "automatic" },
     });
   }
 

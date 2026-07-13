@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db.server";
 import { canWriteShopifyProducts } from "./productPublicMetafieldService.server";
 import { buildVariantEstimatePayload } from "./variantEstimate.server";
+import { resolveProductDonationRoutingSource } from "./productDonationRouting.server";
 
 type AdminContext = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
@@ -91,6 +92,7 @@ export async function buildProductDescriptionDonationSummaryHtml(shopId: string,
       select: {
         id: true,
         title: true,
+        donationRoutingMode: true,
         variants: {
           orderBy: [{ title: "asc" }],
           select: {
@@ -173,11 +175,19 @@ export async function buildProductDescriptionDonationSummaryHtml(shopId: string,
   const artistNames = product.artistAssignments.map((assignment) => (
     assignment.creditOverride?.trim() || assignment.artist.creditName || assignment.artist.displayName
   ));
-  const causeNames = new Set(product.causeAssignments.map((assignment) => assignment.cause.name));
-  for (const assignment of product.artistAssignments) {
-    for (const causeAssignment of assignment.artist.causeAssignments) {
-      causeNames.add(causeAssignment.cause.name);
+  const routingSource = resolveProductDonationRoutingSource(
+    product.donationRoutingMode,
+    product.artistAssignments.length,
+  );
+  const causeNames = new Set<string>();
+  if (routingSource === "artist") {
+    for (const assignment of product.artistAssignments) {
+      for (const causeAssignment of assignment.artist.causeAssignments) {
+        causeNames.add(causeAssignment.cause.name);
+      }
     }
+  } else {
+    product.causeAssignments.forEach((assignment) => causeNames.add(assignment.cause.name));
   }
 
   if (artistNames.length === 0 && causeNames.size === 0) return null;
@@ -190,6 +200,7 @@ export async function buildProductDescriptionDonationSummaryHtml(shopId: string,
         variant,
         causeAssignments: product.causeAssignments,
         artistAssignments: product.artistAssignments,
+        donationRoutingMode: product.donationRoutingMode,
         shop,
         widgetTaxSuppressed,
         db: db as never,
@@ -213,6 +224,8 @@ export async function buildProductDescriptionDonationSummaryHtml(shopId: string,
     : "";
   const causesMarkup = causeNames.size
     ? `<p><strong>Cause${causeNames.size === 1 ? "" : "s"}:</strong> ${escapeHtml(Array.from(causeNames).join(", "))}</p>`
+    : routingSource === "product_override"
+      ? "<p><strong>Cause:</strong> This product currently has no Cause allocation.</p>"
     : artistNames.length
       ? "<p><strong>Cause:</strong> Donation routing has not been configured for this artist collaboration yet.</p>"
     : "";

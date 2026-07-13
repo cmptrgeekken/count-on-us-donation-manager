@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useLocation, useRouteError } from "@remix-run/react";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { AssignmentPicker, CompactAssignmentList } from "../components/AssignmentControls";
 import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
@@ -13,7 +14,6 @@ import {
   saveProductArtistAssignmentsLocally,
   syncFullProductPublicAssignmentsToShopify,
 } from "../services/productArtistAssignmentService.server";
-import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
 import { syncProductDescriptionDonationSummary } from "../services/productDescriptionSummary.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 import { shopifyAdminProductUrl, shopifyAdminVariantUrl } from "../utils/shopify-admin-url";
@@ -111,6 +111,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       title: true,
       handle: true,
       status: true,
+      donationRoutingMode: true,
       causeAssignments: {
         where: { shopId },
         orderBy: { createdAt: "asc" },
@@ -259,6 +260,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
             variant,
             causeAssignments: product.causeAssignments,
             artistAssignments: product.artistAssignments,
+            donationRoutingMode: product.donationRoutingMode,
             shop,
             widgetTaxSuppressed,
             db: prisma,
@@ -275,6 +277,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       title: product.title,
       handle: product.handle,
       status: product.status,
+      donationRoutingMode: product.donationRoutingMode,
     },
     variants: product.variants.map((variant, index) => ({
       id: variant.id,
@@ -338,7 +341,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
   const product = await prisma.product.findFirst({
     where: { id: productId, shopId },
-    select: { id: true, shopifyId: true, title: true },
+    select: { id: true, shopifyId: true, title: true, donationRoutingMode: true },
   });
 
   if (!product) {
@@ -348,8 +351,106 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
 
-  if (intent !== "save-assignments" && intent !== "save-artist-assignments") {
+  if (intent !== "save-assignments" && intent !== "save-artist-assignments" && intent !== "clear-cause-override") {
     return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
+  }
+
+  if (intent === "clear-cause-override") {
+    const artistAssignments = await prisma.productArtistAssignment.findMany({
+      where: { shopId, productId: product.id, status: "active" },
+      orderBy: [{ attributionOrder: "asc" }, { createdAt: "asc" }],
+      select: {
+        collaborationShare: true,
+        artist: {
+          select: {
+            causeAssignments: {
+              select: {
+                causeId: true,
+                percentage: true,
+                cause: { select: { name: true, shopifyMetaobjectId: true } },
+              },
+            },
+          },
+        },
+      },
+    });
+    const rollup = new Map<string, { causeId: string; name: string; metaobjectId: string | null; percentage: Prisma.Decimal }>();
+    for (const assignment of artistAssignments) {
+      for (const causeAssignment of assignment.artist.causeAssignments) {
+        const weighted = assignment.collaborationShare.mul(causeAssignment.percentage).div(100);
+        const current = rollup.get(causeAssignment.causeId);
+        if (current) current.percentage = current.percentage.add(weighted);
+        else rollup.set(causeAssignment.causeId, {
+          causeId: causeAssignment.causeId,
+          name: causeAssignment.cause.name,
+          metaobjectId: causeAssignment.cause.shopifyMetaobjectId,
+          percentage: weighted,
+        });
+      }
+    }
+    const derivedAssignments = Array.from(rollup.values());
+
+    await prisma.$transaction(async (tx) => {
+      await tx.product.update({
+        where: { id: product.id, shopId },
+        data: { donationRoutingMode: "automatic" },
+      });
+      await tx.productCauseAssignment.deleteMany({ where: { shopId, productId: product.id } });
+      if (derivedAssignments.length > 0) {
+        await tx.productCauseAssignment.createMany({
+          data: derivedAssignments.map((assignment) => ({
+            shopId,
+            productId: product.id,
+            shopifyProductId: product.shopifyId,
+            causeId: assignment.causeId,
+            percentage: assignment.percentage,
+          })),
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "Product",
+          entityId: product.id,
+          action: "PRODUCT_CAUSE_OVERRIDE_CLEARED",
+          actor: "merchant",
+          payload: { causeIds: derivedAssignments.map((assignment) => assignment.causeId) },
+        },
+      });
+    });
+
+    if (admin && canSyncProductToShopify(product.shopifyId)) {
+      try {
+        await syncFullProductPublicAssignmentsToShopify({ admin, shopId, product, derivedAssignments });
+        const shop = await prisma.shop.findUnique({
+          where: { shopId },
+          select: { productDescriptionDonationSummaryEnabled: true },
+        });
+        if (shop?.productDescriptionDonationSummaryEnabled) {
+          await syncProductDescriptionDonationSummary({ admin, shopId, product, enabled: true });
+        }
+      } catch (error) {
+        await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);
+        return jsonResponse({
+          ok: true,
+          message: "Product Cause override cleared locally. Shopify storefront sync failed; retry later.",
+          assignments: derivedAssignments.map((assignment) => ({
+            causeId: assignment.causeId,
+            percentage: assignment.percentage.toString(),
+          })),
+          donationRoutingMode: "automatic",
+        });
+      }
+    }
+    return jsonResponse({
+      ok: true,
+      message: "Product Cause override cleared. Artist Cause preferences are active.",
+      assignments: derivedAssignments.map((assignment) => ({
+        causeId: assignment.causeId,
+        percentage: assignment.percentage.toString(),
+      })),
+      donationRoutingMode: "automatic",
+    });
   }
 
   if (intent === "save-artist-assignments") {
@@ -390,12 +491,31 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       return jsonResponse({ ok: false, message: "Artist payout overrides must be between 0 and 100%." }, { status: 400 });
     }
 
+    const [currentArtistCount, currentCauseCount] = await Promise.all([
+      prisma.productArtistAssignment.count({ where: { shopId, productId: product.id, status: "active" } }),
+      prisma.productCauseAssignment.count({ where: { shopId, productId: product.id } }),
+    ]);
+    const preserveDirectRouting =
+      product.donationRoutingMode === "automatic" &&
+      currentArtistCount === 0 &&
+      currentCauseCount > 0 &&
+      artistAssignments.length > 0;
+
     try {
       const derivedAssignments = await prisma.$transaction(async (tx) => {
+        if (preserveDirectRouting) {
+          await tx.product.update({
+            where: { id: product.id, shopId },
+            data: { donationRoutingMode: "product_override" },
+          });
+        }
         return saveProductArtistAssignmentsLocally({
           db: tx,
           shopId,
-          product,
+          product: {
+            ...product,
+            donationRoutingMode: preserveDirectRouting ? "product_override" : product.donationRoutingMode,
+          },
           artistAssignments,
           auditSource: "product_detail",
         });
@@ -450,13 +570,6 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     where: { shopId, productId: product.id, status: "active" },
   });
 
-  if (activeArtistAssignmentCount > 0) {
-    return jsonResponse(
-      { ok: false, message: "This product is routed through Artist assignments. Clear Artist assignments before editing direct Cause assignments." },
-      { status: 400 },
-    );
-  }
-
   const rawAssignments = formData.get("assignments")?.toString() ?? "[]";
   let parsedJson: unknown;
   try {
@@ -474,6 +587,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   }
 
   const assignments = parsed.data.assignments;
+  if (
+    activeArtistAssignmentCount > 0 &&
+    assignments.length === 0 &&
+    formData.get("confirmNoCauseOverride")?.toString() !== "yes"
+  ) {
+    return jsonResponse({ ok: false, message: "Confirm that this product should create no Cause allocation." }, { status: 400 });
+  }
   const causeIds = assignments.map((assignment) => assignment.causeId);
 
   if (new Set(causeIds).size !== causeIds.length) {
@@ -514,6 +634,13 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         },
       });
 
+      await tx.product.update({
+        where: { id: product.id, shopId },
+        data: {
+          donationRoutingMode: activeArtistAssignmentCount > 0 ? "product_override" : "automatic",
+        },
+      });
+
       if (assignments.length > 0) {
         await tx.productCauseAssignment.createMany({
           data: assignments.map((assignment) => ({
@@ -521,7 +648,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
             shopifyProductId: product.shopifyId,
             productId: product.id,
             causeId: assignment.causeId,
-            percentage: Number(assignment.percentage),
+            percentage: new Prisma.Decimal(assignment.percentage),
           })),
         });
       }
@@ -535,10 +662,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
           actor: "merchant",
           payload: {
             shopifyProductId: product.shopifyId,
-            assignments: assignments.map((assignment) => ({
-              causeId: assignment.causeId,
-              percentage: Number(assignment.percentage).toFixed(2),
-            })),
+            causeIds: assignments.map((assignment) => assignment.causeId),
           },
         },
       });
@@ -546,17 +670,17 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
     try {
       if (admin && canSyncProductToShopify(product.shopifyId)) {
-        await syncProductCauseAssignmentsMetafield(
+        await syncFullProductPublicAssignmentsToShopify({
           admin,
           shopId,
-          product.shopifyId,
-          assignments.map((assignment) => ({
+          product,
+          derivedAssignments: assignments.map((assignment) => ({
             causeId: assignment.causeId,
             name: causeMap.get(assignment.causeId)?.name ?? assignment.causeId,
             metaobjectId: causeMap.get(assignment.causeId)?.shopifyMetaobjectId ?? null,
-            percentage: Number(assignment.percentage).toFixed(2),
+            percentage: new Prisma.Decimal(assignment.percentage),
           })),
-        );
+        });
 
         await prisma.auditLog.create({
           data: {
@@ -610,7 +734,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
 
 export default function ProductDetailPage() {
   const { product, variants, causes, assignments, artists, artistAssignments } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const fetcher = useFetcher<{
+    ok: boolean;
+    message: string;
+    assignments?: AssignmentRow[];
+    donationRoutingMode?: string;
+  }>();
   const { search } = useLocation();
   const { formatMoney } = useAppLocalization();
   const [rows, setRows] = useState<AssignmentRow[]>(() =>
@@ -628,6 +757,7 @@ export default function ProductDetailPage() {
       payoutRateOverride: assignment.payoutRateOverride,
     })),
   );
+  const [donationRoutingMode, setDonationRoutingMode] = useState(product.donationRoutingMode);
 
   const handledRef = useRef<string>("");
   const selectedCauseIds = useMemo(() => new Set(rows.map((row) => row.causeId)), [rows]);
@@ -656,6 +786,14 @@ export default function ProductDetailPage() {
     const nextSignature = JSON.stringify(rows);
     handledRef.current = nextSignature;
   }, [fetcher.data, rows]);
+
+  useEffect(() => {
+    if (!fetcher.data?.ok || !fetcher.data.assignments) return;
+    setRows(fetcher.data.assignments);
+    if (fetcher.data.donationRoutingMode) {
+      setDonationRoutingMode(fetcher.data.donationRoutingMode);
+    }
+  }, [fetcher.data]);
 
   function addCauses(causeIds: string[]) {
     setRows((current) => [
@@ -702,10 +840,22 @@ export default function ProductDetailPage() {
   }
 
   function saveAssignments() {
+    const noCauseOverride = artistRows.length > 0 && donationRoutingMode === "product_override" && rows.length === 0;
+    if (noCauseOverride && !window.confirm("Save an explicit no-Cause override? This product will create no Cause obligation while the override is active.")) return;
     const formData = new FormData();
     formData.append("intent", "save-assignments");
     formData.append("assignments", JSON.stringify(rows));
+    if (noCauseOverride) formData.append("confirmNoCauseOverride", "yes");
     fetcher.submit(formData, { method: "post" });
+    if (artistRows.length > 0) setDonationRoutingMode("product_override");
+  }
+
+  function clearCauseOverride() {
+    if (!window.confirm("Clear this product override and return to the assigned Artists' Cause preferences?")) return;
+    const formData = new FormData();
+    formData.append("intent", "clear-cause-override");
+    fetcher.submit(formData, { method: "post" });
+    setDonationRoutingMode("automatic");
   }
 
   function saveArtistAssignments() {
@@ -917,6 +1067,7 @@ export default function ProductDetailPage() {
                         display: "grid",
                         gap: "0.75rem",
                         gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))",
+                        alignItems: "start",
                       }}
                     >
                       <div style={{ display: "grid", gap: "0.35rem" }}>
@@ -970,7 +1121,7 @@ export default function ProductDetailPage() {
                           style={fieldStyle}
                         />
                       </div>
-                      <div style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>
+                      <div style={{ color: "var(--p-color-text-subdued, #6d7175)", gridColumn: "1 / -1" }}>
                         {effectivePayout} · {selectedArtistCauseText}
                       </div>
                     </div>
@@ -1027,9 +1178,33 @@ export default function ProductDetailPage() {
             </s-text>
             <HelpText>These percentages control how this product&apos;s future order-level net contribution is split across Causes when a snapshot is created.</HelpText>
             {artistRows.length > 0 ? (
-              <s-banner tone="info">
-                <s-text>This product currently uses Artist routing. Direct Cause assignments are a derived storefront rollup and cannot be edited until Artist assignments are cleared.</s-text>
-              </s-banner>
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <label htmlFor="donation-routing-mode">Cause routing source</label>
+                <select
+                  id="donation-routing-mode"
+                  value={donationRoutingMode}
+                  onChange={(event) => {
+                    if (event.currentTarget.value === "automatic" && donationRoutingMode === "product_override") {
+                      clearCauseOverride();
+                    } else {
+                      setDonationRoutingMode(event.currentTarget.value);
+                    }
+                  }}
+                  style={{ ...fieldStyle, maxWidth: "28rem" }}
+                >
+                  <option value="automatic">Use Artist Cause preferences</option>
+                  <option value="product_override">Override Cause routing for this product</option>
+                </select>
+                {donationRoutingMode === "automatic" ? (
+                  <s-banner tone="info">
+                    <s-text>Cause assignments below are an Artist-derived storefront rollup. Choose the product override mode to edit them without removing Artist attribution or payouts.</s-text>
+                  </s-banner>
+                ) : (
+                  <s-banner tone="warning">
+                    <s-text>This product&apos;s Cause assignments override its Artists&apos; usual Cause preferences. Artist attribution and payout settings remain active.</s-text>
+                  </s-banner>
+                )}
+              </div>
             ) : null}
 
             <CompactAssignmentList
@@ -1059,7 +1234,7 @@ export default function ProductDetailPage() {
                         value={row.percentage}
                         onChange={(event) => updateRow(index, { percentage: event.currentTarget.value })}
                         style={fieldStyle}
-                        disabled={artistRows.length > 0}
+                        disabled={artistRows.length > 0 && donationRoutingMode !== "product_override"}
                       />
                     </div>
                   ),
@@ -1067,7 +1242,7 @@ export default function ProductDetailPage() {
                     <button
                       type="button"
                       onClick={() => removeRow(index)}
-                      disabled={artistRows.length > 0}
+                      disabled={artistRows.length > 0 && donationRoutingMode !== "product_override"}
                       style={{ ...fieldStyle, width: "auto", padding: "0.55rem 0.75rem", color: "var(--p-color-text-critical, #8e1f1f)" }}
                     >
                       Remove
@@ -1100,9 +1275,18 @@ export default function ProductDetailPage() {
                   onAdd={addCauses}
                   searchPlaceholder="Search Causes"
                   emptyText="No Causes match that search."
-                  disabled={rows.length >= causes.length || artistRows.length > 0}
+                  disabled={rows.length >= causes.length || (artistRows.length > 0 && donationRoutingMode !== "product_override")}
                 />
-                <s-button variant="primary" onClick={saveAssignments} disabled={isSubmitting || artistRows.length > 0}>
+                {artistRows.length > 0 && donationRoutingMode === "product_override" ? (
+                  <s-button variant="secondary" onClick={clearCauseOverride} disabled={isSubmitting}>
+                    Clear override
+                  </s-button>
+                ) : null}
+                <s-button
+                  variant="primary"
+                  onClick={saveAssignments}
+                  disabled={isSubmitting || (artistRows.length > 0 && donationRoutingMode !== "product_override")}
+                >
                   Save assignments
                 </s-button>
               </div>
