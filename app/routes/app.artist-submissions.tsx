@@ -1,5 +1,5 @@
 import { jsonResponse } from "~/utils/json-response.server";
-import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
+import type { ActionFunctionArgs, LoaderFunctionArgs, SerializeFrom } from "@remix-run/node";
 import { Form, useActionData, useLoaderData, useRouteError } from "@remix-run/react";
 
 import { prisma } from "../db.server";
@@ -12,8 +12,8 @@ import { authenticateAdminRequest } from "../utils/admin-auth.server";
 
 const submissionStatuses = ["new", "reviewing", "contacted", "converted", "declined", "spam", "archived"] as const;
 
-function normalizeStatus(value: string | null) {
-  return submissionStatuses.includes(value as (typeof submissionStatuses)[number]) ? value : "new";
+function normalizeStatus(value: string | null): (typeof submissionStatuses)[number] {
+  return submissionStatuses.find((status) => status === value) ?? "new";
 }
 
 type ActionData = {
@@ -230,7 +230,7 @@ export default function ArtistSubmissionsPage() {
             <s-text>No artist submissions found for this view.</s-text>
           ) : (
             <div style={{ display: "grid", gap: "1rem" }}>
-              {submissions.map((submission) => (
+              {submissions.map((submission: SerializeFrom<typeof loader>["submissions"][number]) => (
                 <details key={submission.id}>
                   <summary>
                     <strong>{submission.artistName || submission.submitterName}</strong> · {submission.status} · {formatDate(submission.createdAt)}
@@ -279,7 +279,7 @@ export default function ArtistSubmissionsPage() {
                         <p style={{ whiteSpace: "pre-wrap" }}>{submission.causeInterests || "Not provided"}</p>
                         {submission.causeLinks.length > 0 ? (
                           <ul>
-                            {submission.causeLinks.map((link) => (
+                            {submission.causeLinks.map((link: string) => (
                               <li key={link}>
                                 {safeExternalUrl(link) ? (
                                   <a href={safeExternalUrl(link) ?? "#"} target="_blank" rel="noreferrer">{link}</a>
@@ -302,7 +302,7 @@ export default function ArtistSubmissionsPage() {
                       <div>
                         <strong>Portfolio links</strong>
                         <ul>
-                          {submission.publicLinks.map((link) => (
+                          {submission.publicLinks.map((link: string) => (
                             <li key={link}>
                               {safeExternalUrl(link) ? (
                                 <a href={safeExternalUrl(link) ?? "#"} target="_blank" rel="noreferrer">{link}</a>
@@ -326,7 +326,15 @@ export default function ArtistSubmissionsPage() {
                             marginTop: "0.6rem",
                           }}
                         >
-                          {submission.files.map((file) => (
+                          {submission.files.map((file: {
+                            id: string;
+                            originalFileName: string;
+                            contentType: string;
+                            byteSize: number;
+                            scanStatus: string;
+                            scanResult: string;
+                            downloadUrl: string;
+                          }) => (
                             <article
                               key={file.id}
                               style={{

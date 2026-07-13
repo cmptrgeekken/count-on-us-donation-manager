@@ -1,5 +1,6 @@
 import { ensureArtistMetaobjectDefinition } from "./artistMetaobjectService.server";
 import { ensureCauseMetaobjectDefinition } from "./causeMetaobjectService.server";
+import { hasShopifyScopesForShop } from "./shopifyAccessScopes.server";
 
 type AdminContext = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
@@ -104,6 +105,18 @@ type GraphqlUserError = {
   message: string;
   code?: string | null;
 };
+
+const REQUIRED_PRODUCT_WRITE_SCOPES = ["write_products"] as const;
+
+export async function canWriteShopifyProducts({
+  admin,
+  shopId,
+}: {
+  admin?: AdminContext | null;
+  shopId: string;
+}): Promise<boolean> {
+  return hasShopifyScopesForShop({ admin, shopId, requiredScopes: REQUIRED_PRODUCT_WRITE_SCOPES });
+}
 
 async function parseGraphqlResponse<T>(response: Response): Promise<T> {
   const json = (await response.json()) as T & { errors?: Array<{ message?: string }> };
@@ -211,20 +224,6 @@ export async function ensureProductPublicMetafieldDefinitions(admin: AdminContex
           validations: [{ name: "metaobject_definition_id", value: causeDefinitionId }],
         }
       : null,
-    {
-      name: "Count On Us artist names",
-      namespace: "donation_manager",
-      key: "artist_names",
-      description: "Artist credit names for storefront filtering compatibility.",
-      type: "list.single_line_text_field",
-    },
-    {
-      name: "Count On Us cause names",
-      namespace: "donation_manager",
-      key: "cause_names",
-      description: "Cause names for storefront filtering compatibility.",
-      type: "list.single_line_text_field",
-    },
   ].filter((definition): definition is NonNullable<typeof definition> => Boolean(definition));
 
   let createdCount = 0;
@@ -288,15 +287,29 @@ async function filterMetaobjectRefsByType(
 
 export async function syncProductPublicDonationMetafields({
   admin,
+  shopId,
   productGid,
   causes,
   artists = [],
+  canWriteProducts,
 }: {
   admin: AdminContext;
+  shopId?: string;
   productGid: string;
   causes: ProductPublicCauseAssignment[];
   artists?: ProductPublicArtistAssignment[];
+  canWriteProducts?: boolean;
 }): Promise<void> {
+  if (canWriteProducts === false) return;
+  if (canWriteProducts === undefined && shopId) {
+    const hasProductWriteScope = await hasShopifyScopesForShop({
+      admin,
+      shopId,
+      requiredScopes: REQUIRED_PRODUCT_WRITE_SCOPES,
+    });
+    if (!hasProductWriteScope) return;
+  }
+
   await ensureProductOwnerExists(admin, productGid);
   await ensureProductPublicMetafieldDefinitions(admin);
 
@@ -304,8 +317,6 @@ export async function syncProductPublicDonationMetafields({
     filterMetaobjectRefsByType(admin, uniqueValues(artists.map((artist) => artist.metaobjectId ?? "")), "$app:artist"),
     filterMetaobjectRefsByType(admin, uniqueValues(causes.map((cause) => cause.metaobjectId ?? "")), "$app:cause"),
   ]);
-  const artistNames = uniqueValues(artists.map((artist) => artist.creditName));
-  const causeNames = uniqueValues(causes.map((cause) => cause.name));
   const metafields = [
     {
       ownerId: productGid,
@@ -320,37 +331,19 @@ export async function syncProductPublicDonationMetafields({
         })),
       ),
     },
-    artistRefs.length > 0
-      ? {
-          ownerId: productGid,
-          namespace: "donation_manager",
-          key: "artist_refs",
-          type: "list.metaobject_reference",
-          value: JSON.stringify(artistRefs),
-        }
-      : null,
-    causeRefs.length > 0
-      ? {
-          ownerId: productGid,
-          namespace: "donation_manager",
-          key: "cause_refs",
-          type: "list.metaobject_reference",
-          value: JSON.stringify(causeRefs),
-        }
-      : null,
     {
       ownerId: productGid,
       namespace: "donation_manager",
-      key: "artist_names",
-      type: "list.single_line_text_field",
-      value: JSON.stringify(artistNames),
+      key: "artist_refs",
+      type: "list.metaobject_reference",
+      value: JSON.stringify(artistRefs),
     },
     {
       ownerId: productGid,
       namespace: "donation_manager",
-      key: "cause_names",
-      type: "list.single_line_text_field",
-      value: JSON.stringify(causeNames),
+      key: "cause_refs",
+      type: "list.metaobject_reference",
+      value: JSON.stringify(causeRefs),
     },
   ].filter((metafield): metafield is NonNullable<typeof metafield> => Boolean(metafield));
 

@@ -1,5 +1,5 @@
 import { jsonResponse } from "~/utils/json-response.server";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
@@ -7,6 +7,12 @@ import { z } from "zod";
 
 import { adminFieldStyle, FetcherBanners, SectionHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
+import {
+  cancelCustomerMerchandisingSyncRun,
+  queueCustomerMerchandisingSyncRun,
+} from "../services/customerMerchandisingSync.server";
+import { canWriteShopifyProducts } from "../services/productPublicMetafieldService.server";
+import { canSyncShopifyFiles } from "../services/shopifyIconFileService.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import {
@@ -56,8 +62,45 @@ const optionalEmailSchema = z
   .union([z.literal(""), z.email({ message: "Notification email must be a valid email address." })])
   .transform((value) => value.toLowerCase() || null);
 
+const customerMerchandisingSyncSchema = z.object({
+  target: z.enum(["artists", "causes", "products", "all"]),
+});
+
+const cancelCustomerMerchandisingSyncSchema = z.object({
+  runId: z.string().cuid(),
+});
+
 function formatDateInput(value: Date | null | undefined) {
   return value ? value.toISOString().slice(0, 10) : "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function summarizeFailureMessagesFromResultSummary(resultSummary: unknown): string | null {
+  if (!isRecord(resultSummary)) return null;
+
+  const failureMessages: Record<string, number> = {};
+  for (const phaseResult of Object.values(resultSummary)) {
+    if (!isRecord(phaseResult) || !isRecord(phaseResult.failureMessages)) continue;
+    for (const [message, count] of Object.entries(phaseResult.failureMessages)) {
+      if (typeof count !== "number" || count <= 0) continue;
+      failureMessages[message] = (failureMessages[message] ?? 0) + count;
+    }
+  }
+
+  const entries = Object.entries(failureMessages).sort(([, leftCount], [, rightCount]) => rightCount - leftCount);
+  if (entries.length === 0) return null;
+
+  return entries
+    .slice(0, 3)
+    .map(([message, count]) => (count > 1 ? `${message} (${count}x)` : message))
+    .join("; ");
+}
+
+function isGenericSyncFailureSummary(value: string | null | undefined): boolean {
+  return /^\d+ items? failed\.$/.test(value ?? "");
 }
 
 function parseOptionalDateInput(value: string | undefined, label: string) {
@@ -82,28 +125,62 @@ function parseOptionalDateInput(value: string | undefined, label: string) {
 }
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticateAdminRequest(request);
+  const { admin, session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
 
-  const shop = await prisma.shop.findUnique({
-    where: { shopId },
-    select: {
-      planTier: true,
-      paymentRate: true,
-      planOverride: true,
-      currency: true,
-      managedMarketsEnableDate: true,
-      mistakeBuffer: true,
-      defaultLaborRate: true,
-      defaultElectricityCostPerKwh: true,
-      effectiveTaxRate: true,
-      taxDeductionMode: true,
-      postPurchaseEmailEnabled: true,
-      artistSubmissionNotificationEmail: true,
-      artistOverlayEnabled: true,
-      productDescriptionDonationSummaryEnabled: true,
-    },
-  });
+  const [shop, latestCustomerMerchandisingSyncRun, canSyncShopifyIconFiles, canSyncShopifyProductPublicData] =
+    await Promise.all([
+    prisma.shop.findUnique({
+      where: { shopId },
+      select: {
+        planTier: true,
+        paymentRate: true,
+        planOverride: true,
+        currency: true,
+        managedMarketsEnableDate: true,
+        mistakeBuffer: true,
+        defaultLaborRate: true,
+        defaultElectricityCostPerKwh: true,
+        effectiveTaxRate: true,
+        taxDeductionMode: true,
+        postPurchaseEmailEnabled: true,
+        artistSubmissionNotificationEmail: true,
+        productDescriptionDonationSummaryEnabled: true,
+      },
+    }),
+    prisma.customerMerchandisingSyncRun.findFirst({
+      where: { shopId },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        target: true,
+        status: true,
+        totalCount: true,
+        syncedCount: true,
+        failedCount: true,
+        skippedCount: true,
+        errorSummary: true,
+        resultSummary: true,
+        createdAt: true,
+        startedAt: true,
+        completedAt: true,
+      },
+    }),
+      canSyncShopifyFiles({ admin, shopId }),
+      canWriteShopifyProducts({ admin, shopId }),
+    ]);
+
+  const latestDetailedSyncErrorSummary = summarizeFailureMessagesFromResultSummary(
+    latestCustomerMerchandisingSyncRun?.resultSummary,
+  );
+  const latestSyncErrorSummary =
+    latestCustomerMerchandisingSyncRun?.errorSummary && !isGenericSyncFailureSummary(latestCustomerMerchandisingSyncRun.errorSummary)
+      ? latestCustomerMerchandisingSyncRun.errorSummary
+      : latestDetailedSyncErrorSummary
+        ? latestCustomerMerchandisingSyncRun?.failedCount
+          ? `${latestCustomerMerchandisingSyncRun.failedCount} item${latestCustomerMerchandisingSyncRun.failedCount === 1 ? "" : "s"} failed. ${latestDetailedSyncErrorSummary}`
+          : latestDetailedSyncErrorSummary
+        : latestCustomerMerchandisingSyncRun?.errorSummary;
 
   return jsonResponse({
     planTier: shop?.planTier ?? "Unknown",
@@ -117,8 +194,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     taxDeductionMode: shop?.taxDeductionMode ?? "dont_deduct",
     postPurchaseEmailEnabled: shop?.postPurchaseEmailEnabled ?? false,
     artistSubmissionNotificationEmail: shop?.artistSubmissionNotificationEmail ?? "",
-    artistOverlayEnabled: shop?.artistOverlayEnabled ?? false,
     productDescriptionDonationSummaryEnabled: shop?.productDescriptionDonationSummaryEnabled ?? false,
+    canSyncShopifyIconFiles,
+    canSyncShopifyProductPublicData,
+    latestCustomerMerchandisingSyncRun: latestCustomerMerchandisingSyncRun
+      ? {
+          ...latestCustomerMerchandisingSyncRun,
+          errorSummary: latestSyncErrorSummary,
+        }
+      : null,
   });
 };
 
@@ -135,6 +219,20 @@ const SETTINGS_TABS: Array<{ value: SettingsTab; label: string }> = [
 
 function parseSettingsTab(value: string | null): SettingsTab {
   return SETTINGS_TABS.some((tab) => tab.value === value) ? (value as SettingsTab) : "financial";
+}
+
+function isCustomerMerchandisingSyncActive(status: string | null | undefined) {
+  return status === "queued" || status === "running";
+}
+
+function formatCustomerMerchandisingSyncStatus(status: string) {
+  if (status === "queued") return "Queued";
+  if (status === "running") return "Running";
+  if (status === "completed") return "Completed";
+  if (status === "completed_with_errors") return "Completed with errors";
+  if (status === "canceled") return "Canceled";
+  if (status === "failed") return "Failed";
+  return status;
 }
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -398,14 +496,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 
   if (intent === "update-customer-merchandising-settings") {
-    const artistOverlayEnabled = formData.get("artistOverlayEnabled") === "on";
     const productDescriptionDonationSummaryEnabled =
       formData.get("productDescriptionDonationSummaryEnabled") === "on";
 
     await prisma.shop.update({
       where: { shopId },
       data: {
-        artistOverlayEnabled,
         productDescriptionDonationSummaryEnabled,
       },
     });
@@ -417,13 +513,54 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         action: "CUSTOMER_MERCHANDISING_SETTINGS_UPDATED",
         actor: "merchant",
         payload: {
-          artistOverlayEnabled,
           productDescriptionDonationSummaryEnabled,
         },
       },
     });
 
     return jsonResponse({ ok: true, message: "Customer merchandising settings updated." });
+  }
+
+  if (intent === "sync-customer-merchandising-to-shopify") {
+    const parsed = customerMerchandisingSyncSchema.safeParse({
+      target: formData.get("target")?.toString(),
+    });
+    if (!parsed.success) {
+      return jsonResponse({ ok: false, message: "Choose a valid Shopify sync target." }, { status: 400 });
+    }
+
+    const { runId } = await queueCustomerMerchandisingSyncRun({
+      shopId,
+      target: parsed.data.target,
+    });
+
+    return jsonResponse({
+      ok: true,
+      message: "Shopify storefront sync queued. Progress will update below.",
+      runId,
+    });
+  }
+
+  if (intent === "cancel-customer-merchandising-sync") {
+    const parsed = cancelCustomerMerchandisingSyncSchema.safeParse({
+      runId: formData.get("runId")?.toString(),
+    });
+    if (!parsed.success) {
+      return jsonResponse({ ok: false, message: "Choose a valid sync run to cancel." }, { status: 400 });
+    }
+
+    const canceled = await cancelCustomerMerchandisingSyncRun({
+      shopId,
+      runId: parsed.data.runId,
+    });
+
+    return jsonResponse({
+      ok: true,
+      message: canceled
+        ? "Shopify storefront sync canceled. Shopify may contain partial updates."
+        : "That Shopify storefront sync is no longer running.",
+      runId: parsed.data.runId,
+    });
   }
 
   if (intent === "refresh-shop-currency") {
@@ -477,14 +614,18 @@ export default function Settings() {
     taxDeductionMode,
     postPurchaseEmailEnabled,
     artistSubmissionNotificationEmail,
-    artistOverlayEnabled,
     productDescriptionDonationSummaryEnabled,
+    canSyncShopifyIconFiles,
+    canSyncShopifyProductPublicData,
+    latestCustomerMerchandisingSyncRun,
   } = useLoaderData<typeof loader>();
-  const fetcher = useFetcher<{ ok: boolean; message: string }>();
+  const fetcher = useFetcher<{ ok: boolean; message: string; runId?: string }>();
+  const syncStatusFetcher = useFetcher<typeof loader>();
   const [searchParams] = useSearchParams();
   const { currency, locale, formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
 
   const statusRef = useRef<HTMLDivElement>(null);
+  const syncStatusLoadRef = useRef(syncStatusFetcher.load);
   const [rateInput, setRateInput] = useState(paymentRate ?? "");
   const [managedMarketsEnableDateInput, setManagedMarketsEnableDateInput] = useState(managedMarketsEnableDate ?? "");
   const [bufferInput, setBufferInput] = useState(mistakeBuffer ?? "");
@@ -496,14 +637,41 @@ export default function Settings() {
   const [artistSubmissionNotificationEmailInput, setArtistSubmissionNotificationEmailInput] = useState(
     artistSubmissionNotificationEmail ?? "",
   );
-  const [artistOverlayEnabledInput, setArtistOverlayEnabledInput] = useState(artistOverlayEnabled ?? false);
   const [productDescriptionDonationSummaryEnabledInput, setProductDescriptionDonationSummaryEnabledInput] = useState(
     productDescriptionDonationSummaryEnabled ?? false,
   );
   const activeTab = parseSettingsTab(searchParams.get("section"));
+  const latestSyncRun =
+    syncStatusFetcher.data?.latestCustomerMerchandisingSyncRun ?? latestCustomerMerchandisingSyncRun;
+  const queuedSyncRunId = fetcher.data?.runId;
 
   const isSubmitting = fetcher.state !== "idle";
+  const isSyncRunning = isCustomerMerchandisingSyncActive(latestSyncRun?.status);
+  const isQueuedSyncRunPending = Boolean(queuedSyncRunId && latestSyncRun?.id !== queuedSyncRunId);
+  const shouldPollSyncStatus = isSyncRunning || isQueuedSyncRunPending;
   const statusMessage = fetcher.data?.message ?? "";
+  const syncCompletedCount =
+    (latestSyncRun?.syncedCount ?? 0) +
+    (latestSyncRun?.failedCount ?? 0) +
+    (latestSyncRun?.skippedCount ?? 0);
+  const syncProgressPercent = latestSyncRun?.totalCount
+    ? Math.min(100, Math.round(syncCompletedCount / latestSyncRun.totalCount * 100))
+    : isSyncRunning
+      ? 5
+      : 0;
+
+  useEffect(() => {
+    syncStatusLoadRef.current = syncStatusFetcher.load;
+  }, [syncStatusFetcher.load]);
+
+  useEffect(() => {
+    if (!shouldPollSyncStatus) return;
+    syncStatusLoadRef.current("/app/settings?section=advanced");
+    const id = window.setInterval(() => {
+      syncStatusLoadRef.current("/app/settings?section=advanced");
+    }, 2500);
+    return () => window.clearInterval(id);
+  }, [shouldPollSyncStatus]);
 
   return (
     <>
@@ -832,25 +1000,6 @@ export default function Settings() {
               <input type="hidden" name="intent" value="update-customer-merchandising-settings" />
               <div style={{ display: "grid", gap: "0.85rem" }}>
                 <label
-                  htmlFor="artist-overlay-enabled"
-                  style={{ display: "flex", alignItems: "start", gap: "0.75rem", cursor: "pointer" }}
-                >
-                  <input
-                    id="artist-overlay-enabled"
-                    type="checkbox"
-                    name="artistOverlayEnabled"
-                    checked={artistOverlayEnabledInput}
-                    onChange={(event) => setArtistOverlayEnabledInput(event.currentTarget.checked)}
-                    style={{ marginTop: "0.2rem" }}
-                  />
-                  <span style={{ display: "grid", gap: "0.25rem" }}>
-                    <strong>Enable Artist product-card overlay support</strong>
-                    <s-text>
-                      Allows the storefront app embed to show Artist credit badges on product images when the theme embed is enabled.
-                    </s-text>
-                  </span>
-                </label>
-                <label
                   htmlFor="product-description-summary-enabled"
                   style={{ display: "flex", alignItems: "start", gap: "0.75rem", cursor: "pointer" }}
                 >
@@ -874,17 +1023,138 @@ export default function Settings() {
                 </div>
               </div>
             </fetcher.Form>
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              <SectionHeader
+                title="Sync Shopify storefront data"
+                description="Use these when enabling merchandising features on an existing store or after repairing stale Shopify metaobjects."
+              />
+              <div style={{ display: "grid", gap: "0.5rem" }}>
+                <s-text>
+                  Artist and Cause sync refreshes Shopify metaobjects, including uploaded icon proxy URLs. Product sync refreshes
+                  public metafields used by filters and updates Count On Us product-description summary blocks according to the
+                  setting above.
+                </s-text>
+                {!canSyncShopifyIconFiles ? (
+                  <s-banner tone="warning">
+                    <s-text>
+                      Shopify file access is not granted, so Artist and Cause icon image uploads will be skipped. Public icon
+                      URLs, metaobjects, and other granted sync surfaces will still run.
+                    </s-text>
+                  </s-banner>
+                ) : null}
+                {!canSyncShopifyProductPublicData ? (
+                  <s-banner tone="warning">
+                    <s-text>
+                      Shopify product edit access is not granted, so product metafields and product-description summaries will
+                      be skipped. Artist and Cause metaobjects can still sync.
+                    </s-text>
+                  </s-banner>
+                ) : null}
+                {latestSyncRun ? (
+                  <div
+                    style={{
+                      border: "1px solid var(--p-color-border, #d2d5d8)",
+                      borderRadius: "0.5rem",
+                      padding: "0.75rem",
+                      display: "grid",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", flexWrap: "wrap" }}>
+                      <strong>{formatCustomerMerchandisingSyncStatus(latestSyncRun.status)}</strong>
+                      <s-text>
+                        {latestSyncRun.target === "all" ? "All storefront data" : latestSyncRun.target}
+                      </s-text>
+                    </div>
+                    <div
+                      role="progressbar"
+                      aria-label="Shopify storefront sync progress"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={syncProgressPercent}
+                      style={{
+                        width: "100%",
+                        height: "0.6rem",
+                        borderRadius: "999px",
+                        background: "var(--p-color-bg-surface-secondary, #f1f2f4)",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: `${syncProgressPercent}%`,
+                          height: "100%",
+                          background:
+                            latestSyncRun.status === "failed"
+                              ? "var(--p-color-bg-fill-critical, #c9372c)"
+                              : "var(--p-color-bg-fill-brand, #005bd3)",
+                          transition: "width 200ms ease",
+                        }}
+                      />
+                    </div>
+                    <s-text>
+                      {syncCompletedCount}/{latestSyncRun.totalCount || "?"} processed, {latestSyncRun.syncedCount} synced,
+                      {" "}{latestSyncRun.skippedCount} skipped, {latestSyncRun.failedCount} failed.
+                    </s-text>
+                    {latestSyncRun.errorSummary ? (
+                      <span style={{ color: "var(--p-color-text-critical, #8e1f0b)", whiteSpace: "pre-wrap" }}>
+                        {latestSyncRun.errorSummary}
+                      </span>
+                    ) : null}
+                    {isCustomerMerchandisingSyncActive(latestSyncRun.status) ? (
+                      <div style={{ display: "grid", gap: "0.4rem", justifyItems: "start" }}>
+                        <fetcher.Form method="post">
+                          <input type="hidden" name="intent" value="cancel-customer-merchandising-sync" />
+                          <input type="hidden" name="runId" value={latestSyncRun.id} />
+                          <s-button type="submit" tone="critical" disabled={isSubmitting}>
+                            Cancel sync
+                          </s-button>
+                        </fetcher.Form>
+                        <s-text>
+                          Canceling stops after the current item finishes. Shopify changes already sent will not be rolled back.
+                        </s-text>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                  <fetcher.Form method="post">
+                    <input type="hidden" name="intent" value="sync-customer-merchandising-to-shopify" />
+                    <input type="hidden" name="target" value="artists" />
+                    <s-button type="submit" disabled={isSubmitting || shouldPollSyncStatus}>Sync artists</s-button>
+                  </fetcher.Form>
+                  <fetcher.Form method="post">
+                    <input type="hidden" name="intent" value="sync-customer-merchandising-to-shopify" />
+                    <input type="hidden" name="target" value="causes" />
+                    <s-button type="submit" disabled={isSubmitting || shouldPollSyncStatus}>Sync causes</s-button>
+                  </fetcher.Form>
+                  <fetcher.Form method="post">
+                    <input type="hidden" name="intent" value="sync-customer-merchandising-to-shopify" />
+                    <input type="hidden" name="target" value="products" />
+                    <s-button type="submit" disabled={isSubmitting || shouldPollSyncStatus}>Sync products</s-button>
+                  </fetcher.Form>
+                  <fetcher.Form method="post">
+                    <input type="hidden" name="intent" value="sync-customer-merchandising-to-shopify" />
+                    <input type="hidden" name="target" value="all" />
+                    <s-button type="submit" disabled={isSubmitting || shouldPollSyncStatus} variant="primary">Sync all</s-button>
+                  </fetcher.Form>
+                </div>
+              </div>
+            </div>
             <s-banner tone="info">
               <div style={{ display: "grid", gap: "0.45rem" }}>
                 <strong>Storefront filter setup required</strong>
                 <s-text>
                   Artist and Cause directory links use Shopify product metafields:
-                  {" "}donation_manager.artist_names and donation_manager.cause_names.
+                  {" "}donation_manager.artist_refs and donation_manager.cause_refs.
                 </s-text>
                 <s-text>
-                  After assigning Artists or Causes to products, open Shopify Admin, go to Search &amp; Discovery, add both
-                  metafields as collection filters, then save. If existing products were assigned before this feature was
-                  enabled, re-save the product or artist mappings so Count On Us syncs the metafields.
+                  After assigning Artists or Causes to products, open Shopify Admin and use Shopify&apos;s Search &amp; Discovery app
+                  to add both metaobject-reference metafields as collection filters, then save. To show icons in supported
+                  themes, enable the filter visual display and choose the Icon image field. If Search &amp; Discovery is not
+                  installed, install Shopify&apos;s free app from the Shopify App Store first. If existing products were assigned
+                  before this feature was enabled, use Sync all above so Count On Us refreshes the Shopify metaobjects, icon
+                  images, and product metafields.
                 </s-text>
               </div>
             </s-banner>

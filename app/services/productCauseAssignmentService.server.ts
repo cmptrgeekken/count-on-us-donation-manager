@@ -13,11 +13,14 @@ type ProductCauseAssignmentMetafield = {
 
 export async function syncProductCauseAssignmentsMetafield(
   admin: AdminContext,
+  shopId: string,
   productGid: string,
   assignments: ProductCauseAssignmentMetafield[],
+  canWriteProducts?: boolean,
 ): Promise<void> {
   await syncProductPublicDonationMetafields({
     admin,
+    shopId,
     productGid,
     causes: assignments.map((assignment) => ({
       causeId: assignment.causeId,
@@ -25,5 +28,6 @@ export async function syncProductCauseAssignmentsMetafield(
       metaobjectId: assignment.metaobjectId,
       percentage: assignment.percentage,
     })),
+    canWriteProducts,
   });
 }

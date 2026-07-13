@@ -9,6 +9,7 @@ type ArtistMetaobjectInput = {
   creditName: string;
   publicBio?: string | null;
   iconUrl?: string | null;
+  iconImageId?: string | null;
   websiteUrl?: string | null;
   instagramUrl?: string | null;
   status: string;
@@ -32,6 +33,21 @@ const METAOBJECT_DEFINITION_CREATE_MUTATION = `#graphql
       metaobjectDefinition {
         id
         type
+      }
+      userErrors {
+        field
+        message
+        code
+      }
+    }
+  }
+`;
+
+const METAOBJECT_DEFINITION_UPDATE_MUTATION = `#graphql
+  mutation UpdateArtistMetaobjectDefinition($id: ID!, $definition: MetaobjectDefinitionUpdateInput!) {
+    metaobjectDefinitionUpdate(id: $id, definition: $definition) {
+      metaobjectDefinition {
+        id
       }
       userErrors {
         field
@@ -74,6 +90,7 @@ const METAOBJECT_UPDATE_MUTATION = `#graphql
 `;
 
 type GraphqlUserError = {
+  field?: string[] | null;
   message: string;
   code?: string | null;
 };
@@ -91,21 +108,48 @@ function normalizeOptional(value?: string | null) {
   return trimmed ? trimmed : "";
 }
 
-function getUserErrorMessage(userErrors: GraphqlUserError[]) {
-  return userErrors[0]?.message ?? "Unknown Shopify metaobject error.";
+function normalizeOptionalUrl(value?: string | null) {
+  const trimmed = normalizeOptional(value);
+  if (!trimmed) return "";
+
+  try {
+    const url = new URL(trimmed);
+    return url.protocol === "http:" || url.protocol === "https:" ? trimmed : "";
+  } catch {
+    return "";
+  }
 }
 
-function buildArtistFields(input: ArtistMetaobjectInput, supportsIconUrl: boolean) {
+function getSubmittedFieldKey(errorField: string[] | null | undefined, submittedFields?: Array<{ key: string; value: string }>) {
+  if (!submittedFields || !errorField) return null;
+  const fieldsIndex = errorField.findIndex((part) => part === "fields");
+  const indexPart = fieldsIndex >= 0 ? errorField[fieldsIndex + 1] : undefined;
+  const index = indexPart ? Number(indexPart) : Number.NaN;
+  return Number.isInteger(index) ? submittedFields[index]?.key ?? null : null;
+}
+
+function getUserErrorMessage(userErrors: GraphqlUserError[], submittedFields?: Array<{ key: string; value: string }>) {
+  const firstError = userErrors[0];
+  if (!firstError) return "Unknown Shopify metaobject error.";
+  const submittedFieldKey = getSubmittedFieldKey(firstError.field, submittedFields);
+  const field = submittedFieldKey ?? firstError.field?.filter(Boolean).join(".");
+  const message = firstError.code ? `${firstError.message} (${firstError.code})` : firstError.message;
+  return field ? `${field}: ${message}` : message;
+}
+
+function buildArtistFields(input: ArtistMetaobjectInput, supportedFields: Set<string>) {
   const fields = [
     { key: "display_name", value: input.displayName.trim() },
     { key: "credit_name", value: input.creditName.trim() },
     { key: "public_bio", value: normalizeOptional(input.publicBio) },
     { key: "status", value: input.status },
   ];
-  const iconUrl = normalizeOptional(input.iconUrl);
-  const websiteUrl = normalizeOptional(input.websiteUrl);
-  const instagramUrl = normalizeOptional(input.instagramUrl);
-  if (supportsIconUrl && iconUrl) fields.push({ key: "icon_url", value: iconUrl });
+  const iconUrl = normalizeOptionalUrl(input.iconUrl);
+  const iconImageId = normalizeOptional(input.iconImageId);
+  const websiteUrl = normalizeOptionalUrl(input.websiteUrl);
+  const instagramUrl = normalizeOptionalUrl(input.instagramUrl);
+  if (supportedFields.has("icon_image") && iconImageId) fields.push({ key: "icon_image", value: iconImageId });
+  if (!iconImageId && supportedFields.has("icon_url") && iconUrl) fields.push({ key: "icon_url", value: iconUrl });
   if (websiteUrl) fields.push({ key: "website_url", value: websiteUrl });
   if (instagramUrl) fields.push({ key: "instagram_url", value: instagramUrl });
   return fields;
@@ -131,6 +175,37 @@ export async function ensureArtistMetaobjectDefinition(admin: AdminContext): Pro
   const existingDefinition = await getArtistMetaobjectDefinitionInfo(admin);
 
   if (existingDefinition?.id) {
+    if (!existingDefinition.fieldDefinitions.some((fieldDefinition) => fieldDefinition.key === "icon_image")) {
+      const response = await admin.graphql(METAOBJECT_DEFINITION_UPDATE_MUTATION, {
+        variables: {
+          id: existingDefinition.id,
+          definition: {
+            fieldDefinitions: [
+              {
+                create: {
+                  name: "Icon image",
+                  key: "icon_image",
+                  type: "file_reference",
+                },
+              },
+            ],
+          },
+        },
+      });
+      const json = await parseGraphqlResponse<{
+        data?: {
+          metaobjectDefinitionUpdate?: {
+            metaobjectDefinition?: { id: string } | null;
+            userErrors: GraphqlUserError[];
+          };
+        };
+      }>(response);
+      const userErrors = json.data?.metaobjectDefinitionUpdate?.userErrors ?? [];
+      if (userErrors.length > 0 && !userErrors.some((error) => error.code === "TAKEN")) {
+        throw new Error(getUserErrorMessage(userErrors));
+      }
+      return true;
+    }
     return false;
   }
 
@@ -149,6 +224,7 @@ export async function ensureArtistMetaobjectDefinition(admin: AdminContext): Pro
           { name: "Credit name", key: "credit_name", type: "single_line_text_field", required: true },
           { name: "Public bio", key: "public_bio", type: "multi_line_text_field" },
           { name: "Icon URL", key: "icon_url", type: "url" },
+          { name: "Icon image", key: "icon_image", type: "file_reference" },
           { name: "Website URL", key: "website_url", type: "url" },
           { name: "Instagram URL", key: "instagram_url", type: "url" },
           { name: "Status", key: "status", type: "single_line_text_field" },
@@ -171,9 +247,9 @@ export async function ensureArtistMetaobjectDefinition(admin: AdminContext): Pro
   throw new Error(getUserErrorMessage(userErrors));
 }
 
-async function artistMetaobjectSupportsIconUrl(admin: AdminContext): Promise<boolean> {
+async function artistMetaobjectSupportedFields(admin: AdminContext): Promise<Set<string>> {
   const definition = await getArtistMetaobjectDefinitionInfo(admin);
-  return Boolean(definition?.fieldDefinitions.some((fieldDefinition) => fieldDefinition.key === "icon_url"));
+  return new Set(definition?.fieldDefinitions.map((fieldDefinition) => fieldDefinition.key) ?? []);
 }
 
 export async function createArtistMetaobject(
@@ -181,12 +257,13 @@ export async function createArtistMetaobject(
   input: ArtistMetaobjectInput,
 ): Promise<{ id: string; handle: string | null }> {
   await ensureArtistMetaobjectDefinition(admin);
-  const supportsIconUrl = await artistMetaobjectSupportsIconUrl(admin);
+  const supportedFields = await artistMetaobjectSupportedFields(admin);
+  const fields = buildArtistFields(input, supportedFields);
   const response = await admin.graphql(METAOBJECT_CREATE_MUTATION, {
     variables: {
       metaobject: {
         type: ARTIST_METAOBJECT_TYPE,
-        fields: buildArtistFields(input, supportsIconUrl),
+        fields,
       },
     },
   });
@@ -200,7 +277,7 @@ export async function createArtistMetaobject(
   }>(response);
   const payload = json.data?.metaobjectCreate;
   if (!payload?.metaobject || payload.userErrors.length > 0) {
-    throw new Error(getUserErrorMessage(payload?.userErrors ?? []));
+    throw new Error(getUserErrorMessage(payload?.userErrors ?? [], fields));
   }
   return payload.metaobject;
 }
@@ -210,12 +287,14 @@ export async function updateArtistMetaobject(
   metaobjectId: string,
   input: ArtistMetaobjectInput,
 ): Promise<void> {
-  const supportsIconUrl = await artistMetaobjectSupportsIconUrl(admin);
+  await ensureArtistMetaobjectDefinition(admin);
+  const supportedFields = await artistMetaobjectSupportedFields(admin);
+  const fields = buildArtistFields(input, supportedFields);
   const response = await admin.graphql(METAOBJECT_UPDATE_MUTATION, {
     variables: {
       id: metaobjectId,
       metaobject: {
-        fields: buildArtistFields(input, supportsIconUrl),
+        fields,
       },
     },
   });
@@ -229,7 +308,7 @@ export async function updateArtistMetaobject(
   }>(response);
   const payload = json.data?.metaobjectUpdate;
   if (!payload?.metaobject || payload.userErrors.length > 0) {
-    throw new Error(getUserErrorMessage(payload?.userErrors ?? []));
+    throw new Error(getUserErrorMessage(payload?.userErrors ?? [], fields));
   }
 }
 

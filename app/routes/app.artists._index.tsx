@@ -1,5 +1,5 @@
 import { jsonResponse } from "~/utils/json-response.server";
-import type { LoaderFunctionArgs } from "@remix-run/node";
+import type { LoaderFunctionArgs, SerializeFrom } from "@remix-run/node";
 import { Link, useLoaderData, useRouteError } from "@remix-run/react";
 import { EmptyTableRow, ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
@@ -111,7 +111,7 @@ export default function ArtistsPage() {
                   </div>
                 </EmptyTableRow>
               ) : (
-                artists.map((artist) => (
+                artists.map((artist: SerializeFrom<typeof loader>["artists"][number]) => (
                   <s-table-row key={artist.id}>
                     <s-table-cell>
                       <div style={{ display: "grid", gap: "0.2rem" }}>

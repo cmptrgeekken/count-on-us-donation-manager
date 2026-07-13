@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "../db.server";
+import { canWriteShopifyProducts } from "./productPublicMetafieldService.server";
 import { buildVariantEstimatePayload } from "./variantEstimate.server";
 
 type AdminContext = {
@@ -229,12 +230,20 @@ export async function syncProductDescriptionDonationSummary({
   shopId,
   product,
   enabled,
+  canWriteProducts,
 }: {
   admin: AdminContext;
   shopId: string;
   product: { id: string; shopifyId: string };
   enabled: boolean;
-}): Promise<void> {
+  canWriteProducts?: boolean;
+}): Promise<boolean> {
+  if (canWriteProducts === false) return false;
+  if (canWriteProducts === undefined) {
+    const hasProductWriteScope = await canWriteShopifyProducts({ admin, shopId });
+    if (!hasProductWriteScope) return false;
+  }
+
   const descriptionResponse = await admin.graphql(PRODUCT_DESCRIPTION_QUERY, {
     variables: { id: product.shopifyId },
   });
@@ -251,7 +260,7 @@ export async function syncProductDescriptionDonationSummary({
     : null;
   const nextDescription = replaceMarkedBlock(descriptionHtml, summary);
 
-  if (nextDescription === descriptionHtml) return;
+  if (nextDescription === descriptionHtml) return true;
 
   const updateResponse = await admin.graphql(PRODUCT_UPDATE_MUTATION, {
     variables: {
@@ -274,4 +283,5 @@ export async function syncProductDescriptionDonationSummary({
     const message = firstError?.message ?? "Unable to update product description.";
     throw new Error(message);
   }
+  return true;
 }

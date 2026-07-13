@@ -548,6 +548,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       if (admin && canSyncProductToShopify(product.shopifyId)) {
         await syncProductCauseAssignmentsMetafield(
           admin,
+          shopId,
           product.shopifyId,
           assignments.map((assignment) => ({
             causeId: assignment.causeId,

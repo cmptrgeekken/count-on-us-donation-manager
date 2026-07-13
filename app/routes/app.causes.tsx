@@ -19,6 +19,7 @@ import {
   PublicIconUploadError,
   uploadPublicIcon,
 } from "../services/publicIconStorage.server";
+import { syncPublicIconToShopifyFile } from "../services/shopifyIconFileService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 
 const causeSchema = z.object({
@@ -253,13 +254,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         try {
           if (admin) {
             await ensureCauseMetaobjectDefinition(admin);
+            const iconImageId = await syncPublicIconToShopifyFile({
+              admin,
+              shopId,
+              ownerType: "cause",
+              ownerId: cause.id,
+              label: cause.name,
+              iconStorageKey: createdIconStorageKey,
+              existingMediaImageId: null,
+              syncedStorageKey: null,
+            });
             const metaobject = await createCauseMetaobject(admin, {
               ...causeInput,
               iconUrl: buildCausePublicIconUrl(shopId, cause.id, createdIconStorageKey),
+              iconImageId,
             });
             await prisma.cause.update({
               where: { id: cause.id, shopId },
-              data: { shopifyMetaobjectId: metaobject.id },
+              data: {
+                shopifyMetaobjectId: metaobject.id,
+                shopifyIconMediaImageId: iconImageId,
+                shopifyIconStorageKey: iconImageId ? createdIconStorageKey : null,
+              },
             });
             await prisma.auditLog.create({
               data: {
@@ -312,7 +328,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const id = idParsed.data.id;
       const existing = await prisma.cause.findFirst({
         where: { id, shopId },
-        select: { shopifyMetaobjectId: true, iconStorageKey: true },
+        select: {
+          name: true,
+          shopifyMetaobjectId: true,
+          iconStorageKey: true,
+          shopifyIconMediaImageId: true,
+          shopifyIconStorageKey: true,
+        },
       });
 
       if (!existing) {
@@ -378,9 +400,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         if (admin) {
           await ensureCauseMetaobjectDefinition(admin);
           let metaobjectId = existing.shopifyMetaobjectId;
+          const nextSyncedIconStorageKey = nextIconStorageKey ?? existing.iconStorageKey;
+          const iconImageId = await syncPublicIconToShopifyFile({
+            admin,
+            shopId,
+            ownerType: "cause",
+            ownerId: id,
+            label: causeInput.name || existing.name,
+            iconStorageKey: nextSyncedIconStorageKey,
+            existingMediaImageId: existing.shopifyIconMediaImageId,
+            syncedStorageKey: existing.shopifyIconStorageKey,
+          });
           const metaobjectInput = {
             ...causeInput,
-            iconUrl: buildCausePublicIconUrl(shopId, id, nextIconStorageKey ?? existing.iconStorageKey),
+            iconUrl: buildCausePublicIconUrl(shopId, id, nextSyncedIconStorageKey),
+            iconImageId,
           };
           if (metaobjectId) {
             try {
@@ -403,7 +437,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
           await prisma.cause.update({
             where: { id, shopId },
-            data: { shopifyMetaobjectId: metaobjectId },
+            data: {
+              shopifyMetaobjectId: metaobjectId,
+              shopifyIconMediaImageId: iconImageId,
+              shopifyIconStorageKey: iconImageId ? nextSyncedIconStorageKey : null,
+            },
           });
 
           await prisma.auditLog.create({
@@ -491,6 +529,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
+      const iconImageId = admin
+        ? await syncPublicIconToShopifyFile({
+            admin,
+            shopId,
+            ownerType: "cause",
+            ownerId: cause.id,
+            label: cause.name,
+            iconStorageKey: cause.iconStorageKey,
+            existingMediaImageId: cause.shopifyIconMediaImageId,
+            syncedStorageKey: cause.shopifyIconStorageKey,
+          })
+        : cause.shopifyIconMediaImageId;
       const metaobjectInput = {
         name: cause.name,
         legalName: cause.legalName,
@@ -503,6 +553,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         instagramUrl: cause.instagramUrl,
         is501c3: cause.is501c3,
         status: nextStatus,
+        iconImageId,
       };
 
       await prisma.cause.update({
@@ -547,7 +598,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
           await prisma.cause.update({
             where: { id, shopId },
-            data: { shopifyMetaobjectId: metaobjectId },
+            data: {
+              shopifyMetaobjectId: metaobjectId,
+              shopifyIconMediaImageId: iconImageId,
+              shopifyIconStorageKey: iconImageId ? cause.iconStorageKey : null,
+            },
           });
 
           await prisma.auditLog.create({

@@ -200,15 +200,18 @@ export async function saveProductArtistAssignmentsLocally({
 
 export async function syncProductArtistAssignmentsToShopify({
   admin,
+  shopId,
   product,
   derivedAssignments,
 }: {
   admin: AdminContext;
+  shopId: string;
   product: { shopifyId: string };
   derivedAssignments: DerivedCauseAssignment[];
 }) {
   await syncProductCauseAssignmentsMetafield(
     admin,
+    shopId,
     product.shopifyId,
     derivedAssignments.map((assignment) => ({
       causeId: assignment.causeId,
@@ -224,11 +227,13 @@ export async function syncFullProductPublicAssignmentsToShopify({
   shopId,
   product,
   derivedAssignments,
+  canWriteProducts,
 }: {
   admin: AdminContext;
   shopId: string;
   product: { id: string; shopifyId: string };
   derivedAssignments: DerivedCauseAssignment[];
+  canWriteProducts?: boolean;
 }) {
   const artistAssignments = await prisma.productArtistAssignment.findMany({
     where: { shopId, productId: product.id, status: "active" },
@@ -248,6 +253,7 @@ export async function syncFullProductPublicAssignmentsToShopify({
 
   await syncProductPublicDonationMetafields({
     admin,
+    shopId,
     productGid: product.shopifyId,
     causes: derivedAssignments.map((assignment) => ({
       causeId: assignment.causeId,
@@ -260,5 +266,6 @@ export async function syncFullProductPublicAssignmentsToShopify({
       creditName: assignment.creditOverride?.trim() || assignment.artist.creditName || assignment.artist.displayName,
       metaobjectId: assignment.artist.shopifyMetaobjectId,
     })),
+    canWriteProducts,
   });
 }

@@ -13,6 +13,7 @@ import {
   PublicIconUploadError,
   uploadPublicIcon,
 } from "../services/publicIconStorage.server";
+import { syncPublicIconToShopifyFile } from "../services/shopifyIconFileService.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 
 function buildArtistPublicIconUrl(shopId: string, artistId: string, iconStorageKey: string | null | undefined) {
@@ -68,6 +69,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       publicBio: true,
       iconUrl: true,
       iconStorageKey: true,
+      shopifyIconMediaImageId: true,
+      shopifyIconStorageKey: true,
       websiteUrl: true,
       instagramUrl: true,
       status: true,
@@ -110,11 +113,22 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (artistForSync && admin) {
     try {
+      const iconImageId = await syncPublicIconToShopifyFile({
+        admin,
+        shopId: session.shop,
+        ownerType: "artist",
+        ownerId: artistForSync.id,
+        label: artistForSync.creditName || artistForSync.displayName,
+        iconStorageKey: artistForSync.iconStorageKey,
+        existingMediaImageId: artistForSync.shopifyIconMediaImageId,
+        syncedStorageKey: artistForSync.shopifyIconStorageKey,
+      });
       const artistMetaobjectInput = {
         ...artistForSync,
         iconUrl: artistForSync.iconStorageKey
           ? buildArtistPublicIconUrl(session.shop, artistForSync.id, artistForSync.iconStorageKey)
           : artistForSync.iconUrl,
+        iconImageId,
       };
       const metaobjectId = await upsertArtistMetaobject({
         admin,
@@ -123,7 +137,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       });
       await prisma.artist.update({
         where: { id: artistForSync.id, shopId: session.shop },
-        data: { shopifyMetaobjectId: metaobjectId },
+        data: {
+          shopifyMetaobjectId: metaobjectId,
+          shopifyIconMediaImageId: iconImageId,
+          shopifyIconStorageKey: iconImageId ? artistForSync.iconStorageKey : null,
+        },
       });
       await prisma.auditLog.create({
         data: {

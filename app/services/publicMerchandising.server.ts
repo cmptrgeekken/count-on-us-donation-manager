@@ -9,6 +9,10 @@ function productFilterUrl(namespace: string, key: string, value: string) {
   return `/collections/all?${params.toString()}`;
 }
 
+function productMetaobjectFilterUrl(key: "artist_refs" | "cause_refs", metaobjectId: string | null) {
+  return metaobjectId ? productFilterUrl("donation_manager", key, metaobjectId) : "/collections/all";
+}
+
 export async function buildPublicArtistsDirectory(shopId: string, db = prisma) {
   const artists = await db.artist.findMany({
     where: {
@@ -66,7 +70,7 @@ export async function buildPublicArtistsDirectory(shopId: string, db = prisma) {
       websiteUrl: artist.websiteUrl,
       instagramUrl: artist.instagramUrl,
       productCount: artist.productAssignments.length,
-      productsUrl: productFilterUrl("donation_manager", "artist_names", artist.creditName || artist.displayName),
+      productsUrl: productMetaobjectFilterUrl("artist_refs", artist.shopifyMetaobjectId),
       causes: artist.causeAssignments.map((assignment) => ({
         id: assignment.cause.id,
         name: assignment.cause.name,
@@ -160,7 +164,7 @@ export async function buildPublicCausesDirectory(shopId: string, db = prisma) {
       instagramUrl: cause.instagramUrl,
       is501c3: cause.is501c3,
       productCount: productCountsByCauseId.get(cause.id) ?? 0,
-      productsUrl: productFilterUrl("donation_manager", "cause_names", cause.name),
+      productsUrl: productMetaobjectFilterUrl("cause_refs", cause.shopifyMetaobjectId),
     })),
   };
 }
@@ -174,14 +178,6 @@ export async function buildPublicProductArtistOverlay(
   const uniqueProductGids = Array.from(new Set(productGids.map((gid) => gid.trim()).filter(Boolean))).slice(0, 100);
   const uniqueProductHandles = Array.from(new Set(productHandles.map((handle) => handle.trim()).filter(Boolean))).slice(0, 100);
   if (uniqueProductGids.length === 0 && uniqueProductHandles.length === 0) {
-    return { version: "2026-07", products: [] };
-  }
-
-  const shop = await db.shop.findUnique({
-    where: { shopId },
-    select: { artistOverlayEnabled: true },
-  });
-  if (!shop?.artistOverlayEnabled) {
     return { version: "2026-07", products: [] };
   }
 
