@@ -11,9 +11,11 @@ import {
   auditProductShopifySyncFailure,
   canSyncProductToShopify,
   saveProductArtistAssignmentsLocally,
-  syncProductArtistAssignmentsToShopify,
+  syncFullProductPublicAssignmentsToShopify,
 } from "../services/productArtistAssignmentService.server";
 import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
+import { syncProductDescriptionDonationSummary } from "../services/productDescriptionSummary.server";
+import { canWriteShopifyProducts } from "../services/productPublicMetafieldService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
@@ -240,7 +242,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const syncFailures: string[] = [];
     const syncSkipped: string[] = [];
+    const shop = await prisma.shop.findUnique({
+      where: { shopId },
+      select: { productDescriptionDonationSummaryEnabled: true },
+    });
     if (admin) {
+      const canWriteProducts = await canWriteShopifyProducts({ admin, shopId });
       for (const product of products) {
         if (!canSyncProductToShopify(product.shopifyId)) {
           syncSkipped.push(product.title);
@@ -248,13 +255,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
 
         try {
-          await syncProductCauseAssignmentsMetafield(admin, product.shopifyId, [
+          await syncProductCauseAssignmentsMetafield(admin, shopId, product.shopifyId, [
             {
               causeId: cause.id,
+              name: cause.name,
               metaobjectId: cause.shopifyMetaobjectId ?? null,
               percentage: "100.00",
             },
-          ]);
+          ], canWriteProducts);
+          if (shop?.productDescriptionDonationSummaryEnabled) {
+            await syncProductDescriptionDonationSummary({
+              admin,
+              shopId,
+              product,
+              enabled: true,
+              canWriteProducts,
+            });
+          }
         } catch (error) {
           console.error("[Products] Shopify sync failed after bulk Cause assignment:", {
             productId: product.id,
@@ -316,8 +333,13 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     const syncFailures: string[] = [];
     const syncSkipped: string[] = [];
+    const shop = await prisma.shop.findUnique({
+      where: { shopId },
+      select: { productDescriptionDonationSummaryEnabled: true },
+    });
 
     try {
+      const canWriteProducts = admin ? await canWriteShopifyProducts({ admin, shopId }) : false;
       for (const product of products) {
         const derivedAssignments = await prisma.$transaction(async (tx) => {
           return saveProductArtistAssignmentsLocally({
@@ -343,7 +365,16 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
 
         try {
-          await syncProductArtistAssignmentsToShopify({ admin, product, derivedAssignments });
+          await syncFullProductPublicAssignmentsToShopify({ admin, shopId, product, derivedAssignments, canWriteProducts });
+          if (shop?.productDescriptionDonationSummaryEnabled) {
+            await syncProductDescriptionDonationSummary({
+              admin,
+              shopId,
+              product,
+              enabled: true,
+              canWriteProducts,
+            });
+          }
         } catch (error) {
           console.error("[Products] Shopify sync failed after bulk Artist assignment:", {
             productId: product.id,

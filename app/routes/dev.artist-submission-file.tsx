@@ -14,7 +14,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     signature,
   });
 
-  return new Response(file.body, {
+  return new Response(Uint8Array.from(file.body), {
     headers: {
       "Content-Type": file.contentType,
       "Content-Length": String(file.size),

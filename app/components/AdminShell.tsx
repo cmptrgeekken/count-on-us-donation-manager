@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { Link, useLocation } from "@remix-run/react";
 
 type AdminNavItem = {
@@ -118,6 +118,55 @@ function getActiveItem(items: AdminNavItem[], pathname: string, searchParams: UR
   return pathMatchesOnly.find((item) => itemQueryMatches(item, searchParams)) ?? pathMatchesOnly[0];
 }
 
+const shellStyle: CSSProperties = {
+  minHeight: "100%",
+  background: "var(--p-color-bg, #f6f6f7)",
+  fontFamily: 'var(--p-font-family-sans, Inter, -apple-system, BlinkMacSystemFont, "San Francisco", "Segoe UI", sans-serif)',
+  fontSize: "var(--p-font-size-325, 0.875rem)",
+  lineHeight: "var(--p-font-line-height-500, 1.25rem)",
+};
+
+const navStyle: CSSProperties = {
+  position: "sticky",
+  top: 0,
+  zIndex: 20,
+  display: "grid",
+  gap: "0.6rem",
+  padding: "0.85rem clamp(1rem, 2vw, 1.5rem)",
+  borderBottom: "1px solid var(--p-color-border, #d2d5d8)",
+  background: "var(--p-color-bg-surface, #fff)",
+};
+
+const navRowStyle: CSSProperties = {
+  display: "flex",
+  gap: "0.35rem",
+  overflowX: "auto",
+  scrollbarWidth: "thin",
+  whiteSpace: "nowrap",
+};
+
+const baseLinkStyle: CSSProperties = {
+  flex: "0 0 auto",
+  border: "1px solid transparent",
+  borderRadius: "0.5rem",
+  color: "var(--p-color-text, #303030)",
+  font: "inherit",
+  textDecoration: "none",
+};
+
+const activeGroupLinkStyle: CSSProperties = {
+  borderColor: "#111",
+  background: "#111",
+  color: "#fff",
+};
+
+const activeSubnavLinkStyle: CSSProperties = {
+  borderColor: "var(--p-color-border, #d2d5d8)",
+  background: "var(--p-color-bg-surface-selected, #f2f7fe)",
+  color: "var(--p-color-text, #303030)",
+  fontWeight: 650,
+};
+
 export function getAdminCompatibilityNavItems() {
   return ADMIN_NAV_GROUPS.map(({ label, path }) => ({ label, path }));
 }
@@ -138,97 +187,44 @@ export function AdminShell({ children }: { children: ReactNode }) {
   };
 
   return (
-    <div className="count-on-us-admin-shell">
-      <style>
-        {`
-          .count-on-us-admin-shell {
-            min-height: 100%;
-            background: var(--p-color-bg, #f6f6f7);
-            font-family: var(--p-font-family-sans, Inter, -apple-system, BlinkMacSystemFont, "San Francisco", "Segoe UI", sans-serif);
-            font-size: var(--p-font-size-325, 0.875rem);
-            line-height: var(--p-font-line-height-500, 1.25rem);
-          }
-
-          .count-on-us-admin-shell__nav {
-            position: sticky;
-            top: 0;
-            z-index: 20;
-            display: grid;
-            gap: 0.6rem;
-            padding: 0.85rem clamp(1rem, 2vw, 1.5rem);
-            border-bottom: 1px solid var(--p-color-border, #d2d5d8);
-            background: var(--p-color-bg-surface, #fff);
-          }
-
-          .count-on-us-admin-shell__groups,
-          .count-on-us-admin-shell__subnav {
-            display: flex;
-            gap: 0.35rem;
-            overflow-x: auto;
-            scrollbar-width: thin;
-            white-space: nowrap;
-          }
-
-          .count-on-us-admin-shell__group-link,
-          .count-on-us-admin-shell__subnav-link {
-            flex: 0 0 auto;
-            border: 1px solid transparent;
-            border-radius: 0.5rem;
-            color: var(--p-color-text, #303030);
-            font: inherit;
-            text-decoration: none;
-          }
-
-          .count-on-us-admin-shell__group-link {
-            padding: 0.55rem 0.8rem;
-            font-weight: 650;
-          }
-
-          .count-on-us-admin-shell__subnav-link {
-            padding: 0.4rem 0.65rem;
-            font-size: 0.92rem;
-          }
-
-          .count-on-us-admin-shell__group-link:hover,
-          .count-on-us-admin-shell__subnav-link:hover {
-            background: var(--p-color-bg-surface-hover, #f1f2f4);
-          }
-
-          .count-on-us-admin-shell__group-link[aria-current="page"] {
-            border-color: #111;
-            background: #111;
-            color: #fff;
-          }
-
-          .count-on-us-admin-shell__subnav-link[aria-current="page"] {
-            border-color: var(--p-color-border, #d2d5d8);
-            background: var(--p-color-bg-surface-selected, #f2f7fe);
-            color: var(--p-color-text, #303030);
-            font-weight: 650;
-          }
-        `}
-      </style>
-      <nav className="count-on-us-admin-shell__nav" aria-label="Count On Us admin">
-        <div className="count-on-us-admin-shell__groups" aria-label="Primary sections">
+    <div className="count-on-us-admin-shell" style={shellStyle}>
+      <nav className="count-on-us-admin-shell__nav" style={navStyle} aria-label="Count On Us admin">
+        <div className="count-on-us-admin-shell__groups" style={navRowStyle} aria-label="Primary sections">
           {ADMIN_NAV_GROUPS.map((group) => (
             <Link
               key={group.id}
               to={href(group)}
               className="count-on-us-admin-shell__group-link"
               aria-current={group.id === activeGroup.id ? "page" : undefined}
+              style={{
+                ...baseLinkStyle,
+                padding: "0.55rem 0.8rem",
+                fontWeight: 650,
+                ...(group.id === activeGroup.id ? activeGroupLinkStyle : {}),
+              }}
             >
               {group.label}
             </Link>
           ))}
         </div>
         {activeGroup.items.length > 1 ? (
-          <div className="count-on-us-admin-shell__subnav" aria-label={`${activeGroup.label} pages`}>
+          <div
+            className="count-on-us-admin-shell__subnav"
+            style={navRowStyle}
+            aria-label={`${activeGroup.label} pages`}
+          >
             {activeGroup.items.map((item) => (
               <Link
                 key={`${activeGroup.id}-${item.label}-${item.path}-${JSON.stringify(item.query ?? {})}`}
                 to={href(item)}
                 className="count-on-us-admin-shell__subnav-link"
                 aria-current={activeItem === item ? "page" : undefined}
+                style={{
+                  ...baseLinkStyle,
+                  padding: "0.4rem 0.65rem",
+                  fontSize: "0.92rem",
+                  ...(activeItem === item ? activeSubnavLinkStyle : {}),
+                }}
               >
                 {item.label}
               </Link>

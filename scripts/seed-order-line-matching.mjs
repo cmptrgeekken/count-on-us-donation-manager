@@ -215,7 +215,11 @@ async function confirmInteractiveMatch(lineName, fuzzyMatch, readline) {
 }
 
 export function createOrderLineResolver({
-  indexes,
+  indexes = {
+    productsByShopifyId: new Map(),
+    variantsByShopifyId: new Map(),
+    variantsByLineName: new Map(),
+  },
   orderLineMap = { version: 1, mappings: {} },
   fuzzyEnabled = true,
   interactive = false,

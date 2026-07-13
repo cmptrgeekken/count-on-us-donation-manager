@@ -32,6 +32,7 @@ type ArtistFormValue = {
   creditName: string;
   creditPreference: string;
   publicBio: string;
+  iconPreviewUrl?: string;
   websiteUrl: string;
   instagramUrl: string;
   contactName: string;
@@ -63,6 +64,7 @@ export function ArtistProfileForm({
 }) {
   const navigation = useNavigation();
   const isSubmitting = navigation.state !== "idle";
+  const [replaceIcon, setReplaceIcon] = useState(!artist?.iconPreviewUrl);
   const [causeRows, setCauseRows] = useState<Array<{ causeId: string; percentage: string }>>(
     () => artist?.causeAssignments.map((assignment) => ({ causeId: assignment.causeId, percentage: assignment.percentage })) ?? [],
   );
@@ -91,7 +93,7 @@ export function ArtistProfileForm({
   }
 
   return (
-    <Form method="post" style={{ display: "grid", gap: "1rem" }}>
+    <Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: "1rem" }}>
       <input type="hidden" name="intent" value={intent} />
       {artist ? <input type="hidden" name="id" value={artist.id} /> : null}
 
@@ -133,6 +135,51 @@ export function ArtistProfileForm({
       <div style={{ display: "grid", gap: "0.35rem" }}>
         <label htmlFor={`${idPrefix}-bio`}>Public bio</label>
         <textarea id={`${idPrefix}-bio`} name="publicBio" rows={3} defaultValue={artist?.publicBio ?? ""} style={{ ...fieldStyle, minHeight: "6rem" }} />
+      </div>
+
+      <div style={{ display: "grid", gap: "0.35rem" }}>
+        <label htmlFor={`${idPrefix}-icon`}>Icon image</label>
+        {artist?.iconPreviewUrl && !replaceIcon ? (
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+            <img
+              src={artist.iconPreviewUrl}
+              alt={`${artist.creditName || artist.displayName} icon`}
+              style={{
+                width: "4rem",
+                height: "4rem",
+                objectFit: "contain",
+                border: "1px solid var(--p-color-border, #d2d5d8)",
+                borderRadius: "0.5rem",
+                background: "var(--p-color-bg-surface-secondary, #f6f6f7)",
+                padding: "0.35rem",
+              }}
+            />
+            <s-button type="button" variant="secondary" onClick={() => setReplaceIcon(true)}>
+              Replace icon
+            </s-button>
+          </div>
+        ) : (
+          <>
+            <HelpText>Upload a square PNG, JPEG, or WebP icon. Maximum file size is 5 MB.</HelpText>
+            <input
+              id={`${idPrefix}-icon`}
+              name="iconFile"
+              type="file"
+              accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+              style={fieldStyle}
+            />
+            {artist?.iconPreviewUrl ? (
+              <div>
+                <s-button type="button" variant="secondary" onClick={() => setReplaceIcon(false)}>
+                  Keep current icon
+                </s-button>
+              </div>
+            ) : null}
+          </>
+        )}
+        {actionData?.fieldErrors?.iconFile?.[0] ? (
+          <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>{actionData.fieldErrors.iconFile[0]}</div>
+        ) : null}
       </div>
 
       <div style={twoColumnStyle}>
@@ -206,6 +253,14 @@ export function ArtistProfileForm({
                 emptyText="No Causes match that search."
               />
             </div>
+            {causeRows.map((assignment) => (
+              <input
+                key={`hidden-cause-${assignment.causeId}`}
+                type="hidden"
+                name={`cause:${assignment.causeId}`}
+                value={assignment.percentage}
+              />
+            ))}
             <CompactAssignmentList
               emptyText="No preferred Causes selected."
               searchPlaceholder="Filter selected Causes"

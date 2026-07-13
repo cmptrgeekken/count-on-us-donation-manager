@@ -39,3 +39,20 @@ test("products page can queue a catalog sync without clearing seed data", async 
     ),
   ).toBeVisible();
 });
+
+test("variants page filters by product category for bulk selection", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/products-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.variantsUrl);
+
+  await page.locator("#variants-category-filter").selectOption({ label: "Earrings" });
+  await page.getByRole("button", { name: "Apply filters" }).click();
+
+  await expect(page.getByLabel("Select Small")).toBeVisible();
+  await expect(page.getByLabel("Select Large")).toBeVisible();
+  await expect(page.getByLabel("Select Small").locator("xpath=ancestor::s-table-row[1]")).toContainText("Partial Product");
+  await expect(page.getByLabel("Select Large").locator("xpath=ancestor::s-table-row[1]")).toContainText("Partial Product");
+  await expect(page.getByLabel("Select Default")).toHaveCount(0);
+});

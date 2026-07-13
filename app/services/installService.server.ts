@@ -1,7 +1,12 @@
 import { prisma } from "~/db.server";
 import { jobQueue } from "~/jobs/queue.server";
+import { ensureArtistMetaobjectDefinition } from "~/services/artistMetaobjectService.server";
 import { ensureCauseMetaobjectDefinition } from "~/services/causeMetaobjectService.server";
 import { detectAndStorePlan } from "~/services/planDetectionService.server";
+import {
+  canWriteShopifyProducts,
+  ensureProductPublicMetafieldDefinitions,
+} from "~/services/productPublicMetafieldService.server";
 
 type AdminContext = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
@@ -54,14 +59,40 @@ export async function handlePostInstall(
     select: { id: true, catalogSynced: true },
   });
   if (existing) {
-    const createdDefinition = await ensureCauseMetaobjectDefinition(admin);
-    if (createdDefinition) {
+    const canWriteProducts = await canWriteShopifyProducts({ admin, shopId });
+    const [createdCauseDefinition, createdArtistDefinition, createdProductMetafieldDefinitions] = await Promise.all([
+      ensureCauseMetaobjectDefinition(admin),
+      ensureArtistMetaobjectDefinition(admin),
+      canWriteProducts ? ensureProductPublicMetafieldDefinitions(admin) : Promise.resolve(0),
+    ]);
+    if (createdCauseDefinition) {
       await prisma.auditLog.create({
         data: {
           shopId,
           entity: "CauseMetaobjectDefinition",
           action: "CAUSE_METAOBJECT_DEFINITION_CREATED",
           actor: "system",
+        },
+      });
+    }
+    if (createdArtistDefinition) {
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "ArtistMetaobjectDefinition",
+          action: "ARTIST_METAOBJECT_DEFINITION_CREATED",
+          actor: "system",
+        },
+      });
+    }
+    if (createdProductMetafieldDefinitions > 0) {
+      await prisma.auditLog.create({
+        data: {
+          shopId,
+          entity: "ProductMetafieldDefinition",
+          action: "PUBLIC_DONATION_METAFIELD_DEFINITIONS_CREATED",
+          actor: "system",
+          payload: { count: createdProductMetafieldDefinitions },
         },
       });
     }
@@ -110,14 +141,40 @@ export async function handlePostInstall(
   });
 
   await detectAndStorePlan(shopId, admin);
-  const createdDefinition = await ensureCauseMetaobjectDefinition(admin);
-  if (createdDefinition) {
+  const canWriteProducts = await canWriteShopifyProducts({ admin, shopId });
+  const [createdCauseDefinition, createdArtistDefinition, createdProductMetafieldDefinitions] = await Promise.all([
+    ensureCauseMetaobjectDefinition(admin),
+    ensureArtistMetaobjectDefinition(admin),
+    canWriteProducts ? ensureProductPublicMetafieldDefinitions(admin) : Promise.resolve(0),
+  ]);
+  if (createdCauseDefinition) {
     await prisma.auditLog.create({
       data: {
         shopId,
         entity: "CauseMetaobjectDefinition",
         action: "CAUSE_METAOBJECT_DEFINITION_CREATED",
         actor: "system",
+      },
+    });
+  }
+  if (createdArtistDefinition) {
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "ArtistMetaobjectDefinition",
+        action: "ARTIST_METAOBJECT_DEFINITION_CREATED",
+        actor: "system",
+      },
+    });
+  }
+  if (createdProductMetafieldDefinitions > 0) {
+    await prisma.auditLog.create({
+      data: {
+        shopId,
+        entity: "ProductMetafieldDefinition",
+        action: "PUBLIC_DONATION_METAFIELD_DEFINITIONS_CREATED",
+        actor: "system",
+        payload: { count: createdProductMetafieldDefinitions },
       },
     });
   }

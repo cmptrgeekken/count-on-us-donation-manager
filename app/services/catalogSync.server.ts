@@ -16,6 +16,11 @@ const PRODUCTS_QUERY = `#graphql
         title
         handle
         status
+        category {
+          id
+          name
+          fullName
+        }
         variants(first: 100) {
           nodes {
             id
@@ -36,6 +41,11 @@ const SINGLE_PRODUCT_QUERY = `#graphql
       title
       handle
       status
+      category {
+        id
+        name
+        fullName
+      }
       variants(first: 100) {
         nodes {
           id
@@ -60,6 +70,11 @@ type ShopifyProduct = {
   title: string;
   handle: string;
   status: string;
+  category: {
+    id: string;
+    name: string;
+    fullName: string;
+  } | null;
   variants: { nodes: ShopifyVariant[] };
 };
 
@@ -73,12 +88,18 @@ async function upsertProduct(shopId: string, product: ShopifyProduct): Promise<s
       title: product.title,
       handle: product.handle,
       status: product.status.toLowerCase(),
+      productCategoryId: product.category?.id ?? null,
+      productCategoryName: product.category?.name ?? null,
+      productCategoryPath: product.category?.fullName ?? null,
       syncedAt,
     },
     update: {
       title: product.title,
       handle: product.handle,
       status: product.status.toLowerCase(),
+      productCategoryId: product.category?.id ?? null,
+      productCategoryName: product.category?.name ?? null,
+      productCategoryPath: product.category?.fullName ?? null,
       syncedAt,
     },
   });

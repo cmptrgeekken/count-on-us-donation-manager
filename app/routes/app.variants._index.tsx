@@ -37,6 +37,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const url = new URL(request.url);
   const filterProductId = url.searchParams.get("product") ?? "";
+  const filterCategory = url.searchParams.get("category") ?? "";
   const filterConfigured = url.searchParams.get("configured") ?? "";
 
   const [allVariants, products, templates, shop, taxOffsetCache] = await Promise.all([
@@ -44,6 +45,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       where: {
         shopId,
         ...(filterProductId ? { productId: filterProductId } : {}),
+        ...(filterCategory ? { product: { productCategoryPath: filterCategory } } : {}),
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {
@@ -75,7 +77,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     prisma.product.findMany({
       where: { shopId },
       orderBy: { title: "asc" },
-      select: { id: true, title: true },
+      select: { id: true, title: true, productCategoryName: true, productCategoryPath: true },
     }),
     prisma.costTemplate.findMany({
       where: { shopId, status: "active", type: "production" },
@@ -213,8 +215,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       estimate: estimates[index],
     })),
     products: products.map((p) => ({ id: p.id, title: p.title })),
+    categories: Array.from(
+      new Map(
+        products
+          .filter((p) => p.productCategoryPath)
+          .map((p) => [
+            p.productCategoryPath ?? "",
+            {
+              value: p.productCategoryPath ?? "",
+              label: p.productCategoryName ?? p.productCategoryPath ?? "",
+            },
+          ]),
+      ).values(),
+    ).sort((a, b) => a.label.localeCompare(b.label)),
     templates: templates.map((t) => ({ id: t.id, name: t.name })),
     filterProductId,
+    filterCategory,
     filterConfigured,
   });
 };
@@ -514,7 +530,7 @@ function estimateTotalCost(estimate: VariantEstimatePayload) {
 }
 
 export default function VariantsPage() {
-  const { variants, products, templates, filterProductId, filterConfigured } = useLoaderData<typeof loader>();
+  const { variants, products, categories, templates, filterProductId, filterCategory, filterConfigured } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{
     ok: boolean;
     message: string;
@@ -638,10 +654,14 @@ export default function VariantsPage() {
     const params = new URLSearchParams(searchParams);
 
     const product = formData.get("product")?.toString() ?? "";
+    const category = formData.get("category")?.toString() ?? "";
     const configured = formData.get("configured")?.toString() ?? "";
 
     if (product) params.set("product", product);
     else params.delete("product");
+
+    if (category) params.set("category", category);
+    else params.delete("category");
 
     if (configured) params.set("configured", configured);
     else params.delete("configured");
@@ -652,6 +672,7 @@ export default function VariantsPage() {
   function clearFilters() {
     const params = new URLSearchParams(searchParams);
     params.delete("product");
+    params.delete("category");
     params.delete("configured");
     navigate(`?${params.toString()}`);
   }
@@ -659,8 +680,10 @@ export default function VariantsPage() {
   function exportUrl() {
     const params = new URLSearchParams();
     const product = searchParams.get("product");
+    const category = searchParams.get("category");
     const configured = searchParams.get("configured");
     if (product) params.set("product", product);
+    if (category) params.set("category", category);
     if (configured) params.set("configured", configured);
     const query = params.toString();
     return `/app/variants-export${query ? `?${query}` : ""}`;
@@ -754,7 +777,7 @@ export default function VariantsPage() {
           </s-banner>
         ) : null}
 
-        {variants.length === 0 && !filterProductId && !filterConfigured ? (
+        {variants.length === 0 && !filterProductId && !filterCategory && !filterConfigured ? (
           <s-section heading="No variants synced yet">
             <s-text>Variants will appear here after the initial catalog sync completes.</s-text>
           </s-section>
@@ -802,6 +825,30 @@ export default function VariantsPage() {
                   </div>
 
                   <div style={{ display: "grid", gap: "0.35rem" }}>
+                    <label htmlFor="variants-category-filter">Product category</label>
+                    <select
+                      id="variants-category-filter"
+                      name="category"
+                      defaultValue={filterCategory}
+                      style={{
+                        width: "100%",
+                        boxSizing: "border-box",
+                        padding: "0.75rem",
+                        borderRadius: "0.75rem",
+                        border: "1px solid var(--p-color-border, #d2d5d8)",
+                        background: "var(--p-color-bg-surface, #fff)",
+                        color: "var(--p-color-text, #303030)",
+                        font: "inherit",
+                      }}
+                    >
+                      <option value="">All categories</option>
+                      {categories.map((category: { value: string; label: string }) => (
+                        <option key={category.value} value={category.value}>{category.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div style={{ display: "grid", gap: "0.35rem" }}>
                     <label htmlFor="variants-configured-filter">Configuration status</label>
                     <select
                       id="variants-configured-filter"
@@ -830,11 +877,16 @@ export default function VariantsPage() {
                   </div>
                 </div>
 
-                {(filterProductId || filterConfigured) && (
+                {(filterProductId || filterCategory || filterConfigured) && (
                   <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                     {filterProductId && (
                       <s-badge tone="info">
                         Product: {products.find((product: { id: string; title: string }) => product.id === filterProductId)?.title ?? filterProductId}
+                      </s-badge>
+                    )}
+                    {filterCategory && (
+                      <s-badge tone="info">
+                        Category: {categories.find((category: { value: string; label: string }) => category.value === filterCategory)?.label ?? filterCategory}
                       </s-badge>
                     )}
                     {filterConfigured && (
@@ -1048,8 +1100,8 @@ export default function VariantsPage() {
                   Remove exact duplicate variant lines already included in this template.
                 </span>
               </label>
-              <div style={{ display: "grid", gap: "0.35rem" }}>
-                <label htmlFor="bulk-template-product-yield">Products yielded by this template assignment</label>
+              <div style={{ display: "grid", gap: "0.35rem", maxWidth: "14rem" }}>
+                <label htmlFor="bulk-template-product-yield">Products made</label>
                 <input
                   id="bulk-template-product-yield"
                   type="number"
@@ -1069,7 +1121,7 @@ export default function VariantsPage() {
                   }}
                 />
                 <s-text color="subdued">
-                  Optional. Applies one finished-product yield to yield-based template materials and equipment.
+                  Optional. Use when the selected template makes a different number of sellable items for these variants.
                 </s-text>
               </div>
             </div>

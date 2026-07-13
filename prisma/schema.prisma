@@ -49,6 +49,7 @@ model Shop {
   taxDeductionMode String   @default("dont_deduct")
   postPurchaseEmailEnabled Boolean @default(false)
   artistSubmissionNotificationEmail String?
+  productDescriptionDonationSummaryEnabled Boolean @default(false)
   wizardStep       Int      @default(0)
   catalogSynced    Boolean  @default(false)
   createdAt        DateTime @default(now())
@@ -264,15 +265,18 @@ model CostTemplateEquipmentLine {
 }
 
 model Product {
-  id        String   @id @default(cuid())
-  shopId    String
-  shopifyId String // full GID: "gid://shopify/Product/123"
-  title     String
-  handle    String
-  status    String // "active" | "archived" | "draft"
-  syncedAt  DateTime
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                  String   @id @default(cuid())
+  shopId              String
+  shopifyId           String // full GID: "gid://shopify/Product/123"
+  title               String
+  handle              String
+  status              String // "active" | "archived" | "draft"
+  productCategoryId   String?
+  productCategoryName String?
+  productCategoryPath String?
+  syncedAt            DateTime
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
 
   variants         Variant[]
   causeAssignments ProductCauseAssignment[]
@@ -280,6 +284,7 @@ model Product {
 
   @@unique([shopId, shopifyId])
   @@index([shopId])
+  @@index([shopId, productCategoryPath])
 }
 
 model Variant {
@@ -525,6 +530,26 @@ model ProviderSyncRun {
   @@index([connectionId, createdAt])
 }
 
+model CustomerMerchandisingSyncRun {
+  id              String    @id @default(cuid())
+  shopId          String
+  target          String
+  status          String    @default("queued")
+  totalCount      Int       @default(0)
+  syncedCount     Int       @default(0)
+  failedCount     Int       @default(0)
+  skippedCount    Int       @default(0)
+  resultSummary   Json?
+  errorSummary    String?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([shopId, createdAt])
+  @@index([shopId, status, createdAt])
+}
+
 // Phase 3 tables
 
 model Cause {
@@ -536,6 +561,9 @@ model Cause {
   is501c3             Boolean  @default(false)
   description         String?
   iconUrl             String?
+  iconStorageKey      String?
+  shopifyIconMediaImageId String?
+  shopifyIconStorageKey   String?
   donationLink        String?
   websiteUrl          String?
   instagramUrl        String?
@@ -556,10 +584,15 @@ model Cause {
 model Artist {
   id                    String   @id @default(cuid())
   shopId                String
+  shopifyMetaobjectId   String?
   displayName           String
   creditName            String
   creditPreference      String   @default("artist_name")
   publicBio             String?
+  iconUrl               String?
+  iconStorageKey        String?
+  shopifyIconMediaImageId String?
+  shopifyIconStorageKey   String?
   websiteUrl            String?
   instagramUrl          String?
   contactName           String?

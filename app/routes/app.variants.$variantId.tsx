@@ -1002,7 +1002,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         templateLineId: line.templateLineId,
         materialId: line.materialId,
         quantity: parseOptionalNonNegativeWholeNumber(line.overrideQuantity, "Material quantity") ?? 0,
-        yield: parseOptionalNonNegativeWholeNumber(line.overrideYield, "Items made from one purchased unit"),
+        yield: parseOptionalNonNegativeWholeNumber(line.overrideYield, "Products made per purchased unit"),
         usesPerVariant: parseOptionalNonNegativeWholeNumber(line.overrideUsesPerVariant, "Portions used per item"),
       }));
 
@@ -1043,7 +1043,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       shopId,
       materialId: line.materialId,
       quantity: parseOptionalNonNegativeWholeNumber(line.quantity, "Material quantity") ?? 0,
-      yield: parseOptionalNonNegativeWholeNumber(line.yield, "Items made from one purchased unit"),
+      yield: parseOptionalNonNegativeWholeNumber(line.yield, "Products made per purchased unit"),
       usesPerVariant: parseOptionalNonNegativeWholeNumber(line.usesPerVariant, "Portions used per item"),
     }));
 
@@ -2089,7 +2089,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const quantity = parseRequiredNonNegativeWholeNumber(formData.get("quantity")?.toString(), "Material quantity");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
-    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Items made from one purchased unit");
+    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Products made per purchased unit");
     const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Portions used per item");
     const config = await ensureConfig();
     const templateLine = await requireTemplateMaterialLine(config.id, templateLineId);
@@ -2174,7 +2174,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const quantity = parseRequiredNonNegativeWholeNumber(formData.get("quantity")?.toString(), "Material quantity");
     const yieldVal = formData.get("yield")?.toString();
     const usesPerVariant = formData.get("usesPerVariant")?.toString();
-    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Items made from one purchased unit");
+    const parsedYield = parseOptionalNonNegativeWholeNumber(yieldVal, "Products made per purchased unit");
     const parsedUsesPerVariant = parseOptionalNonNegativeWholeNumber(usesPerVariant, "Portions used per item");
     const config = await ensureConfig();
 
@@ -2407,7 +2407,7 @@ function describeMaterialLine(line: {
     return `Portioned use: ${line.usesPerVariant ?? "0"} portion(s) per item`;
   }
 
-  return `Variable yield: ${line.quantity ?? "0"} purchased unit(s), ${line.yield ?? "0"} items per purchased unit`;
+  return `Variable yield: ${line.quantity ?? "0"} purchased unit(s), ${line.yield ?? "0"} product(s)`;
 }
 
 function describeEquipmentLine(line: {
@@ -3460,16 +3460,18 @@ export default function VariantDetailPage() {
                     {assignedProductionTemplate?.name ?? "No production template assigned"}
                   </Text>
                   {assignedProductionTemplate ? (
-                    <TextField
-                      label="Products yielded by this template assignment"
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={draft.templateProductYield}
-                      onChange={(value) => setDraft((current) => ({ ...current, templateProductYield: value }))}
-                      autoComplete="off"
-                      helpText="Used as the finished-product denominator for yield-based template materials and equipment unless a line override is active."
-                    />
+                    <div style={{ maxWidth: "14rem" }}>
+                      <TextField
+                        label="Products made"
+                        type="number"
+                        min={1}
+                        step={1}
+                        value={draft.templateProductYield}
+                        onChange={(value) => setDraft((current) => ({ ...current, templateProductYield: value }))}
+                        autoComplete="off"
+                        helpText="How many sellable items this template makes for this variant."
+                      />
+                    </div>
                   ) : null}
                 </BlockStack>
               </div>
@@ -4002,16 +4004,18 @@ export default function VariantDetailPage() {
                 emptyText="No production templates match that search."
               />
             </InlineStack>
-            <TextField
-              label="Products yielded by this template assignment"
-              type="number"
-              min={1}
-              step={1}
-              value={selectedTemplateProductYield}
-              onChange={setSelectedTemplateProductYield}
-              autoComplete="off"
-              helpText="For a batch that uses one sticker sheet and two laminate sheets to make six stickers, enter 6."
-            />
+            <div style={{ maxWidth: "14rem" }}>
+              <TextField
+                label="Products made"
+                type="number"
+                min={1}
+                step={1}
+                value={selectedTemplateProductYield}
+                onChange={setSelectedTemplateProductYield}
+                autoComplete="off"
+                helpText="For six stickers from one sheet layout, enter 6."
+              />
+            </div>
           </BlockStack>
         </Modal.Section>
       </Modal>
@@ -4323,7 +4327,7 @@ export default function VariantDetailPage() {
                     autoComplete="off"
                   />
                   <TextField
-                    label="Items made from one purchased unit"
+                    label="Products made per purchased unit"
                     type="number"
                     min={0}
                     step={1}
@@ -4428,7 +4432,7 @@ export default function VariantDetailPage() {
                   helpText="Usually 1, unless this variant needs multiple purchased units."
                 />
                 <TextField
-                  label="Items made from one purchased unit"
+                  label="Products made per purchased unit"
                   type="number"
                   min={0}
                   step={1}

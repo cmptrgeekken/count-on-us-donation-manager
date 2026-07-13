@@ -12,13 +12,20 @@ import {
   ensureCauseMetaobjectDefinition,
   updateCauseMetaobject,
 } from "../services/causeMetaobjectService.server";
+import {
+  deletePublicIcon,
+  getPublicIconUrl,
+  getUploadedIconFile,
+  PublicIconUploadError,
+  uploadPublicIcon,
+} from "../services/publicIconStorage.server";
+import { syncPublicIconToShopifyFile } from "../services/shopifyIconFileService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 
 const causeSchema = z.object({
   name: z.string().trim().min(1, "Name is required."),
   legalName: z.string().trim().optional(),
   description: z.string().trim().optional(),
-  iconUrl: z.union([z.literal(""), z.url({ message: "Icon URL must be a valid URL." })]).optional(),
   donationLink: z.union([z.literal(""), z.url({ message: "Donation link must be a valid URL." })]).optional(),
   websiteUrl: z.union([z.literal(""), z.url({ message: "Website URL must be a valid URL." })]).optional(),
   instagramUrl: z.union([z.literal(""), z.url({ message: "Instagram URL must be a valid URL." })]).optional(),
@@ -34,12 +41,27 @@ function normalizeOptional(value?: string) {
   return trimmed ? trimmed : null;
 }
 
+function isMissingShopifyMetaobjectError(error: unknown) {
+  return error instanceof Error && /record not found/i.test(error.message);
+}
+
+function buildCausePublicIconUrl(shopId: string, causeId: string, iconStorageKey: string | null | undefined) {
+  return iconStorageKey
+    ? getPublicIconUrl({
+        type: "cause",
+        id: causeId,
+        shopDomain: shopId,
+        version: iconStorageKey,
+      })
+    : null;
+}
+
 type CauseFormState = {
   id: string;
   name: string;
   legalName: string;
   description: string;
-  iconUrl: string;
+  iconPreviewUrl: string;
   donationLink: string;
   websiteUrl: string;
   instagramUrl: string;
@@ -52,6 +74,8 @@ type CauseRecord = {
   legalName: string;
   description: string;
   iconUrl: string;
+  iconStorageKey: string | null;
+  iconPreviewUrl: string;
   donationLink: string;
   websiteUrl: string;
   instagramUrl: string;
@@ -65,7 +89,7 @@ type CauseRecord = {
 type CauseActionData = {
   ok: boolean;
   message: string;
-  fieldErrors?: Partial<Record<keyof Omit<CauseFormState, "id">, string[]>>;
+  fieldErrors?: Partial<Record<string, string[]>>;
 };
 
 const EMPTY_FORM: CauseFormState = {
@@ -73,7 +97,7 @@ const EMPTY_FORM: CauseFormState = {
   name: "",
   legalName: "",
   description: "",
-  iconUrl: "",
+  iconPreviewUrl: "",
   donationLink: "",
   websiteUrl: "",
   instagramUrl: "",
@@ -101,6 +125,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       legalName: cause.legalName ?? "",
       description: cause.description ?? "",
       iconUrl: cause.iconUrl ?? "",
+      iconStorageKey: cause.iconStorageKey,
+      iconPreviewUrl: cause.iconStorageKey ? buildCausePublicIconUrl(shopId, cause.id, cause.iconStorageKey) ?? "" : "",
       donationLink: cause.donationLink ?? "",
       websiteUrl: cause.websiteUrl ?? "",
       instagramUrl: cause.instagramUrl ?? "",
@@ -130,7 +156,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       name: formData.get("name")?.toString() ?? "",
       legalName: formData.get("legalName")?.toString() ?? "",
       description: formData.get("description")?.toString() ?? "",
-      iconUrl: formData.get("iconUrl")?.toString() ?? "",
       donationLink: formData.get("donationLink")?.toString() ?? "",
       websiteUrl: formData.get("websiteUrl")?.toString() ?? "",
       instagramUrl: formData.get("instagramUrl")?.toString() ?? "",
@@ -152,13 +177,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       name: parsed.data.name,
       legalName: normalizeOptional(parsed.data.legalName),
       description: normalizeOptional(parsed.data.description),
-      iconUrl: normalizeOptional(parsed.data.iconUrl),
       donationLink: normalizeOptional(parsed.data.donationLink),
       websiteUrl: normalizeOptional(parsed.data.websiteUrl),
       instagramUrl: normalizeOptional(parsed.data.instagramUrl),
       is501c3: parsed.data.is501c3,
       status: "active",
     };
+    const iconFile = getUploadedIconFile(formData);
+    if (iconFile) {
+      console.info("[Causes] Received Cause icon upload.", {
+        intent,
+        fileName: iconFile.name,
+        contentType: iconFile.type,
+        size: iconFile.size,
+      });
+    }
 
     try {
       if (intent === "create") {
@@ -169,7 +202,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             legalName: causeInput.legalName,
             is501c3: causeInput.is501c3,
             description: causeInput.description,
-            iconUrl: causeInput.iconUrl,
+            iconUrl: null,
+            iconStorageKey: null,
             donationLink: causeInput.donationLink,
             websiteUrl: causeInput.websiteUrl,
             instagramUrl: causeInput.instagramUrl,
@@ -177,6 +211,35 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             shopifyMetaobjectId: null,
           },
         });
+
+        let createdIconStorageKey: string | null = null;
+        if (iconFile) {
+          try {
+            const icon = await uploadPublicIcon({
+              shopId,
+              ownerType: "cause",
+              ownerId: cause.id,
+              file: iconFile,
+            });
+            await prisma.cause.update({
+              where: { id: cause.id, shopId },
+              data: {
+                iconStorageKey: icon.key,
+                iconUrl: null,
+              },
+            });
+            createdIconStorageKey = icon.key;
+            console.info("[Causes] Stored Cause icon upload.", {
+              causeId: cause.id,
+              iconStorageKey: icon.key,
+            });
+          } catch (error) {
+            if (error instanceof PublicIconUploadError) {
+              return jsonResponse({ ok: false, message: error.message, fieldErrors: { iconFile: [error.message] } }, { status: 400 });
+            }
+            throw error;
+          }
+        }
 
         await prisma.auditLog.create({
           data: {
@@ -191,10 +254,28 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         try {
           if (admin) {
             await ensureCauseMetaobjectDefinition(admin);
-            const metaobject = await createCauseMetaobject(admin, causeInput);
+            const iconImageId = await syncPublicIconToShopifyFile({
+              admin,
+              shopId,
+              ownerType: "cause",
+              ownerId: cause.id,
+              label: cause.name,
+              iconStorageKey: createdIconStorageKey,
+              existingMediaImageId: null,
+              syncedStorageKey: null,
+            });
+            const metaobject = await createCauseMetaobject(admin, {
+              ...causeInput,
+              iconUrl: buildCausePublicIconUrl(shopId, cause.id, createdIconStorageKey),
+              iconImageId,
+            });
             await prisma.cause.update({
               where: { id: cause.id, shopId },
-              data: { shopifyMetaobjectId: metaobject.id },
+              data: {
+                shopifyMetaobjectId: metaobject.id,
+                shopifyIconMediaImageId: iconImageId,
+                shopifyIconStorageKey: iconImageId ? createdIconStorageKey : null,
+              },
             });
             await prisma.auditLog.create({
               data: {
@@ -209,6 +290,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           }
           return jsonResponse({ ok: true, message: "Cause created." });
         } catch (error) {
+          console.error("[Causes] Shopify sync failed after creating Cause:", {
+            causeId: cause.id,
+            causeName: cause.name,
+            error,
+          });
           await prisma.auditLog.create({
             data: {
               shopId,
@@ -242,11 +328,39 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const id = idParsed.data.id;
       const existing = await prisma.cause.findFirst({
         where: { id, shopId },
-        select: { shopifyMetaobjectId: true },
+        select: {
+          name: true,
+          shopifyMetaobjectId: true,
+          iconStorageKey: true,
+          shopifyIconMediaImageId: true,
+          shopifyIconStorageKey: true,
+        },
       });
 
       if (!existing) {
         return jsonResponse({ ok: false, message: "Cause not found." }, { status: 404 });
+      }
+
+      let nextIconStorageKey: string | undefined;
+      if (iconFile) {
+        try {
+          const icon = await uploadPublicIcon({
+            shopId,
+            ownerType: "cause",
+            ownerId: id,
+            file: iconFile,
+          });
+          nextIconStorageKey = icon.key;
+          console.info("[Causes] Stored replacement Cause icon upload.", {
+            causeId: id,
+            iconStorageKey: icon.key,
+          });
+        } catch (error) {
+          if (error instanceof PublicIconUploadError) {
+            return jsonResponse({ ok: false, message: error.message, fieldErrors: { iconFile: [error.message] } }, { status: 400 });
+          }
+          throw error;
+        }
       }
 
       await prisma.cause.update({
@@ -256,12 +370,21 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           legalName: causeInput.legalName,
           is501c3: causeInput.is501c3,
           description: causeInput.description,
-          iconUrl: causeInput.iconUrl,
+          ...(nextIconStorageKey
+            ? {
+                iconStorageKey: nextIconStorageKey,
+                iconUrl: null,
+              }
+            : {}),
           donationLink: causeInput.donationLink,
           websiteUrl: causeInput.websiteUrl,
           instagramUrl: causeInput.instagramUrl,
         },
       });
+
+      if (nextIconStorageKey && existing.iconStorageKey) {
+        await deletePublicIcon(existing.iconStorageKey);
+      }
 
       await prisma.auditLog.create({
         data: {
@@ -277,16 +400,48 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         if (admin) {
           await ensureCauseMetaobjectDefinition(admin);
           let metaobjectId = existing.shopifyMetaobjectId;
+          const nextSyncedIconStorageKey = nextIconStorageKey ?? existing.iconStorageKey;
+          const iconImageId = await syncPublicIconToShopifyFile({
+            admin,
+            shopId,
+            ownerType: "cause",
+            ownerId: id,
+            label: causeInput.name || existing.name,
+            iconStorageKey: nextSyncedIconStorageKey,
+            existingMediaImageId: existing.shopifyIconMediaImageId,
+            syncedStorageKey: existing.shopifyIconStorageKey,
+          });
+          const metaobjectInput = {
+            ...causeInput,
+            iconUrl: buildCausePublicIconUrl(shopId, id, nextSyncedIconStorageKey),
+            iconImageId,
+          };
           if (metaobjectId) {
-            await updateCauseMetaobject(admin, metaobjectId, causeInput);
+            try {
+              await updateCauseMetaobject(admin, metaobjectId, metaobjectInput);
+            } catch (error) {
+              if (!isMissingShopifyMetaobjectError(error)) {
+                throw error;
+              }
+              console.warn("[Causes] Shopify Cause metaobject was missing; recreating it.", {
+                causeId: id,
+                staleShopifyMetaobjectId: metaobjectId,
+              });
+              const metaobject = await createCauseMetaobject(admin, metaobjectInput);
+              metaobjectId = metaobject.id;
+            }
           } else {
-            const metaobject = await createCauseMetaobject(admin, causeInput);
+            const metaobject = await createCauseMetaobject(admin, metaobjectInput);
             metaobjectId = metaobject.id;
           }
 
           await prisma.cause.update({
             where: { id, shopId },
-            data: { shopifyMetaobjectId: metaobjectId },
+            data: {
+              shopifyMetaobjectId: metaobjectId,
+              shopifyIconMediaImageId: iconImageId,
+              shopifyIconStorageKey: iconImageId ? nextSyncedIconStorageKey : null,
+            },
           });
 
           await prisma.auditLog.create({
@@ -303,6 +458,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
         return jsonResponse({ ok: true, message: "Cause updated." });
       } catch (error) {
+        console.error("[Causes] Shopify sync failed after updating Cause:", {
+          causeId: id,
+          causeName: causeInput.name,
+          shopifyMetaobjectId: existing.shopifyMetaobjectId,
+          error,
+        });
         await prisma.auditLog.create({
           data: {
             shopId,
@@ -368,16 +529,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     try {
+      const iconImageId = admin
+        ? await syncPublicIconToShopifyFile({
+            admin,
+            shopId,
+            ownerType: "cause",
+            ownerId: cause.id,
+            label: cause.name,
+            iconStorageKey: cause.iconStorageKey,
+            existingMediaImageId: cause.shopifyIconMediaImageId,
+            syncedStorageKey: cause.shopifyIconStorageKey,
+          })
+        : cause.shopifyIconMediaImageId;
       const metaobjectInput = {
         name: cause.name,
         legalName: cause.legalName,
         description: cause.description,
-        iconUrl: cause.iconUrl,
+        iconUrl: cause.iconStorageKey
+          ? buildCausePublicIconUrl(shopId, cause.id, cause.iconStorageKey)
+          : cause.iconUrl,
         donationLink: cause.donationLink,
         websiteUrl: cause.websiteUrl,
         instagramUrl: cause.instagramUrl,
         is501c3: cause.is501c3,
         status: nextStatus,
+        iconImageId,
       };
 
       await prisma.cause.update({
@@ -402,7 +578,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           await ensureCauseMetaobjectDefinition(admin);
           let metaobjectId = cause.shopifyMetaobjectId;
           if (metaobjectId) {
-            await updateCauseMetaobject(admin, metaobjectId, metaobjectInput);
+            try {
+              await updateCauseMetaobject(admin, metaobjectId, metaobjectInput);
+            } catch (error) {
+              if (!isMissingShopifyMetaobjectError(error)) {
+                throw error;
+              }
+              console.warn("[Causes] Shopify Cause metaobject was missing during status sync; recreating it.", {
+                causeId: id,
+                staleShopifyMetaobjectId: metaobjectId,
+              });
+              const metaobject = await createCauseMetaobject(admin, metaobjectInput);
+              metaobjectId = metaobject.id;
+            }
           } else {
             const metaobject = await createCauseMetaobject(admin, metaobjectInput);
             metaobjectId = metaobject.id;
@@ -410,7 +598,11 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
           await prisma.cause.update({
             where: { id, shopId },
-            data: { shopifyMetaobjectId: metaobjectId },
+            data: {
+              shopifyMetaobjectId: metaobjectId,
+              shopifyIconMediaImageId: iconImageId,
+              shopifyIconStorageKey: iconImageId ? cause.iconStorageKey : null,
+            },
           });
 
           await prisma.auditLog.create({
@@ -505,6 +697,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       where: { id: cause.id, shopId },
     });
 
+    if (cause.iconStorageKey) {
+      await deletePublicIcon(cause.iconStorageKey);
+    }
+
     await prisma.auditLog.create({
       data: {
         shopId,
@@ -560,6 +756,7 @@ export default function CausesPage() {
   const { causes } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<CauseActionData>();
   const causeDialogRef = useRef<HTMLDialogElement>(null);
+  const iconFileInputRef = useRef<HTMLInputElement>(null);
   const deactivateDialogRef = useRef<HTMLDialogElement>(null);
   const deleteDialogRef = useRef<HTMLDialogElement>(null);
 
@@ -570,6 +767,7 @@ export default function CausesPage() {
   const [deactivateTarget, setDeactivateTarget] = useState<CauseRecord | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<CauseRecord | null>(null);
   const [lastSubmittedIntent, setLastSubmittedIntent] = useState<string | null>(null);
+  const [replaceIcon, setReplaceIcon] = useState(false);
 
   useEffect(() => {
     const dialog = causeDialogRef.current;
@@ -610,6 +808,8 @@ export default function CausesPage() {
 
   function openCreate() {
     setForm(EMPTY_FORM);
+    if (iconFileInputRef.current) iconFileInputRef.current.value = "";
+    setReplaceIcon(true);
     setCauseDialogOpen(true);
   }
 
@@ -619,18 +819,22 @@ export default function CausesPage() {
       name: cause.name,
       legalName: cause.legalName,
       description: cause.description,
-      iconUrl: cause.iconUrl,
+      iconPreviewUrl: cause.iconPreviewUrl,
       donationLink: cause.donationLink,
       websiteUrl: cause.websiteUrl,
       instagramUrl: cause.instagramUrl,
       is501c3: cause.is501c3,
     });
+    if (iconFileInputRef.current) iconFileInputRef.current.value = "";
+    setReplaceIcon(!cause.iconPreviewUrl);
     setCauseDialogOpen(true);
   }
 
   const closeCauseDialog = useCallback(() => {
     setCauseDialogOpen(false);
     setForm(EMPTY_FORM);
+    if (iconFileInputRef.current) iconFileInputRef.current.value = "";
+    setReplaceIcon(false);
     if (lastSubmittedIntent === "create" || lastSubmittedIntent === "update") {
       setLastSubmittedIntent(null);
     }
@@ -924,7 +1128,6 @@ export default function CausesPage() {
             }}
           >
             {[
-              { key: "iconUrl", label: "Icon URL" },
               { key: "donationLink", label: "Donation link" },
               { key: "websiteUrl", label: "Website URL" },
               { key: "instagramUrl", label: "Instagram URL" },
@@ -957,6 +1160,69 @@ export default function CausesPage() {
             ))}
           </div>
 
+          <div style={{ display: "grid", gap: "0.35rem" }}>
+            <label htmlFor="cause-icon-file">Icon image</label>
+            {form.iconPreviewUrl && !replaceIcon ? (
+              <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
+                <img
+                  src={form.iconPreviewUrl}
+                  alt={`${form.name || "Cause"} icon`}
+                  style={{
+                    width: "4rem",
+                    height: "4rem",
+                    objectFit: "contain",
+                    border: "1px solid var(--p-color-border, #d2d5d8)",
+                    borderRadius: "0.5rem",
+                    background: "var(--p-color-bg-surface-secondary, #f6f6f7)",
+                    padding: "0.35rem",
+                  }}
+                />
+                <s-button type="button" variant="secondary" onClick={() => setReplaceIcon(true)}>
+                  Replace icon
+                </s-button>
+              </div>
+            ) : (
+              <>
+                <HelpText>Upload a square PNG, JPEG, or WebP icon. Maximum file size is 5 MB.</HelpText>
+                <input
+                  id="cause-icon-file"
+                  ref={iconFileInputRef}
+                  name="iconFile"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp"
+                  aria-invalid={modalFieldErrors.iconFile ? true : undefined}
+                  style={{
+                    width: "100%",
+                    boxSizing: "border-box",
+                    padding: "0.75rem",
+                    borderRadius: "0.75rem",
+                    border: `1px solid ${modalFieldErrors.iconFile ? "#8e1f1f" : "var(--p-color-border, #d2d5d8)"}`,
+                    background: "var(--p-color-bg-surface, #fff)",
+                    color: "var(--p-color-text, #303030)",
+                    font: "inherit",
+                  }}
+                />
+                {form.iconPreviewUrl ? (
+                  <div>
+                    <s-button
+                      type="button"
+                      variant="secondary"
+                      onClick={() => {
+                        if (iconFileInputRef.current) iconFileInputRef.current.value = "";
+                        setReplaceIcon(false);
+                      }}
+                    >
+                      Keep current icon
+                    </s-button>
+                  </div>
+                ) : null}
+              </>
+            )}
+            {modalFieldErrors.iconFile?.[0] ? (
+              <div style={{ color: "#8e1f1f", fontSize: "0.875rem" }}>{modalFieldErrors.iconFile[0]}</div>
+            ) : null}
+          </div>
+
           <label style={{ display: "flex", gap: "0.6rem", alignItems: "center" }}>
             <input
               type="checkbox"
@@ -978,13 +1244,14 @@ export default function CausesPage() {
                 fd.append("name", form.name);
                 fd.append("legalName", form.legalName);
                 fd.append("description", form.description);
-                fd.append("iconUrl", form.iconUrl);
+                const iconFile = iconFileInputRef.current?.files?.[0];
+                if (iconFile) fd.append("iconFile", iconFile);
                 fd.append("donationLink", form.donationLink);
                 fd.append("websiteUrl", form.websiteUrl);
                 fd.append("instagramUrl", form.instagramUrl);
                 fd.append("is501c3", String(form.is501c3));
                 setLastSubmittedIntent(form.id ? "update" : "create");
-                fetcher.submit(fd, { method: "post" });
+                fetcher.submit(fd, { method: "post", encType: "multipart/form-data" });
               }}
             >
               {form.id ? "Save" : "Create"}

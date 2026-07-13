@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 
-import { prisma, type DbClient } from "../db.server";
+import { prisma, type DbClient, type TransactionCapableDbClient } from "../db.server";
 import { createArtistSubmissionStorage } from "./artistSubmissionStorage.server";
 
 export const artistSubmissionLocalConnections = [
@@ -236,7 +236,9 @@ const artistSubmissionInputSchema = z.object({
 });
 
 export type ArtistSubmissionInput = z.input<typeof artistSubmissionInputSchema>;
-export type ValidArtistSubmissionInput = z.output<typeof artistSubmissionInputSchema>;
+export type ValidArtistSubmissionInput = z.output<typeof artistSubmissionInputSchema> & {
+  publicCreditName: string;
+};
 
 export class ArtistSubmissionValidationError extends Error {
   constructor(
@@ -262,7 +264,7 @@ export class ArtistSubmissionUploadError extends Error {
   }
 }
 
-export function validateArtistSubmissionInput(input: ArtistSubmissionInput): ValidArtistSubmissionInput {
+export function validateArtistSubmissionInput(input: unknown): ValidArtistSubmissionInput {
   const parsed = artistSubmissionInputSchema.safeParse(input);
 
   if (!parsed.success) {
@@ -305,9 +307,9 @@ export function hashSubmissionIp(ipAddress: string | null | undefined) {
 
 export async function createArtistSubmission(
   shopId: string,
-  input: ArtistSubmissionInput,
+  input: unknown,
   options?: {
-    db?: DbClient;
+    db?: TransactionCapableDbClient;
     ipAddress?: string | null;
     userAgent?: string | null;
     now?: Date;
@@ -500,7 +502,7 @@ export async function updateArtistSubmissionStatus(
     internalNotes?: string | null;
   },
   options?: {
-    db?: DbClient;
+    db?: TransactionCapableDbClient;
     actor?: string;
   },
 ) {
@@ -550,7 +552,7 @@ export async function convertArtistSubmissionToDraftArtist(
   shopId: string,
   submissionId: string,
   options?: {
-    db?: DbClient;
+    db?: TransactionCapableDbClient;
     actor?: string;
   },
 ) {

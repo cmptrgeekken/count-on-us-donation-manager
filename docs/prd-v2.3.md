@@ -31,8 +31,8 @@ March 2026
 
 | **Section** | **Change** | **Reason** |
 | --- | --- | --- |
-| §11.1 | Removed read_metafields and write_metafields (non-existent scopes). Reinstated write_products — required for product metafield writes. | Platform verification during Partner Dashboard setup |
-| §14.1 | Updated scope removal note to reflect write_products reinstatement and correction of metafields assumption. | Follows from §11.1 correction |
+| §11.1 | Removed read_metafields and write_metafields (non-existent scopes). Product public-data sync degrades when write_products is not granted. | Platform verification during Partner Dashboard setup |
+| §14.1 | Updated scope removal note to reflect write_products as optional for Shopify-native product merchandising sync. | Follows from §11.1 correction |
 | §11.6 | Updated bulk migration metafields scope reference from read_metafields to read_products. | Follows from §11.1 correction |
 | §18 QA checklist | Updated metafields scope reference from write_metafields to write_products. | Follows from §11.1 correction |
 
@@ -966,7 +966,7 @@ All scopes declared at install. Changing scopes requires merchant re-authorisati
 
 | **Scope** | **Purpose** | **Notes** |
 | --- | --- | --- |
-| read_products, write_products | Sync product catalog via CatalogSync; read/write product cause assignment metafields (donation_manager namespace) | write_products is required for product metafield writes — standalone write_metafields scope does not exist in Shopify API |
+| read_products | Sync product catalog via CatalogSync; read product data for local setup and reconciliation | Product metafield and product-description writes require optional write_products; standalone write_metafields scope does not exist in Shopify API |
 | read_orders | Order snapshot creation and reconciliation (7-day lookback) |  |
 | read_metaobjects, write_metaobjects | Read/write Cause records stored as metaobjects |  |
 | read_metaobject_definitions, write_metaobject_definitions | Create donation_manager.cause definition on install; delete on uninstall |  |
@@ -1470,7 +1470,7 @@ Embedded Shopify apps must set correct HTTP security headers on all responses to
 
 The frame-ancestors directive must dynamically include the merchant's shop domain from the session. Use Shopify CLI / Remix adapter which sets these headers automatically when using the authenticate.admin() middleware.
 
-See Section 11.1 for full scope table. Scopes removed from earlier drafts: read_all_orders (bulk migration removed — see ADR-006), read_files / write_files (receipts in S3, not Shopify Files API), read_payment_terms (replaced by shopify_payments_payouts). Note: write_products was previously removed on the incorrect assumption that a standalone write_metafields scope exists — it does not. write_products is required for product metafield writes and has been reinstated in §11.1.
+See Section 11.1 for full scope table. Scopes removed from earlier drafts: read_all_orders (bulk migration removed — see ADR-006), read_payment_terms (replaced by shopify_payments_payouts). Note: write_products is required for optional Shopify-native product metafield and product-description writes because a standalone write_metafields scope does not exist; the app degrades by skipping those writes when write_products is not granted.
 
 ## 14.3 Webhook Security
 
@@ -2039,7 +2039,7 @@ Post-purchase upload via App Proxy is cleaner in every dimension: one upload per
 
 - read/write_metaobject_definitions scopes working correctly
 
-- Product cause metafields read/written with write_products scope
+- Product cause metafields written only when optional write_products scope is granted
 
 - App Proxy HMAC-SHA256 verified; unsigned requests rejected 403
 

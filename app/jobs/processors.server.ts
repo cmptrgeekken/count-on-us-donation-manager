@@ -10,6 +10,7 @@ import { createReportingPeriodFromPayout } from "../services/reportingPeriodServ
 import { refreshTaxOffsetCacheForShop } from "../services/reportingService.server";
 import { sendArtistSubmissionNotificationEmail } from "../services/artistSubmissionNotification.server";
 import { sendPostPurchaseDonationEmail } from "../services/postPurchaseEmail.server";
+import { runCustomerMerchandisingSync } from "../services/customerMerchandisingSync.server";
 import { runProviderSync } from "../services/providerSync.server";
 import { createSnapshot } from "../services/snapshotService.server";
 import { unauthenticated } from "../shopify.server";
@@ -35,6 +36,7 @@ const QUEUES = [
   "webhook.compliance",
   "catalog.sync",
   "catalog.sync.incremental",
+  "customer-merchandising.sync",
   "provider.sync",
 ];
 
@@ -419,6 +421,27 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
 
     const { shopId, runId } = job.data;
     await runProviderSync({ shopId, runId }, prisma);
+  });
+
+  await boss.work<{ shopId: string; runId: string }>("customer-merchandising.sync", async (jobs) => {
+    const job = jobs[0];
+    if (!job) return;
+
+    const { shopId, runId } = job.data;
+    try {
+      const { admin } = await unauthenticated.admin(shopId);
+      await runCustomerMerchandisingSync({ admin, shopId, runId });
+    } catch (error) {
+      await prisma.customerMerchandisingSyncRun.updateMany({
+        where: { id: runId, shopId, status: { in: ["queued", "running"] } },
+        data: {
+          status: "failed",
+          completedAt: new Date(),
+          errorSummary: error instanceof Error ? error.message : "Unknown Shopify sync failure",
+        },
+      });
+      throw error;
+    }
   });
 
   await boss.work<{ shopId: string; topic: string }>(

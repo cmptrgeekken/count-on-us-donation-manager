@@ -34,6 +34,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const shopId = session.shop;
   const url = new URL(request.url);
   const filterProductId = url.searchParams.get("product") ?? "";
+  const filterCategory = url.searchParams.get("category") ?? "";
   const filterConfigured = url.searchParams.get("configured") ?? "";
 
   const [variants, shop, taxOffsetCache] = await Promise.all([
@@ -41,12 +42,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       where: {
         shopId,
         ...(filterProductId ? { productId: filterProductId } : {}),
+        ...(filterCategory ? { product: { productCategoryPath: filterCategory } } : {}),
         ...(filterConfigured === "yes" ? { costConfig: { isNot: null } } : {}),
         ...(filterConfigured === "no" ? { costConfig: { is: null } } : {}),
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {
-        product: { select: { id: true, title: true } },
+        product: { select: { id: true, title: true, productCategoryPath: true } },
         costConfig: {
           select: {
             productionTemplate: { select: { name: true } },
@@ -176,6 +178,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
       return [
         variant.product.title,
+        variant.product.productCategoryPath ?? "",
         variant.title,
         variant.title != "Default Title" ? `${variant.product.title} - ${variant.title}` : variant.product.title,
         variant.sku ?? "",
@@ -212,6 +215,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const headers = [
     "Product",
+    "Product category",
     "Variant",
     "Full Name",
     "SKU",

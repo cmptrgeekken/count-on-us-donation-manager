@@ -1,4 +1,4 @@
-import { prisma, type DbClient } from "../db.server";
+import { prisma, type TransactionCapableDbClient } from "../db.server";
 
 type EmailTransport = {
   send(input: {
@@ -119,7 +119,7 @@ function getAdminReviewUrl() {
 async function loadSubmissionNotificationContext(
   shopId: string,
   submissionId: string,
-  db: DbClient,
+  db: TransactionCapableDbClient,
 ): Promise<SubmissionNotificationContext | null> {
   const [shop, submission] = await Promise.all([
     db.shop.findUnique({
@@ -272,7 +272,7 @@ export async function sendArtistSubmissionNotificationEmail(
     shopId: string;
     submissionId: string;
   },
-  db: DbClient = prisma,
+  db: TransactionCapableDbClient = prisma,
   transport: EmailTransport = createEmailTransport(),
 ) {
   const context = await loadSubmissionNotificationContext(input.shopId, input.submissionId, db);

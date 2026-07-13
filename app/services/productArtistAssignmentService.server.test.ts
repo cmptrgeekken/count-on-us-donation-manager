@@ -32,12 +32,12 @@ describe("saveProductArtistAssignmentsLocally", () => {
           {
             causeId: "cause-1",
             percentage: "60",
-            cause: { shopifyMetaobjectId: "gid://shopify/Metaobject/1" },
+            cause: { name: "Cause One", shopifyMetaobjectId: "gid://shopify/Metaobject/1" },
           },
           {
             causeId: "cause-2",
             percentage: "40",
-            cause: { shopifyMetaobjectId: null },
+            cause: { name: "Cause Two", shopifyMetaobjectId: null },
           },
         ],
       },
@@ -48,7 +48,7 @@ describe("saveProductArtistAssignmentsLocally", () => {
           {
             causeId: "cause-1",
             percentage: "100",
-            cause: { shopifyMetaobjectId: "gid://shopify/Metaobject/1" },
+            cause: { name: "Cause One", shopifyMetaobjectId: "gid://shopify/Metaobject/1" },
           },
         ],
       },
@@ -80,11 +80,13 @@ describe("saveProductArtistAssignmentsLocally", () => {
     expect(derivedAssignments).toEqual([
       {
         causeId: "cause-1",
+        name: "Cause One",
         metaobjectId: "gid://shopify/Metaobject/1",
         percentage: 80,
       },
       {
         causeId: "cause-2",
+        name: "Cause Two",
         metaobjectId: null,
         percentage: 20,
       },
@@ -151,7 +153,7 @@ describe("saveProductArtistAssignmentsLocally", () => {
           {
             causeId: "cause-1",
             percentage: "50",
-            cause: { shopifyMetaobjectId: "gid://shopify/Metaobject/1" },
+            cause: { name: "Cause One", shopifyMetaobjectId: "gid://shopify/Metaobject/1" },
           },
         ],
       },
@@ -173,6 +175,7 @@ describe("saveProductArtistAssignmentsLocally", () => {
     expect(derivedAssignments).toEqual([
       {
         causeId: "cause-1",
+        name: "Cause One",
         metaobjectId: "gid://shopify/Metaobject/1",
         percentage: 50,
       },

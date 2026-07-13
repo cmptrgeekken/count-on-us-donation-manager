@@ -198,7 +198,7 @@ Notes:
 - [ ] Metafield namespace `donation_manager` has no conflicts
 - [ ] Metaobject definition created on install and deleted on uninstall
 - [ ] read/write_metaobject_definitions scopes work correctly
-- [ ] Product cause metafields read/write correctly with write_products
+- [ ] Product cause metafields write correctly when optional write_products scope is granted
 - [ ] App Proxy HMAC-SHA256 verified; unsigned requests rejected with 403
 - [ ] Widget renders on Dawn and two other OS2.0 themes
 - [ ] App listing states OS2.0 requirement
