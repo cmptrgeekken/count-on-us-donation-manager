@@ -9,6 +9,7 @@ const productShopifyId = "gid://shopify/Product/900000000101";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
+  const withArtist = url.searchParams.get("withArtist") === "1";
   const baseUrl = `${url.protocol}//${url.host}`;
   const syncedAt = new Date();
 
@@ -30,6 +31,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         title: "Playwright Donation Product",
         handle: "playwright-donation-product",
         status: "active",
+        donationRoutingMode: "automatic",
         syncedAt,
       },
       create: {
@@ -124,6 +126,52 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       percentage: 60,
     },
   });
+
+  await prisma.productArtistAssignment.deleteMany({ where: { shopId, productId: product.id } });
+  if (withArtist) {
+    const existingArtist = await prisma.artist.findFirst({
+      where: { shopId, displayName: "Playwright Artist" },
+      select: { id: true },
+    });
+    const artist = existingArtist
+      ? await prisma.artist.updateMany({
+          where: { id: existingArtist.id, shopId },
+          data: { status: "active", creditName: "Playwright Artist", paymentEnabled: true, defaultPayoutRate: 10 },
+        }).then(() => prisma.artist.findFirstOrThrow({ where: { id: existingArtist.id, shopId } }))
+      : await prisma.artist.create({
+          data: {
+            shopId,
+            displayName: "Playwright Artist",
+            creditName: "Playwright Artist",
+            status: "active",
+            paymentEnabled: true,
+            defaultPayoutRate: 10,
+          },
+        });
+    await prisma.artistCauseAssignment.deleteMany({ where: { shopId, artistId: artist.id } });
+    await prisma.artistCauseAssignment.create({
+      data: { shopId, artistId: artist.id, causeId: causeB.id, percentage: 100 },
+    });
+    await prisma.productCauseAssignment.deleteMany({ where: { shopId, productId: product.id } });
+    await prisma.productCauseAssignment.create({
+      data: {
+        shopId,
+        productId: product.id,
+        shopifyProductId: product.shopifyId,
+        causeId: causeB.id,
+        percentage: 100,
+      },
+    });
+    await prisma.productArtistAssignment.create({
+      data: {
+        shopId,
+        productId: product.id,
+        shopifyProductId: product.shopifyId,
+        artistId: artist.id,
+        collaborationShare: 100,
+      },
+    });
+  }
 
   const [configuredVariant, unconfiguredVariant, existingTemplate] = await Promise.all([
     prisma.variant.upsert({
@@ -230,6 +278,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   return jsonResponse({
     shopId,
     productId: product.id,
+    firstCauseId: causeA.id,
+    firstCauseName: causeA.name,
     secondCauseName: causeB.name,
     productUrl: `${baseUrl}/app/products/${product.id}?__playwrightShop=${encodeURIComponent(shopId)}`,
   });

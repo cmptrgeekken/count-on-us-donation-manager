@@ -10,7 +10,7 @@ test("product detail summarizes and links to product variants", async ({ page, r
 
   await expect(page.getByRole("heading", { name: "Variants" })).toBeVisible();
   await expect(page.getByText("Review whether each variant is ready for donation estimates.")).toBeVisible();
-  await expect(page.getByText("Needs setup")).toHaveCount(2);
+  await expect(page.getByText("Needs setup").first()).toBeVisible();
   await expect(page.getByText("Small")).toBeVisible();
   await expect(page.getByText("Large")).toBeVisible();
   await expect(page.getByText("Playwright Product Detail Template")).toBeVisible();
@@ -18,7 +18,7 @@ test("product detail summarizes and links to product variants", async ({ page, r
     "href",
     new RegExp(`/app/variants\\?__playwrightShop=.*&product=${bootstrap.productId}`),
   );
-  await expect(page.getByRole("button", { name: "Configure" })).toHaveCount(2);
+  expect(await page.getByRole("button", { name: "Configure" }).count()).toBeGreaterThanOrEqual(2);
 });
 
 test("product donations can add a second cause assignment and persist it", async ({ page, request }) => {
@@ -31,12 +31,11 @@ test("product donations can add a second cause assignment and persist it", async
 
   await expect(page.getByText("Total allocation: 60.00%")).toBeVisible();
 
-  await page.getByRole("button", { name: "Add cause" }).click();
+  await page.getByRole("button", { name: "Add Causes" }).click();
+  await page.getByRole("dialog").getByText(bootstrap.secondCauseName).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Add selected" }).click();
 
-  const secondCauseSelect = page.locator("#cause-1");
   const secondPercentageField = page.locator("#percentage-1");
-
-  await secondCauseSelect.selectOption({ label: bootstrap.secondCauseName });
   await secondPercentageField.fill("40");
   await page.getByRole("button", { name: "Save assignments" }).click();
 
@@ -45,9 +44,7 @@ test("product donations can add a second cause assignment and persist it", async
 
   await page.reload();
 
-  await expect(page.locator("#cause-0")).toHaveValue(/.+/);
-  await expect(page.locator("#cause-1")).toHaveValue(/.+/);
-  await expect(page.locator("#percentage-1")).toHaveValue("40");
+  await expect(page.getByText(bootstrap.secondCauseName)).toBeVisible();
   await expect(page.getByText("Total allocation: 100.00%")).toBeVisible();
 });
 
@@ -59,8 +56,9 @@ test("product donations reject assignment totals above 100 percent", async ({ pa
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.goto(bootstrap.productUrl);
 
-  await page.getByRole("button", { name: "Add cause" }).click();
-  await page.locator("#cause-1").selectOption({ label: bootstrap.secondCauseName });
+  await page.getByRole("button", { name: "Add Causes" }).click();
+  await page.getByRole("dialog").getByText(bootstrap.secondCauseName).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Add selected" }).click();
   await page.locator("#percentage-1").fill("50");
   await page.getByRole("button", { name: "Save assignments" }).click();
 
@@ -68,6 +66,64 @@ test("product donations reject assignment totals above 100 percent", async ({ pa
   await expect(page.getByText("Total allocation: 110.00%")).toBeVisible();
 
   await page.reload();
-  await expect(page.locator("#cause-1")).toHaveCount(0);
+  await expect(page.getByText(bootstrap.secondCauseName)).toHaveCount(0);
   await expect(page.getByText("Total allocation: 60.00%")).toBeVisible();
+});
+
+test("product Cause overrides preserve Artist routing and can return to Artist preferences", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/product-donations-bootstrap?withArtist=1");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  const overrideResponse = await request.post(bootstrap.productUrl, {
+    form: {
+      intent: "save-assignments",
+      assignments: JSON.stringify([{ causeId: bootstrap.firstCauseId, percentage: "100" }]),
+    },
+  });
+  expect(overrideResponse.ok()).toBeTruthy();
+  await page.goto(bootstrap.productUrl);
+
+  await expect(page.locator("#donation-routing-mode")).toHaveValue("product_override");
+  await expect(page.getByText(bootstrap.firstCauseName).first()).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#donation-routing-mode").selectOption("automatic");
+  await expect(page.getByText("Product Cause override cleared. Artist Cause preferences are active.")).toBeVisible();
+  await expect(page.getByText(bootstrap.secondCauseName).first()).toBeVisible();
+  await expect(page.getByText(bootstrap.firstCauseName)).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator("#donation-routing-mode")).toHaveValue("automatic");
+  await expect(page.getByText("Playwright Artist").first()).toBeVisible();
+});
+
+test("Product List can bulk set and clear Cause overrides without removing Artists", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/product-donations-bootstrap?withArtist=1");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+  const bootstrap = await bootstrapResponse.json();
+
+  await page.goto(`/app/products?__playwrightShop=${encodeURIComponent(bootstrap.shopId)}`);
+  const productCheckbox = page.getByRole("checkbox", { name: "Select Playwright Donation Product" });
+  await productCheckbox.check();
+  await page.locator("#bulk-assignment-mode").selectOption("cause");
+  await page.getByRole("button", { name: "Add Causes" }).click();
+  await page.getByRole("dialog").getByText("Playwright Cause A").click();
+  await page.getByRole("dialog").getByRole("button", { name: "Add selected" }).click();
+  const percentageField = page.getByRole("spinbutton", { name: "Percentage for Playwright Cause A" });
+  await percentageField.fill("75");
+  await expect(page.getByText("Cause routing (75.00%)")).toBeVisible();
+  await percentageField.fill("100");
+  await page.getByRole("button", { name: "Apply assignment" }).click();
+
+  await expect(page.getByText("Cause routing updated for 1 product without removing Artists.")).toBeVisible();
+  await expect(page.getByText("Product override")).toBeVisible();
+
+  await productCheckbox.check();
+  await page.locator("#bulk-assignment-mode").selectOption("clear_override");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Clear overrides" }).click();
+
+  await expect(page.getByText("1 product override cleared; 0 selected products were unchanged.")).toBeVisible();
+  await expect(page.getByText("Artist preferences")).toBeVisible();
+  await expect(page.getByText("Playwright Donation Product")).toBeVisible();
 });

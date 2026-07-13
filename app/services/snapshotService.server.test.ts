@@ -35,11 +35,15 @@ function createDb({
   orderSnapshotCreateImpl,
   variant = { id: "variant-1", shopifyId: "gid://shopify/ProductVariant/100" },
   providerMappings = [],
+  productRoutingMode = "automatic",
+  productArtistAssignments = [],
 }: {
   existingSnapshot?: unknown | null;
   orderSnapshotCreateImpl?: () => unknown;
   variant?: unknown;
   providerMappings?: unknown[];
+  productRoutingMode?: string;
+  productArtistAssignments?: unknown[];
 } = {}) {
   const orderSnapshotCreate = orderSnapshotCreateImpl
     ? vi.fn().mockImplementation(orderSnapshotCreateImpl)
@@ -50,6 +54,7 @@ function createDb({
   const equipmentConsumableLineCreateMany = vi.fn().mockResolvedValue(undefined);
   const podLineCreateMany = vi.fn().mockResolvedValue(undefined);
   const causeAllocationCreateMany = vi.fn().mockResolvedValue(undefined);
+  const artistAllocationCreateMany = vi.fn().mockResolvedValue(undefined);
   const orderSettlementUpsert = vi.fn().mockResolvedValue(undefined);
   const auditLogCreate = vi.fn().mockResolvedValue(undefined);
   const variantCostConfigFindFirst = vi
@@ -65,6 +70,7 @@ function createDb({
     orderSnapshotEquipmentConsumableLine: { createMany: equipmentConsumableLineCreateMany },
     orderSnapshotPODLine: { createMany: podLineCreateMany },
     lineCauseAllocation: { createMany: causeAllocationCreateMany },
+    lineArtistAllocation: { createMany: artistAllocationCreateMany },
     orderSettlement: { upsert: orderSettlementUpsert },
     variantCostConfig: { findFirst: variantCostConfigFindFirst },
     auditLog: { create: auditLogCreate },
@@ -90,6 +96,7 @@ function createDb({
         {
           id: "product-1",
           shopifyId: "gid://shopify/Product/200",
+          donationRoutingMode: productRoutingMode,
         },
       ]),
     },
@@ -109,6 +116,9 @@ function createDb({
         },
       ]),
     },
+    productArtistAssignment: {
+      findMany: vi.fn().mockResolvedValue(productArtistAssignments),
+    },
     $transaction: vi.fn().mockImplementation(async (callback: (trx: typeof tx) => Promise<unknown>) => callback(tx)),
     __spies: {
       orderSnapshotCreate,
@@ -118,6 +128,7 @@ function createDb({
       equipmentConsumableLineCreateMany,
       podLineCreateMany,
       causeAllocationCreateMany,
+      artistAllocationCreateMany,
       orderSettlementUpsert,
       auditLogCreate,
     },
@@ -659,6 +670,70 @@ describe("createSnapshot", () => {
             amount: decimal("0"),
           }),
         ],
+      }),
+    );
+  });
+
+  it("freezes product override Causes while retaining Artist payouts", async () => {
+    const costResult = {
+      laborCost: decimal("5"),
+      materialCost: decimal("5"),
+      packagingCost: decimal("0"),
+      equipmentCost: decimal("0"),
+      mistakeBufferAmount: decimal("0"),
+      podCost: decimal("0"),
+      podLines: [],
+      podCostEstimated: false,
+      podCostMissing: false,
+      totalCost: decimal("10"),
+      netContribution: decimal("40"),
+      materialLines: [],
+      equipmentLines: [],
+    };
+    resolveCosts.mockResolvedValue(costResult);
+    const db = createDb({
+      productRoutingMode: "product_override",
+      productArtistAssignments: [{
+        collaborationShare: decimal("100"),
+        payoutEnabledOverride: true,
+        payoutRateOverride: decimal("10"),
+        creditOverride: null,
+        artist: {
+          id: "artist-1",
+          displayName: "Artist One",
+          creditName: "Artist One",
+          creditPreference: "public_name",
+          paymentEnabled: true,
+          defaultPayoutRate: decimal("10"),
+          causeAssignments: [{
+            causeId: "artist-cause",
+            percentage: decimal("100"),
+            cause: { id: "artist-cause", name: "Artist Cause", is501c3: false },
+          }],
+        },
+      }],
+    });
+
+    await createSnapshot("shop-1", {
+      admin_graphql_api_id: "gid://shopify/Order/override",
+      line_items: [{
+        admin_graphql_api_id: "gid://shopify/LineItem/override",
+        variant_id: 100,
+        product_id: 200,
+        title: "Override Product",
+        quantity: 1,
+        price: "50",
+      }],
+    }, db as never);
+
+    expect(db.__spies.artistAllocationCreateMany).toHaveBeenCalled();
+    expect(db.__spies.causeAllocationCreateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: [expect.objectContaining({
+          causeId: "cause-1",
+          source: "product_override",
+          amount: decimal("17.5"),
+        })],
       }),
     );
   });

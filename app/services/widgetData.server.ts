@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "./variantEstimate.server";
+import { resolveProductDonationRoutingSource } from "./productDonationRouting.server";
 
 export const WIDGET_PRELOAD_LINE_THRESHOLD = 200;
 export const WIDGET_RATE_LIMIT_PER_MINUTE = 60;
@@ -10,6 +11,7 @@ type WidgetProductContext = {
   product: {
     id: string;
     shopifyId: string;
+    donationRoutingMode: string;
     variants: Array<{
       id: string;
       shopifyId: string;
@@ -90,6 +92,7 @@ async function loadWidgetProductContext(
       select: {
         id: true,
         shopifyId: true,
+        donationRoutingMode: true,
         variants: {
           orderBy: [{ title: "asc" }, { shopifyId: "asc" }],
           select: {
@@ -211,9 +214,13 @@ export async function buildWidgetProductMetadata(
     0,
   );
   const deliveryMode = totalLineItemCount < WIDGET_PRELOAD_LINE_THRESHOLD ? "preload" : "lazy";
-  const hasRoutedCauses =
-    context.causeAssignments.length > 0 ||
-    context.artistAssignments.some((assignment) => assignment.artist.causeAssignments.length > 0);
+  const routingSource = resolveProductDonationRoutingSource(
+    context.product.donationRoutingMode,
+    context.artistAssignments.length,
+  );
+  const hasRoutedCauses = routingSource === "artist"
+    ? context.artistAssignments.some((assignment) => assignment.artist.causeAssignments.length > 0)
+    : context.causeAssignments.length > 0;
   const visible = hasRoutedCauses && context.product.variants.length > 0;
 
   return {
@@ -241,9 +248,13 @@ export async function buildWidgetProductPayload(
     0,
   );
   const deliveryMode = totalLineItemCount < WIDGET_PRELOAD_LINE_THRESHOLD ? "preload" : "lazy";
-  const hasRoutedCauses =
-    context.causeAssignments.length > 0 ||
-    context.artistAssignments.some((assignment) => assignment.artist.causeAssignments.length > 0);
+  const routingSource = resolveProductDonationRoutingSource(
+    context.product.donationRoutingMode,
+    context.artistAssignments.length,
+  );
+  const hasRoutedCauses = routingSource === "artist"
+    ? context.artistAssignments.some((assignment) => assignment.artist.causeAssignments.length > 0)
+    : context.causeAssignments.length > 0;
   const visible = hasRoutedCauses && context.product.variants.length > 0;
   const widgetTaxSuppressed = context.taxOffsetCache?.widgetTaxSuppressed ?? true;
 
@@ -258,6 +269,7 @@ export async function buildWidgetProductPayload(
         variant,
         causeAssignments: context.causeAssignments,
         artistAssignments: context.artistAssignments,
+        donationRoutingMode: context.product.donationRoutingMode,
         shop: context.shop,
         widgetTaxSuppressed,
         quantity: lineContext?.quantity,

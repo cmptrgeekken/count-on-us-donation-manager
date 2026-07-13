@@ -433,7 +433,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         where: { id: { in: touchedProductIds }, shopId },
         select: {
           id: true,
-          shopifyId: true,
+              shopifyId: true,
+              donationRoutingMode: true,
+              _count: { select: { causeAssignments: true } },
           title: true,
           artistAssignments: {
             where: { shopId, status: "active" },
@@ -492,10 +494,24 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       ];
 
       const derivedAssignments = await prisma.$transaction(async (tx) => {
+        const preserveDirectRouting =
+          product.donationRoutingMode === "automatic" &&
+          product.artistAssignments.length === 0 &&
+          product._count.causeAssignments > 0 &&
+          nextAssignments.length > 0;
+        if (preserveDirectRouting) {
+          await tx.product.update({
+            where: { id: product.id, shopId },
+            data: { donationRoutingMode: "product_override" },
+          });
+        }
         return saveProductArtistAssignmentsLocally({
           db: tx,
           shopId,
-          product,
+          product: {
+            ...product,
+            donationRoutingMode: preserveDirectRouting ? "product_override" : product.donationRoutingMode,
+          },
           artistAssignments: nextAssignments,
           auditSource: "artists_bulk_editor",
         });

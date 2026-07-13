@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useLocation, useRouteError } from "@remix-run/react";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { AssignmentPicker } from "../components/AssignmentControls";
 import { ResourceTableHeader } from "../components/admin-ui";
 import { prisma } from "../db.server";
@@ -13,7 +14,6 @@ import {
   saveProductArtistAssignmentsLocally,
   syncFullProductPublicAssignmentsToShopify,
 } from "../services/productArtistAssignmentService.server";
-import { syncProductCauseAssignmentsMetafield } from "../services/productCauseAssignmentService.server";
 import { syncProductDescriptionDonationSummary } from "../services/productDescriptionSummary.server";
 import { canWriteShopifyProducts } from "../services/productPublicMetafieldService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
@@ -21,8 +21,16 @@ import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 
 const bulkAssignmentSchema = z.object({
   productIds: z.array(z.string().min(1)).min(1, "Select at least one product."),
-  causeId: z.string().min(1).optional(),
   artistId: z.string().min(1).optional(),
+});
+
+const bulkCauseRoutingSchema = z.object({
+  productIds: z.array(z.string().min(1)).min(1, "Select at least one product."),
+  assignments: z.array(z.object({
+    causeId: z.string().min(1),
+    percentage: z.string().regex(/^\d+(?:\.\d{1,2})?$/, "Enter a valid Cause percentage."),
+  })),
+  confirmNoCauseOverride: z.boolean(),
 });
 
 const fieldStyle = {
@@ -119,6 +127,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       configuredVariantCount: product.variants.filter((variant) => isVariantCostConfigured(variant.costConfig)).length,
       causeAssignmentCount: product._count.causeAssignments,
       artistAssignmentCount: product.artistAssignments.length,
+      donationRoutingMode: product.donationRoutingMode,
       mappedVariantCount: product.variants.filter((variant) => variant.providerMappings.length > 0).length,
       mappedProviderCount: new Set(
         product.variants.flatMap((variant) => variant.providerMappings.map((mapping) => mapping.provider)),
@@ -166,61 +175,89 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
-  if (intent === "bulk-assign-cause") {
-    const parsed = bulkAssignmentSchema.safeParse({
+  if (intent === "bulk-set-cause-routing") {
+    let rawAssignments: unknown;
+    try {
+      rawAssignments = JSON.parse(formData.get("assignments")?.toString() ?? "[]");
+    } catch {
+      return jsonResponse({ ok: false, message: "Invalid bulk Cause assignments." }, { status: 400 });
+    }
+    const parsed = bulkCauseRoutingSchema.safeParse({
       productIds: formData.getAll("productId").map(String),
-      causeId: formData.get("causeId")?.toString() ?? "",
+      assignments: rawAssignments,
+      confirmNoCauseOverride: formData.get("confirmNoCauseOverride")?.toString() === "yes",
     });
 
     if (!parsed.success) {
       return jsonResponse(
-        { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid bulk Cause assignment." },
+        { ok: false, message: parsed.error.issues[0]?.message ?? "Invalid bulk Cause routing." },
         { status: 400 },
       );
     }
 
-    if (!parsed.data.causeId) {
-      return jsonResponse({ ok: false, message: "Choose a Cause to assign." }, { status: 400 });
+    const causeIds = parsed.data.assignments.map((assignment) => assignment.causeId);
+    if (causeIds.length === 0 && !parsed.data.confirmNoCauseOverride) {
+      return jsonResponse({ ok: false, message: "Confirm the explicit no-Cause routing choice." }, { status: 400 });
+    }
+    if (new Set(causeIds).size !== causeIds.length) {
+      return jsonResponse({ ok: false, message: "Each Cause can only be included once." }, { status: 400 });
+    }
+    const total = parsed.data.assignments.reduce(
+      (sum, assignment) => sum.add(new Prisma.Decimal(assignment.percentage)),
+      new Prisma.Decimal(0),
+    );
+    if (total.gt(100) || parsed.data.assignments.some((assignment) => new Prisma.Decimal(assignment.percentage).lte(0))) {
+      return jsonResponse({ ok: false, message: "Cause percentages must be greater than 0 and total 100% or less." }, { status: 400 });
     }
 
-    const [cause, products] = await Promise.all([
-      prisma.cause.findFirst({
-        where: { id: parsed.data.causeId, shopId, status: "active" },
+    const [selectedCauses, products] = await Promise.all([
+      prisma.cause.findMany({
+        where: { id: { in: causeIds }, shopId, status: "active" },
         select: { id: true, name: true, shopifyMetaobjectId: true },
       }),
       prisma.product.findMany({
         where: { id: { in: parsed.data.productIds }, shopId },
-        select: { id: true, shopifyId: true, title: true },
+        select: {
+          id: true,
+          shopifyId: true,
+          title: true,
+          donationRoutingMode: true,
+          _count: { select: { artistAssignments: { where: { status: "active" } } } },
+        },
       }),
     ]);
 
-    if (!cause) {
-      return jsonResponse({ ok: false, message: "Cause not found." }, { status: 404 });
+    if (selectedCauses.length !== causeIds.length) {
+      return jsonResponse({ ok: false, message: "One or more selected Causes are unavailable." }, { status: 404 });
     }
     if (products.length !== parsed.data.productIds.length) {
       return jsonResponse({ ok: false, message: "One or more selected products are unavailable." }, { status: 404 });
     }
 
     await prisma.$transaction(async (tx) => {
-      for (const product of products) {
-        await tx.productArtistAssignment.deleteMany({ where: { shopId, productId: product.id } });
-        await tx.productCauseAssignment.deleteMany({
-          where: {
-            shopId,
-            OR: [
-              { productId: product.id },
-              { shopifyProductId: product.shopifyId },
-            ],
-          },
+      await tx.productCauseAssignment.deleteMany({
+        where: { shopId, productId: { in: products.map((product) => product.id) } },
+      });
+      const assignmentRows = products.flatMap((product) => parsed.data.assignments.map((assignment) => ({
+          shopId,
+          shopifyProductId: product.shopifyId,
+          productId: product.id,
+          causeId: assignment.causeId,
+          percentage: new Prisma.Decimal(assignment.percentage),
+        })));
+      if (assignmentRows.length > 0) await tx.productCauseAssignment.createMany({ data: assignmentRows });
+      const artistProductIds = products.filter((product) => product._count.artistAssignments > 0).map((product) => product.id);
+      const directProductIds = products.filter((product) => product._count.artistAssignments === 0).map((product) => product.id);
+      if (artistProductIds.length > 0) {
+        await tx.product.updateMany({
+          where: { shopId, id: { in: artistProductIds } },
+          data: { donationRoutingMode: "product_override" },
         });
-        await tx.productCauseAssignment.create({
-          data: {
-            shopId,
-            shopifyProductId: product.shopifyId,
-            productId: product.id,
-            causeId: cause.id,
-            percentage: 100,
-          },
+      }
+      if (directProductIds.length > 0) {
+        await tx.product.updateMany({
+          where: { shopId, id: { in: directProductIds } },
+          data: { donationRoutingMode: "automatic" },
         });
       }
 
@@ -228,11 +265,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         data: {
           shopId,
           entity: "Product",
-          action: "PRODUCT_CAUSE_ASSIGNMENTS_BULK_ASSIGNED",
+          action: "PRODUCT_CAUSE_ROUTING_BULK_SET",
           actor: "merchant",
           payload: {
-            causeId: cause.id,
-            causeName: cause.name,
+            causeIds,
             productCount: products.length,
             productIds: products.map((product) => product.id),
           },
@@ -255,14 +291,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
 
         try {
-          await syncProductCauseAssignmentsMetafield(admin, shopId, product.shopifyId, [
-            {
-              causeId: cause.id,
-              name: cause.name,
-              metaobjectId: cause.shopifyMetaobjectId ?? null,
-              percentage: "100.00",
-            },
-          ], canWriteProducts);
+          const causeMap = new Map(selectedCauses.map((cause) => [cause.id, cause]));
+          await syncFullProductPublicAssignmentsToShopify({
+            admin,
+            shopId,
+            product,
+            canWriteProducts,
+            derivedAssignments: parsed.data.assignments.map((assignment) => ({
+              causeId: assignment.causeId,
+              name: causeMap.get(assignment.causeId)?.name ?? assignment.causeId,
+              metaobjectId: causeMap.get(assignment.causeId)?.shopifyMetaobjectId ?? null,
+              percentage: new Prisma.Decimal(assignment.percentage),
+            })),
+          });
           if (shop?.productDescriptionDonationSummaryEnabled) {
             await syncProductDescriptionDonationSummary({
               admin,
@@ -285,7 +326,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
     }
 
-    const messageParts = [`${cause.name} assigned to ${products.length} product${products.length === 1 ? "" : "s"}.`];
+    const messageParts = [`Cause routing updated for ${products.length} product${products.length === 1 ? "" : "s"} without removing Artists.`];
     if (syncSkipped.length > 0) {
       messageParts.push(`Skipped storefront sync for ${syncSkipped.length} local-only product${syncSkipped.length === 1 ? "" : "s"}.`);
     }
@@ -294,6 +335,124 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     }
 
     return jsonResponse({ ok: true, message: messageParts.join(" ") });
+  }
+
+  if (intent === "bulk-clear-cause-overrides") {
+    const productIds = formData.getAll("productId").map(String);
+    if (productIds.length === 0) {
+      return jsonResponse({ ok: false, message: "Select at least one product." }, { status: 400 });
+    }
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds }, shopId },
+      select: {
+        id: true,
+        shopifyId: true,
+        title: true,
+        donationRoutingMode: true,
+        artistAssignments: {
+          where: { shopId, status: "active" },
+          orderBy: [{ attributionOrder: "asc" }, { createdAt: "asc" }],
+          select: {
+            collaborationShare: true,
+            artist: {
+              select: {
+                causeAssignments: {
+                  select: {
+                    causeId: true,
+                    percentage: true,
+                    cause: { select: { name: true, shopifyMetaobjectId: true } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (products.length !== productIds.length) {
+      return jsonResponse({ ok: false, message: "One or more selected products are unavailable." }, { status: 404 });
+    }
+
+    const changedProducts = products.filter(
+      (product) => product.donationRoutingMode === "product_override" && product.artistAssignments.length > 0,
+    );
+    const rollups = new Map<string, Array<{ causeId: string; name: string; metaobjectId: string | null; percentage: Prisma.Decimal }>>();
+    for (const product of changedProducts) {
+      const byCause = new Map<string, { causeId: string; name: string; metaobjectId: string | null; percentage: Prisma.Decimal }>();
+      for (const assignment of product.artistAssignments) {
+        for (const causeAssignment of assignment.artist.causeAssignments) {
+          const weighted = assignment.collaborationShare.mul(causeAssignment.percentage).div(100);
+          const current = byCause.get(causeAssignment.causeId);
+          if (current) current.percentage = current.percentage.add(weighted);
+          else byCause.set(causeAssignment.causeId, {
+            causeId: causeAssignment.causeId,
+            name: causeAssignment.cause.name,
+            metaobjectId: causeAssignment.cause.shopifyMetaobjectId,
+            percentage: weighted,
+          });
+        }
+      }
+      rollups.set(product.id, Array.from(byCause.values()));
+    }
+
+    if (changedProducts.length > 0) {
+      await prisma.$transaction(async (tx) => {
+        const changedIds = changedProducts.map((product) => product.id);
+        await tx.productCauseAssignment.deleteMany({ where: { shopId, productId: { in: changedIds } } });
+        const rows = changedProducts.flatMap((product) => (rollups.get(product.id) ?? []).map((assignment) => ({
+          shopId,
+          productId: product.id,
+          shopifyProductId: product.shopifyId,
+          causeId: assignment.causeId,
+          percentage: assignment.percentage,
+        })));
+        if (rows.length > 0) await tx.productCauseAssignment.createMany({ data: rows });
+        await tx.product.updateMany({
+          where: { shopId, id: { in: changedIds } },
+          data: { donationRoutingMode: "automatic" },
+        });
+        await tx.auditLog.create({
+          data: {
+            shopId,
+            entity: "Product",
+            action: "PRODUCT_CAUSE_OVERRIDES_BULK_CLEARED",
+            actor: "merchant",
+            payload: { productIds: changedIds, productCount: changedIds.length },
+          },
+        });
+      });
+    }
+
+    if (admin) {
+      const canWriteProducts = await canWriteShopifyProducts({ admin, shopId });
+      const shop = await prisma.shop.findUnique({
+        where: { shopId },
+        select: { productDescriptionDonationSummaryEnabled: true },
+      });
+      for (const product of changedProducts) {
+        if (!canSyncProductToShopify(product.shopifyId)) continue;
+        const derivedAssignments = rollups.get(product.id) ?? [];
+        try {
+          await syncFullProductPublicAssignmentsToShopify({ admin, shopId, product, derivedAssignments, canWriteProducts });
+          if (shop?.productDescriptionDonationSummaryEnabled) {
+            await syncProductDescriptionDonationSummary({
+              admin,
+              shopId,
+              product,
+              enabled: true,
+              canWriteProducts,
+            });
+          }
+        } catch (error) {
+          await auditProductShopifySyncFailure(shopId, product.id, product.shopifyId, error);
+        }
+      }
+    }
+
+    return jsonResponse({
+      ok: true,
+      message: `${changedProducts.length} product override${changedProducts.length === 1 ? "" : "s"} cleared; ${products.length - changedProducts.length} selected product${products.length - changedProducts.length === 1 ? " was" : "s were"} unchanged.`,
+    });
   }
 
   if (intent === "bulk-assign-artist") {
@@ -320,7 +479,18 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }),
       prisma.product.findMany({
         where: { id: { in: parsed.data.productIds }, shopId },
-        select: { id: true, shopifyId: true, title: true },
+        select: {
+          id: true,
+          shopifyId: true,
+          title: true,
+          donationRoutingMode: true,
+          _count: {
+            select: {
+              causeAssignments: true,
+              artistAssignments: { where: { status: "active" } },
+            },
+          },
+        },
       }),
     ]);
 
@@ -342,10 +512,23 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const canWriteProducts = admin ? await canWriteShopifyProducts({ admin, shopId }) : false;
       for (const product of products) {
         const derivedAssignments = await prisma.$transaction(async (tx) => {
+          const preserveDirectRouting =
+            product.donationRoutingMode === "automatic" &&
+            product._count.artistAssignments === 0 &&
+            product._count.causeAssignments > 0;
+          if (preserveDirectRouting) {
+            await tx.product.update({
+              where: { id: product.id, shopId },
+              data: { donationRoutingMode: "product_override" },
+            });
+          }
           return saveProductArtistAssignmentsLocally({
             db: tx,
             shopId,
-            product,
+            product: {
+              ...product,
+              donationRoutingMode: preserveDirectRouting ? "product_override" : product.donationRoutingMode,
+            },
             artistAssignments: [{
               artistId: artist.id,
               collaborationShare: "100",
@@ -417,6 +600,7 @@ type ProductRow = {
   configuredVariantCount: number;
   causeAssignmentCount: number;
   artistAssignmentCount: number;
+  donationRoutingMode: string;
   mappedVariantCount: number;
   mappedProviderCount: number;
 };
@@ -431,7 +615,9 @@ type BulkActionData = {
   message: string;
 };
 
-type BulkMode = "cause" | "artist";
+type BulkMode = "cause" | "artist" | "clear_override";
+
+type BulkCauseRow = { causeId: string; percentage: string };
 
 type CauseOption = {
   id: string;
@@ -459,6 +645,13 @@ function variantCostReadinessTitle(product: ProductRow) {
   return `${product.configuredVariantCount} of ${product.variantCount} variants have cost information configured. Configure ${remaining} remaining variant${remaining === 1 ? "" : "s"} before relying on estimates.`;
 }
 
+function donationRoutingLabel(product: ProductRow) {
+  if (product.donationRoutingMode === "product_override") return "Product override";
+  if (product.artistAssignmentCount > 0) return "Artist preferences";
+  if (product.causeAssignmentCount > 0) return "Direct product";
+  return "Not configured";
+}
+
 export default function ProductsPage() {
   const { catalogSynced, latestCatalogSync, products, causes, artists } = useLoaderData<typeof loader>();
   const syncFetcher = useFetcher<SyncActionData>();
@@ -466,22 +659,16 @@ export default function ProductsPage() {
   const { search } = useLocation();
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [bulkMode, setBulkMode] = useState<BulkMode>("artist");
-  const [selectedCauseId, setSelectedCauseId] = useState(causes[0]?.id ?? "");
+  const [bulkCauseRows, setBulkCauseRows] = useState<BulkCauseRow[]>([]);
+  const [bulkNoCauseOverride, setBulkNoCauseOverride] = useState(false);
   const [selectedArtistId, setSelectedArtistId] = useState(artists[0]?.id ?? "");
   const allSelected = products.length > 0 && selectedProductIds.length === products.length;
   const isBulkSubmitting = bulkFetcher.state !== "idle";
   const selectedArtist = artists.find((artist: ArtistOption) => artist.id === selectedArtistId) ?? null;
-  const selectedCause = causes.find((cause: CauseOption) => cause.id === selectedCauseId) ?? null;
 
   useEffect(() => {
     setSelectedProductIds((current) => current.filter((id) => products.some((product: ProductRow) => product.id === id)));
   }, [products]);
-
-  useEffect(() => {
-    if (causes.length > 0 && !causes.some((cause: CauseOption) => cause.id === selectedCauseId)) {
-      setSelectedCauseId(causes[0].id);
-    }
-  }, [causes, selectedCauseId]);
 
   useEffect(() => {
     if (artists.length > 0 && !artists.some((artist: ArtistOption) => artist.id === selectedArtistId)) {
@@ -507,18 +694,37 @@ export default function ProductsPage() {
     if (selectedProductIds.length === 0) return;
 
     const formData = new FormData();
-    formData.append("intent", bulkMode === "cause" ? "bulk-assign-cause" : "bulk-assign-artist");
+    formData.append(
+      "intent",
+      bulkMode === "cause"
+        ? "bulk-set-cause-routing"
+        : bulkMode === "clear_override"
+          ? "bulk-clear-cause-overrides"
+          : "bulk-assign-artist",
+    );
     selectedProductIds.forEach((id) => formData.append("productId", id));
 
     if (bulkMode === "cause") {
-      formData.append("causeId", selectedCauseId);
-    } else {
+      formData.append("assignments", JSON.stringify(bulkCauseRows));
+      if (bulkNoCauseOverride) {
+        if (!window.confirm("Apply explicit no-Cause routing to all selected products? Artist attribution and payouts remain active, but no Cause obligation will be created.")) return;
+        formData.append("confirmNoCauseOverride", "yes");
+      }
+    } else if (bulkMode === "artist") {
       formData.append("artistId", selectedArtistId);
     }
+
+    if (bulkMode === "clear_override" && !window.confirm("Clear Cause overrides for selected Artist-routed products? Products without overrides will be unchanged.")) return;
 
     bulkFetcher.submit(formData, { method: "post" });
     clearSelection();
   }
+
+  const bulkCauseTotal = bulkCauseRows.reduce((sum, row) => sum + (Number(row.percentage) || 0), 0);
+  const invalidBulkCauseRouting =
+    bulkMode === "cause" &&
+    !bulkNoCauseOverride &&
+    (bulkCauseRows.length === 0 || bulkCauseTotal > 100 || bulkCauseRows.some((row) => !row.percentage));
 
   function variantsUrl(productId: string) {
     const params = new URLSearchParams(search);
@@ -594,7 +800,7 @@ export default function ProductsPage() {
                   <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
                     <div style={{ display: "grid", gap: "0.25rem" }}>
                       <strong>{selectedProductIds.length} product{selectedProductIds.length === 1 ? "" : "s"} selected</strong>
-                      <s-text color="subdued">Bulk assignment replaces each selected product&apos;s current donation routing.</s-text>
+                      <s-text color="subdued">Cause routing changes preserve Artist attribution and payout settings.</s-text>
                     </div>
                     <s-button variant="secondary" onClick={clearSelection}>Clear selection</s-button>
                   </div>
@@ -608,7 +814,7 @@ export default function ProductsPage() {
                     }}
                   >
                     <div style={{ display: "grid", gap: "0.35rem" }}>
-                      <label htmlFor="bulk-assignment-mode">Assign as</label>
+                      <label htmlFor="bulk-assignment-mode">Bulk action</label>
                       <select
                         id="bulk-assignment-mode"
                         value={bulkMode}
@@ -616,7 +822,8 @@ export default function ProductsPage() {
                         style={fieldStyle}
                       >
                         <option value="artist">Artist</option>
-                        <option value="cause">Cause</option>
+                        <option value="cause">Set product Cause routing</option>
+                        <option value="clear_override">Clear Cause overrides</option>
                       </select>
                     </div>
 
@@ -641,27 +848,67 @@ export default function ProductsPage() {
                           />
                         </div>
                       </div>
-                    ) : (
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <strong>Cause</strong>
+                    ) : bulkMode === "cause" ? (
+                      <div style={{ display: "grid", gap: "0.65rem", gridColumn: "span 2" }}>
                         <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-                          <span style={{ color: selectedCause ? "inherit" : "var(--p-color-text-subdued, #6d7175)" }}>
-                            {selectedCause?.name ?? "No Cause selected"}
-                          </span>
+                          <strong>Cause routing ({bulkCauseTotal.toFixed(2)}%)</strong>
                           <AssignmentPicker
                             id="products-bulk-cause-picker"
-                            label="Choose Cause"
-                            triggerLabel={selectedCause ? "Change Cause" : "Choose Cause"}
+                            label="Add Causes"
+                            triggerLabel="Add Causes"
                             options={causes.map((cause: CauseOption) => ({ id: cause.id, label: cause.name }))}
-                            selectedIds={selectedCauseId ? new Set([selectedCauseId]) : new Set()}
-                            onAdd={(ids) => setSelectedCauseId(ids[0] ?? "")}
-                            multi={false}
-                            hideSelected={false}
+                            selectedIds={new Set(bulkCauseRows.map((row) => row.causeId))}
+                            onAdd={(ids) => setBulkCauseRows((current) => [
+                              ...current,
+                              ...ids.filter((id) => !current.some((row) => row.causeId === id)).map((causeId) => ({
+                                causeId,
+                                percentage: current.length === 0 && ids.length === 1 ? "100" : "",
+                              })),
+                            ])}
                             searchPlaceholder="Search Causes"
                             emptyText="No Causes match that search."
+                            disabled={bulkNoCauseOverride}
                           />
                         </div>
+                        <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                          <input
+                            type="checkbox"
+                            checked={bulkNoCauseOverride}
+                            onChange={(event) => {
+                              setBulkNoCauseOverride(event.currentTarget.checked);
+                              if (event.currentTarget.checked) setBulkCauseRows([]);
+                            }}
+                          />
+                          <span>Explicitly allocate 0% to Causes</span>
+                        </label>
+                        {bulkCauseRows.map((row, index) => (
+                          <div key={row.causeId} style={{ display: "grid", gridTemplateColumns: "minmax(10rem, 1fr) 8rem auto", gap: "0.5rem", alignItems: "center" }}>
+                            <span>{causes.find((cause: CauseOption) => cause.id === row.causeId)?.name ?? "Unknown Cause"}</span>
+                            <input
+                              aria-label={`Percentage for ${causes.find((cause: CauseOption) => cause.id === row.causeId)?.name ?? "Cause"}`}
+                              type="number"
+                              min="0.01"
+                              max="100"
+                              step="0.01"
+                              value={row.percentage}
+                              onChange={(event) => {
+                                const percentage = event.currentTarget.value;
+                                setBulkCauseRows((current) => current.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, percentage } : item,
+                                ));
+                              }}
+                              style={fieldStyle}
+                            />
+                            <button type="button" onClick={() => setBulkCauseRows((current) => current.filter((_, itemIndex) => itemIndex !== index))} style={{ ...fieldStyle, width: "auto", color: "var(--p-color-text-critical, #8e1f1f)" }}>
+                              Remove
+                            </button>
+                          </div>
+                        ))}
                       </div>
+                    ) : (
+                      <s-banner tone="info">
+                        <s-text>Selected products with an active override and Artists will return to Artist Cause preferences. Other products remain unchanged.</s-text>
+                      </s-banner>
                     )}
 
                     <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
@@ -670,11 +917,12 @@ export default function ProductsPage() {
                         disabled={
                           isBulkSubmitting ||
                           selectedProductIds.length === 0 ||
-                          (bulkMode === "artist" ? artists.length === 0 : causes.length === 0)
+                          (bulkMode === "artist" && artists.length === 0) ||
+                          invalidBulkCauseRouting
                         }
                         onClick={submitBulkAssignment}
                       >
-                        Apply assignment
+                        {bulkMode === "clear_override" ? "Clear overrides" : "Apply assignment"}
                       </s-button>
                     </div>
                   </div>
@@ -747,7 +995,14 @@ export default function ProductsPage() {
                       </Link>
                     </s-table-cell>
                     <s-table-cell>{product.artistAssignmentCount}</s-table-cell>
-                    <s-table-cell>{product.causeAssignmentCount}</s-table-cell>
+                    <s-table-cell>
+                      <div style={{ display: "grid", gap: "0.2rem" }}>
+                        <span>{product.causeAssignmentCount}</span>
+                        <s-badge tone={product.donationRoutingMode === "product_override" ? "info" : product.causeAssignmentCount > 0 ? "success" : "warning"}>
+                          {donationRoutingLabel(product)}
+                        </s-badge>
+                      </div>
+                    </s-table-cell>
                     <s-table-cell>
                       {product.mappedVariantCount > 0 ? (
                         <div style={{ display: "grid", gap: "0.2rem" }}>

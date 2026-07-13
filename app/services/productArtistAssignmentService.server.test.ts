@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Prisma } from "@prisma/client";
 import { canSyncProductToShopify, saveProductArtistAssignmentsLocally } from "./productArtistAssignmentService.server";
 
 const db = {
+  product: {
+    update: vi.fn(),
+  },
   artist: {
     findMany: vi.fn(),
   },
@@ -10,6 +14,7 @@ const db = {
     createMany: vi.fn(),
   },
   productCauseAssignment: {
+    findMany: vi.fn(),
     deleteMany: vi.fn(),
     createMany: vi.fn(),
   },
@@ -82,13 +87,13 @@ describe("saveProductArtistAssignmentsLocally", () => {
         causeId: "cause-1",
         name: "Cause One",
         metaobjectId: "gid://shopify/Metaobject/1",
-        percentage: 80,
+        percentage: new Prisma.Decimal(80),
       },
       {
         causeId: "cause-2",
         name: "Cause Two",
         metaobjectId: null,
-        percentage: 20,
+        percentage: new Prisma.Decimal(20),
       },
     ]);
     expect(db.productArtistAssignment.deleteMany).toHaveBeenCalledWith({
@@ -113,8 +118,8 @@ describe("saveProductArtistAssignmentsLocally", () => {
     });
     expect(db.productCauseAssignment.createMany).toHaveBeenCalledWith({
       data: [
-        expect.objectContaining({ causeId: "cause-1", percentage: 80 }),
-        expect.objectContaining({ causeId: "cause-2", percentage: 20 }),
+        expect.objectContaining({ causeId: "cause-1", percentage: new Prisma.Decimal(80) }),
+        expect.objectContaining({ causeId: "cause-2", percentage: new Prisma.Decimal(20) }),
       ],
     });
     expect(db.auditLog.create).toHaveBeenCalledWith({
@@ -177,9 +182,58 @@ describe("saveProductArtistAssignmentsLocally", () => {
         causeId: "cause-1",
         name: "Cause One",
         metaobjectId: "gid://shopify/Metaobject/1",
-        percentage: 50,
+        percentage: new Prisma.Decimal(50),
       },
     ]);
+  });
+
+  it("preserves a product Cause override while Artist assignments change", async () => {
+    db.artist.findMany.mockResolvedValue([
+      {
+        id: "artist-1",
+        displayName: "Alex Artist",
+        causeAssignments: [
+          {
+            causeId: "artist-cause",
+            percentage: "100",
+            cause: { name: "Artist Cause", shopifyMetaobjectId: null },
+          },
+        ],
+      },
+    ]);
+    db.productCauseAssignment.findMany.mockResolvedValue([
+      {
+        causeId: "override-cause",
+        percentage: "25",
+        cause: { name: "Override Cause", shopifyMetaobjectId: "gid://shopify/Metaobject/9" },
+      },
+    ]);
+
+    const effectiveAssignments = await saveProductArtistAssignmentsLocally({
+      db: db as never,
+      shopId: "fixture-shop.myshopify.com",
+      product: {
+        id: "product-1",
+        shopifyId: "gid://shopify/Product/1",
+        donationRoutingMode: "product_override",
+      },
+      artistAssignments: [{
+        artistId: "artist-1",
+        collaborationShare: "100",
+        payoutEnabledOverride: "inherit",
+      }],
+    });
+
+    expect(effectiveAssignments).toEqual([
+      {
+        causeId: "override-cause",
+        name: "Override Cause",
+        metaobjectId: "gid://shopify/Metaobject/9",
+        percentage: new Prisma.Decimal(25),
+      },
+    ]);
+    expect(db.productCauseAssignment.deleteMany).not.toHaveBeenCalled();
+    expect(db.productCauseAssignment.createMany).not.toHaveBeenCalled();
   });
 });
 

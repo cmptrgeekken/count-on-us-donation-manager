@@ -241,4 +241,75 @@ describe("buildVariantEstimatePayload", () => {
       }),
     ]);
   });
+
+  it("keeps Artist payouts but uses product Causes when an override is active", async () => {
+    resolveCosts.mockResolvedValue({
+      laborCost: decimal("2.00"),
+      materialCost: decimal("1.00"),
+      packagingCost: decimal("0.00"),
+      equipmentCost: decimal("0.00"),
+      mistakeBufferAmount: decimal("0.00"),
+      podCost: decimal("0.00"),
+      podCostEstimated: false,
+      podCostMissing: false,
+      totalCost: decimal("3.00"),
+      materialLines: [],
+      equipmentLines: [],
+    });
+
+    const result = await buildVariantEstimatePayload({
+      shopId: "shop-1",
+      variant: { id: "variant-1", shopifyId: "gid://shopify/ProductVariant/1", price: decimal("20.00") },
+      donationRoutingMode: "product_override",
+      causeAssignments: [{
+        causeId: "override-cause",
+        percentage: decimal("25"),
+        cause: {
+          id: "override-cause",
+          name: "Override Cause",
+          is501c3: true,
+          iconUrl: null,
+          donationLink: null,
+        },
+      }],
+      artistAssignments: [{
+        collaborationShare: decimal("100"),
+        payoutEnabledOverride: null,
+        payoutRateOverride: decimal("10"),
+        artist: {
+          paymentEnabled: true,
+          defaultPayoutRate: decimal("15"),
+          causeAssignments: [{
+            causeId: "artist-cause",
+            percentage: decimal("100"),
+            cause: {
+              id: "artist-cause",
+              name: "Artist Cause",
+              is501c3: false,
+              iconUrl: null,
+              donationLink: null,
+            },
+          }],
+        },
+      }],
+      shop: {
+        currency: "USD",
+        paymentRate: decimal("0.029"),
+        effectiveTaxRate: decimal("0.25"),
+        taxDeductionMode: "all_causes",
+      },
+      widgetTaxSuppressed: true,
+      db: {} as never,
+    });
+
+    expect(result.reconciliation.artistPayout).toBe("2.00");
+    expect(result.causes).toEqual([
+      expect.objectContaining({
+        causeId: "override-cause",
+        donationPercentage: "25.00",
+        estimatedDonationAmount: "3.53",
+      }),
+    ]);
+    expect(result.causes.some((cause) => cause.causeId === "artist-cause")).toBe(false);
+  });
 });

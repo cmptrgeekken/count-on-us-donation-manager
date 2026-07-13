@@ -370,7 +370,7 @@ type SnapshotResolution = {
     is501c3: boolean;
     percentage: Prisma.Decimal;
     amount: Prisma.Decimal;
-    source: "product" | "artist";
+    source: "product" | "artist" | "product_override";
     artistId?: string | null;
     artistName?: string | null;
   }>;
@@ -613,6 +613,7 @@ export async function createSnapshot(
           select: {
             id: true,
             shopifyId: true,
+            donationRoutingMode: true,
           },
         })
       : [];
@@ -637,8 +638,8 @@ export async function createSnapshot(
           },
         })
       : [];
-  const productByGid = new Map<string, { id: string; shopifyId: string }>(
-    products.map((product: { id: string; shopifyId: string }) => [product.shopifyId, product]),
+  const productByGid = new Map<string, { id: string; shopifyId: string; donationRoutingMode: string }>(
+    products.map((product: { id: string; shopifyId: string; donationRoutingMode: string }) => [product.shopifyId, product]),
   );
   const initialVariantIds = variants.map((variant: { id: string }) => variant.id);
   const podOverrides = await fetchSnapshotPodOverrides(shopId, initialVariantIds, db, fetchImpl);
@@ -793,6 +794,7 @@ export async function createSnapshot(
           : [];
 
         const allocationBase = Prisma.Decimal.max(finalCosts.netContribution!.mul(line.quantity), ZERO);
+        const productOverrideEnabled = product?.donationRoutingMode === "product_override";
 
         if (productArtistAssignments.length > 0) {
           for (const assignment of productArtistAssignments) {
@@ -824,18 +826,43 @@ export async function createSnapshot(
               donationRoutableAmount,
             });
 
-            for (const artistCauseAssignment of artist.causeAssignments) {
-              allocations.push({
-                causeId: artistCauseAssignment.causeId,
-                causeName: artistCauseAssignment.cause.name,
-                is501c3: artistCauseAssignment.cause.is501c3,
-                percentage: artistCauseAssignment.percentage,
-                amount: donationRoutableAmount.mul(artistCauseAssignment.percentage).div(100),
-                source: "artist",
-                artistId: artist.id,
-                artistName,
-              });
+            if (!productOverrideEnabled) {
+              for (const artistCauseAssignment of artist.causeAssignments) {
+                allocations.push({
+                  causeId: artistCauseAssignment.causeId,
+                  causeName: artistCauseAssignment.cause.name,
+                  is501c3: artistCauseAssignment.cause.is501c3,
+                  percentage: artistCauseAssignment.percentage,
+                  amount: donationRoutableAmount.mul(artistCauseAssignment.percentage).div(100),
+                  source: "artist",
+                  artistId: artist.id,
+                  artistName,
+                });
+              }
             }
+          }
+
+          if (productOverrideEnabled) {
+            const productAssignments = await db.productCauseAssignment.findMany({
+              where: { shopId, productId },
+              include: {
+                cause: { select: { id: true, name: true, is501c3: true } },
+              },
+            });
+            const pooledDonationRoutableAmount = artistAllocations.reduce(
+              (sum, allocation) => sum.add(allocation.donationRoutableAmount),
+              ZERO,
+            );
+            allocations = productAssignments.map((assignment: any) => ({
+              causeId: assignment.causeId,
+              causeName: assignment.cause.name,
+              is501c3: assignment.cause.is501c3,
+              percentage: assignment.percentage,
+              amount: pooledDonationRoutableAmount.mul(assignment.percentage).div(100),
+              source: "product_override" as const,
+              artistId: null,
+              artistName: null,
+            }));
           }
         } else {
           const productAssignments = await db.productCauseAssignment.findMany({
