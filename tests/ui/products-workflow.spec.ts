@@ -40,6 +40,41 @@ test("products page can queue a catalog sync without clearing seed data", async 
   ).toBeVisible();
 });
 
+test("products page previews Cause allocations and reveals the full routing", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/products-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.productsUrl);
+
+  await expect(page.getByText("Causes", { exact: true })).toBeVisible();
+  const configuredRow = page
+    .getByLabel("Select Configured Product")
+    .locator("xpath=ancestor::s-table-row[1]");
+  await expect(configuredRow).toContainText(
+    "Community Wildlife Conservation and Habitat Restoration",
+  );
+  await expect(configuredRow).toContainText("50%");
+  await expect(configuredRow).toContainText("Accessible Arts Education Fund");
+  await expect(configuredRow).toContainText("30%");
+  await expect(configuredRow).toContainText("+1 more");
+  await expect(configuredRow).toContainText("Product override");
+
+  await configuredRow
+    .getByRole("button", {
+      name: "View all 3 cause allocations for Configured Product",
+    })
+    .click();
+  const allocationsDialog = page.getByRole("dialog", {
+    name: "Cause allocations",
+  });
+  await expect(allocationsDialog).toBeVisible();
+  await expect(allocationsDialog).toContainText(
+    "Neighborhood Food Security Network",
+  );
+  await expect(allocationsDialog).toContainText("20%");
+});
+
 test("variants page filters by product category for bulk selection", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/products-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();

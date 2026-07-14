@@ -19,7 +19,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
+  await prisma.productCauseAssignment.deleteMany({ where: { shopId } });
   await prisma.product.deleteMany({ where: { shopId } });
+  await prisma.cause.deleteMany({ where: { shopId } });
   await prisma.shopifyCollection.deleteMany({ where: { shopId } });
 
   await prisma.shop.upsert({
@@ -60,6 +62,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         title: "Configured Product",
         handle: "configured-product",
         status: "active",
+        donationRoutingMode: "product_override",
         productCategoryId: "gid://shopify/TaxonomyCategory/aa-1",
         productCategoryName: "Stickers",
         productCategoryPath: "Arts & Entertainment > Hobbies & Creative Arts > Stickers",
@@ -146,6 +149,18 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     }),
   ]);
 
+  const causes = await Promise.all(
+    [
+      "Community Wildlife Conservation and Habitat Restoration",
+      "Accessible Arts Education Fund",
+      "Neighborhood Food Security Network",
+    ].map((name) =>
+      prisma.cause.create({
+        data: { shopId, name, status: "active" },
+      }),
+    ),
+  );
+
   await Promise.all([
     prisma.productTag.create({
       data: { shopId, productId: configuredProduct.id, value: "featured-impact" },
@@ -159,6 +174,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     prisma.productCollection.create({
       data: { shopId, productId: configuredProduct.id, collectionId: coreCollection.id },
     }),
+    ...causes.map((cause, index) =>
+      prisma.productCauseAssignment.create({
+        data: {
+          shopId,
+          productId: configuredProduct.id,
+          shopifyProductId: configuredProduct.shopifyId,
+          causeId: cause.id,
+          percentage: [50, 30, 20][index],
+        },
+      }),
+    ),
   ]);
 
   await prisma.variantCostConfig.createMany({
