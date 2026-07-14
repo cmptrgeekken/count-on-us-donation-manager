@@ -2,7 +2,7 @@ import type { PgBoss } from "pg-boss";
 import { prisma } from "../db.server";
 import { runAnalyticalRecalculation } from "../services/analyticalRecalculation.server";
 import { syncShopifyCharges } from "../services/chargeSyncService.server";
-import { fullSync, incrementalSync } from "../services/catalogSync.server";
+import { fullSync, incrementalSync, syncCollection } from "../services/catalogSync.server";
 import { processOrderUpdate, processRefund } from "../services/adjustmentService.server";
 import { runFinancialBackfill } from "../services/financialBackfill.server";
 import { runReconciliation } from "../services/reconciliationService.server";
@@ -36,6 +36,7 @@ const QUEUES = [
   "webhook.compliance",
   "catalog.sync",
   "catalog.sync.incremental",
+  "catalog.sync.collection",
   "customer-merchandising.sync",
   "provider.sync",
 ];
@@ -412,6 +413,18 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
 
       const { admin } = await unauthenticated.admin(shopId);
       await incrementalSync(shopId, admin, productGid);
+    },
+  );
+
+  await boss.work<{ shopId: string; collectionGid: string }>(
+    "catalog.sync.collection",
+    async (jobs) => {
+      const job = jobs[0];
+      if (!job) return;
+      const { shopId, collectionGid } = job.data;
+
+      const { admin } = await unauthenticated.admin(shopId);
+      await syncCollection(shopId, admin, collectionGid);
     },
   );
 

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   sendPostPurchaseDonationEmail: vi.fn(),
   createSnapshot: vi.fn(),
   runProviderSync: vi.fn(),
+  syncCollection: vi.fn(),
   adminFactory: vi.fn(),
 }));
 
@@ -26,6 +27,7 @@ vi.mock("../db.server", () => ({
 vi.mock("../services/catalogSync.server", () => ({
   fullSync: vi.fn(),
   incrementalSync: vi.fn(),
+  syncCollection: mocks.syncCollection,
 }));
 
 vi.mock("../services/chargeSyncService.server", () => ({
@@ -496,6 +498,24 @@ describe("registerAllProcessors", () => {
     expect(mocks.runProviderSync).toHaveBeenCalledWith(
       { shopId: "shop-1", runId: "run-1" },
       mocks.prisma,
+    );
+  });
+
+  it("runs collection catalog sync jobs with an offline admin client", async () => {
+    const boss = createBoss();
+    const admin = { graphql: vi.fn() };
+    mocks.adminFactory.mockResolvedValue({ admin });
+
+    await registerAllProcessors(boss as any);
+
+    const worker = boss.workers.get("catalog.sync.collection");
+    expect(worker).toBeTruthy();
+    await worker!([{ data: { shopId: "shop-1", collectionGid: "gid://shopify/Collection/10" } }]);
+
+    expect(mocks.syncCollection).toHaveBeenCalledWith(
+      "shop-1",
+      admin,
+      "gid://shopify/Collection/10",
     );
   });
 });

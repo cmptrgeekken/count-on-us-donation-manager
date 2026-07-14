@@ -20,6 +20,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   });
 
   await prisma.product.deleteMany({ where: { shopId } });
+  await prisma.shopifyCollection.deleteMany({ where: { shopId } });
 
   await prisma.shop.upsert({
     where: { shopId },
@@ -121,6 +122,42 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         price: 30,
         syncedAt,
       },
+    }),
+  ]);
+
+  const [summerCollection, coreCollection] = await Promise.all([
+    prisma.shopifyCollection.create({
+      data: {
+        shopId,
+        shopifyId: "gid://shopify/Collection/910000000001",
+        title: "Summer Giving",
+        handle: "summer-giving",
+        syncedAt,
+      },
+    }),
+    prisma.shopifyCollection.create({
+      data: {
+        shopId,
+        shopifyId: "gid://shopify/Collection/910000000002",
+        title: "Core Giving",
+        handle: "core-giving",
+        syncedAt,
+      },
+    }),
+  ]);
+
+  await Promise.all([
+    prisma.productTag.create({
+      data: { shopId, productId: configuredProduct.id, value: "featured-impact" },
+    }),
+    prisma.productTag.create({
+      data: { shopId, productId: partialProduct.id, value: "seasonal-cause" },
+    }),
+    prisma.productCollection.create({
+      data: { shopId, productId: partialProduct.id, collectionId: summerCollection.id },
+    }),
+    prisma.productCollection.create({
+      data: { shopId, productId: configuredProduct.id, collectionId: coreCollection.id },
     }),
   ]);
 

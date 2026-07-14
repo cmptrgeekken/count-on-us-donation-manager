@@ -10,7 +10,12 @@ api_version = "2026-04"
 
   [[webhooks.subscriptions]]
   topics = [
+  "products/create",
   "products/update",
+  "products/delete",
+  "collections/create",
+  "collections/update",
+  "collections/delete",
   "orders/create",
   "app/uninstalled",
   "orders/updated",

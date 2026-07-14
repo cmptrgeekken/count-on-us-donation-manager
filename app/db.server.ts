@@ -7,7 +7,7 @@ const TENANT_SCOPED_MODELS = [
   "MaterialLibraryItem", "EquipmentLibraryItem", "CostTemplate",
   // CostTemplateMaterialLine and CostTemplateEquipmentLine have no shopId field —
   // they are protected through their parent CostTemplate (cascade delete).
-  "Product", "Variant", "VariantCostConfig",
+  "Product", "ProductTag", "ShopifyCollection", "ProductCollection", "Variant", "VariantCostConfig",
   "VariantMaterialLine", "VariantEquipmentLine",
   "Cause", "ProductCauseAssignment", "Artist",
   "ArtistSubmission", "ArtistSubmissionFile",
