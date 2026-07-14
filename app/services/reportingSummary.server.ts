@@ -116,6 +116,10 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         where: {
           shopId,
           snapshot: {
+            currentForOrderRecord: { isNot: null },
+            orderRecord: {
+              lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+            },
             createdAt: {
               gte: selectedPeriod.startDate,
               lt: selectedPeriod.endDate,
@@ -158,6 +162,10 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       db.orderSnapshot.aggregate({
         where: {
           shopId,
+          currentForOrderRecord: { isNot: null },
+          orderRecord: {
+            lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+          },
           createdAt: {
             gte: selectedPeriod.startDate,
             lt: selectedPeriod.endDate,
@@ -429,6 +437,10 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         where: {
           shopId,
           snapshot: {
+            currentForOrderRecord: { isNot: null },
+            orderRecord: {
+              lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+            },
             createdAt: {
               gte: selectedPeriod.startDate,
               lt: selectedPeriod.endDate,
@@ -461,6 +473,10 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           shopId,
           status: "open",
           snapshot: {
+            currentForOrderRecord: { isNot: null },
+            orderRecord: {
+              lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+            },
             createdAt: {
               gte: selectedPeriod.startDate,
               lt: selectedPeriod.endDate,
@@ -491,6 +507,10 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       {
         periodId: null,
         snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: {
+            lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+          },
           createdAt: {
             gte: selectedPeriod.startDate,
             lt: selectedPeriod.endDate,
@@ -580,7 +600,13 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         creditName: allocation.creditName,
         allocated: ZERO,
       };
-      current.allocated = current.allocated.add(allocation.payoutAmount);
+      current.allocated = current.allocated.add(
+        computeAdjustedAllocationAmount({
+          baseAmount: allocation.payoutAmount,
+          lineNetContribution: line.netContribution,
+          lineAdjustmentTotal: adjustmentTotal,
+        }),
+      );
       artistAllocationMap.set(allocation.artistId, current);
     }
   }

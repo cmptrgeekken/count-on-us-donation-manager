@@ -41,12 +41,16 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     },
   });
+  await prisma.orderRecord.deleteMany({
+    where: { shopId, shopifyOrderId: { in: [webhookOrderId, reconciliationOrderId] } },
+  });
 
   const [webhookSnapshot, reconciliationSnapshot] = await Promise.all([
     prisma.orderSnapshot.create({
       data: {
         shopId,
         shopifyOrderId: webhookOrderId,
+        orderRecord: { create: { shopId, shopifyOrderId: webhookOrderId } },
         orderNumber: "#1001",
         origin: "webhook",
         createdAt: new Date("2026-04-05T12:00:00.000Z"),
@@ -101,6 +105,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       data: {
         shopId,
         shopifyOrderId: reconciliationOrderId,
+        orderRecord: { create: { shopId, shopifyOrderId: reconciliationOrderId } },
         orderNumber: "#1002",
         origin: "reconciliation",
         createdAt: new Date("2026-04-04T12:00:00.000Z"),
@@ -124,6 +129,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
             netContribution: new Prisma.Decimal("14.7500"),
           },
         },
+      },
+    }),
+  ]);
+
+  await Promise.all([
+    prisma.orderRecord.update({
+      where: { shopId_shopifyOrderId: { shopId, shopifyOrderId: webhookOrderId } },
+      data: {
+        currentSnapshotId: webhookSnapshot.id,
+        lifecycle: { create: { shopId, state: "active", source: "webhook" } },
+      },
+    }),
+    prisma.orderRecord.update({
+      where: { shopId_shopifyOrderId: { shopId, shopifyOrderId: reconciliationOrderId } },
+      data: {
+        currentSnapshotId: reconciliationSnapshot.id,
+        lifecycle: { create: { shopId, state: "active", source: "reconciliation" } },
       },
     }),
   ]);

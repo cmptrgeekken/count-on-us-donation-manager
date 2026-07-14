@@ -69,9 +69,10 @@ const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
     id: "reporting",
     label: "Reporting",
     path: "/app/reporting",
-    matches: ["/app/reporting", "/app/reporting-imports", "/app/expenses", "/app/order-history", "/app/audit-log"],
+    matches: ["/app/reporting", "/app/reporting-imports", "/app/production-usage", "/app/expenses", "/app/order-history", "/app/audit-log"],
     items: [
       { label: "Reporting", path: "/app/reporting" },
+      { label: "Production Usage", path: "/app/production-usage" },
       { label: "Imports & rebuild", path: "/app/reporting-imports" },
       { label: "Expenses", path: "/app/expenses" },
       { label: "Order History", path: "/app/order-history" },

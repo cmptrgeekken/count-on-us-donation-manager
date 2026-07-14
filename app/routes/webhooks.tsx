@@ -1,8 +1,41 @@
 import type { ActionFunctionArgs } from "@remix-run/node";
+import { z } from "zod";
 import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
 import { verifyWebhookHmac } from "../middleware/hmac.server";
 import { parseCatalogWebhookOperation } from "../utils/shopify-webhook-resource";
+
+const OrderWebhookSchema = z.object({
+  admin_graphql_api_id: z.string().min(1).optional(),
+  id: z.union([z.string(), z.number()]).optional(),
+  financial_status: z.string().nullable().optional(),
+  fulfillment_status: z.string().nullable().optional(),
+  cancelled_at: z.string().nullable().optional(),
+  updated_at: z.string().nullable().optional(),
+  line_items: z.array(z.record(z.string(), z.unknown())).optional(),
+}).passthrough().refine(
+  (value) => Boolean(value.admin_graphql_api_id || value.id !== undefined),
+  "Order webhook requires an order id.",
+);
+
+const RefundWebhookSchema = z.object({
+  admin_graphql_api_id: z.string().min(1).optional(),
+  id: z.union([z.string(), z.number()]).optional(),
+  order_id: z.union([z.string(), z.number()]),
+  created_at: z.string().nullable().optional(),
+  refund_line_items: z.array(z.object({
+    line_item_id: z.union([z.string(), z.number()]).nullable().optional(),
+    quantity: z.union([z.string(), z.number()]).nullable().optional(),
+    subtotal: z.union([z.string(), z.number()]).nullable().optional(),
+    line_item: z.object({
+      admin_graphql_api_id: z.string().nullable().optional(),
+      id: z.union([z.string(), z.number()]).nullable().optional(),
+    }).nullable().optional(),
+  }).passthrough()).optional(),
+}).passthrough().refine(
+  (value) => Boolean(value.admin_graphql_api_id || value.id !== undefined),
+  "Refund webhook requires a refund id.",
+);
 
 async function queueSettledSync(
   queueName: "catalog.sync.incremental" | "catalog.sync.collection",
@@ -23,7 +56,7 @@ async function queueSettledSync(
   );
 }
 
-export const action = async ({ request }: ActionFunctionArgs) => {
+export const action = async ({ request }: ActionFunctionArgs): Promise<Response> => {
   // Read raw body before any parsing — HMAC depends on unmodified bytes
   const rawBody = Buffer.from(await request.arrayBuffer());
 
@@ -82,36 +115,43 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await handleAppUninstalled(shop);
       break;
 
-    case "orders/create":
+    case "orders/create": {
+      const parsedOrder = OrderWebhookSchema.safeParse(payload);
+      if (!parsedOrder.success) return new Response(null, { status: 400 });
       await jobQueue.send("orders.snapshot", {
         shopId: shop,
         shopifyOrderId:
-          (payload as { admin_graphql_api_id?: string })
-            ?.admin_graphql_api_id ??
-          (payload as { id?: string | number })?.id?.toString() ??
+          parsedOrder.data.admin_graphql_api_id ??
+          parsedOrder.data.id?.toString() ??
           "unknown",
-        payload,
+        payload: parsedOrder.data,
       });
       break;
+      }
 
-    case "orders/updated":
+    case "orders/updated": {
+      const parsedOrder = OrderWebhookSchema.safeParse(payload);
+      if (!parsedOrder.success) return new Response(null, { status: 400 });
       await jobQueue.send("orders.updated", {
         shopId: shop,
         shopifyOrderId:
-          (payload as { admin_graphql_api_id?: string })
-            ?.admin_graphql_api_id ??
-          (payload as { id?: string | number })?.id?.toString() ??
+          parsedOrder.data.admin_graphql_api_id ??
+          parsedOrder.data.id?.toString() ??
           "unknown",
-        payload,
+        payload: parsedOrder.data,
       });
       break;
+      }
 
-    case "refunds/create":
+    case "refunds/create": {
+      const parsedRefund = RefundWebhookSchema.safeParse(payload);
+      if (!parsedRefund.success) return new Response(null, { status: 400 });
       await jobQueue.send("orders.refund", {
         shopId: shop,
-        payload,
+        payload: parsedRefund.data,
       });
       break;
+      }
 
     default:
       console.warn(`[webhook] Unhandled topic: ${topic}`);

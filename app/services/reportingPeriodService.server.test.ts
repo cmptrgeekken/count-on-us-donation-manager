@@ -225,6 +225,8 @@ describe("materializeArtistAllocationsForPeriod", () => {
             creditName: "Ada",
             payoutAmount: decimal("12.00"),
             snapshotLine: {
+              netContribution: decimal("20.00"),
+              adjustments: [],
               snapshot: {
                 artistAttribution: { artistId: "artist-1" },
               },
@@ -236,6 +238,8 @@ describe("materializeArtistAllocationsForPeriod", () => {
             creditName: "Bea",
             payoutAmount: decimal("8.00"),
             snapshotLine: {
+              netContribution: decimal("20.00"),
+              adjustments: [{ netContribAdj: decimal("-10.00") }],
               snapshot: {
                 artistAttribution: { artistId: "artist-1" },
               },
@@ -277,7 +281,7 @@ describe("materializeArtistAllocationsForPeriod", () => {
     );
     expect(result).toHaveLength(1);
     expect(result[0]?.artistId).toBe("artist-2");
-    expect(result[0]?.allocated.toString()).toBe("8");
+    expect(result[0]?.allocated.toString()).toBe("4");
     expect(create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         artistId: "artist-2",
@@ -348,6 +352,10 @@ describe("closeReportingPeriod", () => {
     expect(tx.orderSnapshot.updateMany).toHaveBeenCalledWith({
       where: {
         shopId: "shop-1",
+        currentForOrderRecord: { isNot: null },
+        orderRecord: {
+          lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+        },
         createdAt: {
           gte: period.startDate,
           lt: period.endDate,
@@ -359,6 +367,10 @@ describe("closeReportingPeriod", () => {
       where: {
         shopId: "shop-1",
         snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: {
+            lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+          },
           createdAt: {
             gte: period.startDate,
             lt: period.endDate,

@@ -83,6 +83,8 @@ export async function calculateEstimatedTaxForPeriod(
       where: {
         shopId,
         snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
           createdAt: {
             gte: period.startDate,
             lt: period.endDate,
@@ -96,6 +98,8 @@ export async function calculateEstimatedTaxForPeriod(
         shopId,
         snapshotLine: {
           snapshot: {
+            currentForOrderRecord: { isNot: null },
+            orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
             createdAt: {
               gte: period.startDate,
               lt: period.endDate,
@@ -120,6 +124,8 @@ export async function calculateEstimatedTaxForPeriod(
         shopId,
         snapshotLine: {
           snapshot: {
+            currentForOrderRecord: { isNot: null },
+            orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
             createdAt: {
               gte: period.startDate,
               lt: period.endDate,

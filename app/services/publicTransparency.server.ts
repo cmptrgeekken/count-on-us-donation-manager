@@ -254,6 +254,8 @@ export async function buildPublicTransparencyPage(
             where: {
               shopId,
               snapshot: {
+                currentForOrderRecord: { isNot: null },
+                orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
                 createdAt: {
                   gte: scopedStartDate,
                   lt: scopedEndDate,
@@ -285,6 +287,8 @@ export async function buildPublicTransparencyPage(
           db.orderSnapshot.findMany({
             where: {
               shopId,
+              currentForOrderRecord: { isNot: null },
+              orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
               createdAt: {
                 gte: scopedStartDate,
                 lt: scopedEndDate,
@@ -323,6 +327,8 @@ export async function buildPublicTransparencyPage(
                     {
                       periodId: null,
                       snapshot: {
+                        currentForOrderRecord: { isNot: null },
+                        orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
                         createdAt: {
                           gte: scopedStartDate,
                           lt: scopedEndDate,

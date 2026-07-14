@@ -99,6 +99,8 @@ export async function computeAnalyticalRecalculationSummary(shopId: string, peri
     where: {
       shopId,
       snapshot: {
+        currentForOrderRecord: { isNot: null },
+        orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
         createdAt: {
           gte: period.startDate,
           lt: period.endDate,

@@ -157,12 +157,14 @@ The dry run should compare old and proposed replacement data before writing:
 - whether payment, receipt, tax, or public disclosure evidence exists
 - whether replacement would change reporting totals
 
-The write path should be transactional. It may either:
+The original replacement design considered two transactional storage approaches:
 
 - create a replacement snapshot and mark the old snapshot as replaced, if the schema supports historical replacement links
 - delete and recreate the snapshot under the same `shopId + shopifyOrderId`, if replacement history is captured through audit logs and the current unique constraint makes parallel snapshots impractical
 
-In either case, the operation must write an audit log containing at least:
+ADR-029 selects the first approach for the lifecycle-aware implementation: a stable logical order owns immutable snapshot revisions and points to the current revision. Delete-and-recreate is not permitted once that model is introduced because it can cascade-delete correction evidence. Lifecycle and refund evidence is keyed to the logical Shopify order and must survive changed snapshot and snapshot-line IDs. Refund lines must map to the new revision, lifecycle-derived adjustments must be reconciled against the replacement values, and independent adjustment evidence must be preserved or explicitly blocked for destructive review. Snapshot replacement must not silently reset an order to active or discard the evidence needed to exclude canceled and refunded merchandise.
+
+The revision-based operation must write an audit log containing at least:
 
 - old snapshot id
 - new snapshot id, when different
@@ -217,6 +219,7 @@ For a normal rebuild, preserve:
 - tax true-up records
 - receipt/file references
 - audit records
+- order lifecycle projections and append-only refund events
 
 For a period rebuild, derived data may include:
 
@@ -237,6 +240,8 @@ Silent deletion of real payment evidence is not allowed.
 
 Because `DisbursementApplication` and `ArtistPaymentApplication` are currently linked to allocations with cascading deletes, the first safe rebuild implementation should refuse to rebuild any period whose allocations have payment applications.
 The existing allocation materialization helpers must not be reused blindly for paid periods.
+
+Rebuilt allocations and payable summaries must apply ADR-029's lifecycle eligibility resolver. Rebuilding from original snapshot values alone must not restore canceled or refunded merchandise to Cause allocations, Artist allocations, production usage, or outstanding payables.
 
 Tax true-ups should also be preserved by default.
 They represent merchant-entered filing or payment facts, not disposable reporting cache.

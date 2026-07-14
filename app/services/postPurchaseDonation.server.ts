@@ -79,10 +79,14 @@ export async function buildConfirmedOrderDonationSummary(orderId: string, shopId
       where: {
         shopId,
         shopifyOrderId: orderId,
+        currentForOrderRecord: { isNot: null },
+        orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
       },
       select: {
         lines: {
           select: {
+            netContribution: true,
+            adjustments: { select: { netContribAdj: true } },
             causeAllocations: {
               select: {
                 causeId: true,
@@ -122,6 +126,13 @@ export async function buildConfirmedOrderDonationSummary(orderId: string, shopId
   >();
 
   for (const line of snapshot.lines) {
+    const adjustedNetContribution = line.adjustments.reduce(
+      (sum, adjustment) => sum.add(adjustment.netContribAdj),
+      line.netContribution,
+    );
+    const allocationRatio = line.netContribution.equals(ZERO)
+      ? new Prisma.Decimal(1)
+      : Prisma.Decimal.max(ZERO, adjustedNetContribution.div(line.netContribution));
     for (const allocation of line.causeAllocations) {
       const current = causeMap.get(allocation.causeId) ?? {
         causeId: allocation.causeId,
@@ -131,7 +142,7 @@ export async function buildConfirmedOrderDonationSummary(orderId: string, shopId
         amount: ZERO,
       };
 
-      current.amount = current.amount.add(allocation.amount);
+      current.amount = current.amount.add(allocation.amount.mul(allocationRatio));
       causeMap.set(allocation.causeId, current);
     }
   }

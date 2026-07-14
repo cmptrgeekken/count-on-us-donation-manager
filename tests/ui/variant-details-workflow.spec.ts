@@ -76,6 +76,8 @@ test("variant details groups additional shipping material lines separately", asy
   await expect(
     page.getByRole("paragraph").filter({ hasText: "ZZZ Playwright Shipping Material" }),
   ).toBeVisible();
+  await expect(page.locator("s-badge").filter({ hasText: /^Variant-specific$/ })).toHaveCount(0);
+  await expect(page.locator("s-badge").filter({ hasText: /^Shipping$/ })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Edit", exact: true }).click();
   const editDialog = page.getByRole("dialog").filter({ hasText: "Edit material line" });
@@ -142,6 +144,7 @@ test("variant details persist production and shipping template assignments", asy
   await expect(page.getByRole("heading", { name: "Shipping template" })).toBeVisible();
   await expect(page.getByRole("paragraph").filter({ hasText: "ZZZ Playwright Shipping Material" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Override", exact: true })).toBeVisible();
+  await expect(page.locator("s-badge").filter({ hasText: /^(Template|Production|Shipping template|Shipping)$/ })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Set override" }).click();
   const shippingDialog = page.locator("dialog").filter({ hasText: "Assign shipping template override" });

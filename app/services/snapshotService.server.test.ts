@@ -6,10 +6,14 @@ const {
   resolveCosts,
   recomputeTaxOffsetCache,
   jobQueueSend,
+  mergeOrderLifecycle,
+  reconcileLifecycleAdjustmentsForSnapshot,
 } = vi.hoisted(() => ({
   resolveCosts: vi.fn(),
   recomputeTaxOffsetCache: vi.fn(),
   jobQueueSend: vi.fn(),
+  mergeOrderLifecycle: vi.fn(),
+  reconcileLifecycleAdjustmentsForSnapshot: vi.fn(),
 }));
 
 vi.mock("./costEngine.server", () => ({
@@ -24,6 +28,11 @@ vi.mock("../jobs/queue.server", () => ({
   jobQueue: {
     send: jobQueueSend,
   },
+}));
+
+vi.mock("./orderLifecycle.server", () => ({
+  mergeOrderLifecycle,
+  reconcileLifecycleAdjustmentsForSnapshot,
 }));
 
 function decimal(value: string | number) {
@@ -131,6 +140,7 @@ function createDb({
       artistAllocationCreateMany,
       orderSettlementUpsert,
       auditLogCreate,
+      tx,
     },
   };
 }
@@ -138,6 +148,8 @@ function createDb({
 describe("createSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mergeOrderLifecycle.mockResolvedValue({ state: "active", updated: true });
+    reconcileLifecycleAdjustmentsForSnapshot.mockResolvedValue({ created: 0, unresolved: [] });
   });
 
   it("returns early when a snapshot already exists for the order", async () => {
@@ -154,6 +166,132 @@ describe("createSnapshot", () => {
 
     expect(result).toEqual({ created: false, snapshotId: "existing-snapshot" });
     expect(resolveCosts).not.toHaveBeenCalled();
+  });
+
+  it("reconciles lifecycle evidence when reconciliation finds an existing snapshot", async () => {
+    const db = createDb();
+    Object.assign(db, {
+      orderRecord: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "order-record-1",
+          currentSnapshotId: "snapshot-1",
+          currentSnapshot: {
+            id: "snapshot-1",
+            revision: 1,
+            orderRecordId: "order-record-1",
+            periodId: null,
+            salesTaxCollected: decimal("0"),
+          },
+        }),
+      },
+      orderLifecycle: { upsert: vi.fn() },
+    });
+
+    const result = await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/1",
+        financial_status: "refunded",
+        updated_at: "2026-07-14T12:00:00.000Z",
+        line_items: [],
+      },
+      db as never,
+      "reconciliation",
+    );
+
+    expect(result).toEqual({ created: false, snapshotId: "snapshot-1" });
+    expect(mergeOrderLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({ orderRecordId: "order-record-1", source: "reconciliation" }),
+    );
+    expect(reconcileLifecycleAdjustmentsForSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ snapshotId: "snapshot-1" }),
+    );
+    expect(db.__spies.auditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: "ORDER_LIFECYCLE_RECONCILED" }),
+    });
+  });
+
+  it("replaces the current snapshot by appending a revision and moving the current pointer", async () => {
+    const db = createDb({
+      existingSnapshot: {
+        id: "snapshot-1",
+        revision: 1,
+        orderRecordId: "order-record-1",
+        periodId: "period-1",
+        salesTaxCollected: decimal("0"),
+      },
+      orderSnapshotCreateImpl: () => ({ id: "snapshot-2" }),
+    });
+    const tx = db.__spies.tx as typeof db.__spies.tx & {
+      orderRecord: { upsert: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
+      orderLifecycle: { upsert: ReturnType<typeof vi.fn> };
+      reportingPeriod: { updateMany: ReturnType<typeof vi.fn> };
+    };
+    tx.orderRecord = {
+      upsert: vi.fn().mockResolvedValue({ id: "order-record-1", currentSnapshotId: "snapshot-1" }),
+      update: vi.fn().mockResolvedValue({ id: "order-record-1" }),
+    };
+    tx.orderLifecycle = { upsert: vi.fn() };
+    tx.reportingPeriod = { updateMany: vi.fn().mockResolvedValue({ count: 1 }) };
+    Object.assign(db, {
+      orderRecord: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "order-record-1",
+          currentSnapshotId: "snapshot-1",
+          currentSnapshot: {
+            id: "snapshot-1",
+            revision: 1,
+            orderRecordId: "order-record-1",
+            periodId: "period-1",
+            salesTaxCollected: decimal("0"),
+          },
+        }),
+      },
+    });
+
+    const result = await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/1",
+        financial_status: "paid",
+        line_items: [],
+      },
+      db as never,
+      "historical_import",
+      fetch,
+      {
+        replaceExistingSnapshotId: "snapshot-1",
+        replacementReason: "Rebuild with corrected costs",
+        replacementSource: "merchant_rebuild",
+      },
+    );
+
+    expect(result).toEqual({ created: true, snapshotId: "snapshot-2" });
+    expect(db.__spies.orderSnapshotCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderRecordId: "order-record-1",
+        revision: 2,
+        replacementSource: "merchant_rebuild",
+        replacementReason: "Rebuild with corrected costs",
+      }),
+    });
+    expect(tx.orderRecord.update).toHaveBeenCalledWith({
+      where: { id: "order-record-1", shopId: "shop-1" },
+      data: { currentSnapshotId: "snapshot-2" },
+    });
+    expect(reconcileLifecycleAdjustmentsForSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderRecordId: "order-record-1",
+        snapshotId: "snapshot-2",
+      }),
+    );
+    expect(tx.reportingPeriod.updateMany).toHaveBeenCalledWith({
+      where: { id: "period-1", shopId: "shop-1" },
+      data: {
+        rebuildRequired: true,
+        rebuildRequestedAt: expect.any(Date),
+      },
+    });
   });
 
   it("creates an external settlement review for marketplace orders paid outside Shopify", async () => {

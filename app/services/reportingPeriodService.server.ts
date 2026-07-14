@@ -192,6 +192,10 @@ export async function materializeCauseAllocationsForPeriod(
     where: {
       shopId,
       snapshot: {
+        currentForOrderRecord: { isNot: null },
+        orderRecord: {
+          lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+        },
         createdAt: {
           gte: period.startDate,
           lt: period.endDate,
@@ -310,6 +314,10 @@ export async function materializeArtistAllocationsForPeriod(
       payoutExclusionReason: null,
       snapshotLine: {
         snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: {
+            lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+          },
           createdAt: {
             gte: period.startDate,
             lt: period.endDate,
@@ -324,6 +332,8 @@ export async function materializeArtistAllocationsForPeriod(
       payoutAmount: true,
       snapshotLine: {
         select: {
+          netContribution: true,
+          adjustments: { select: { netContribAdj: true } },
           snapshot: {
             select: {
               artistAttribution: {
@@ -347,7 +357,14 @@ export async function materializeArtistAllocationsForPeriod(
       artistId: allocation.artistId,
       artistName: allocation.artistName,
       creditName: allocation.creditName,
-      allocated: allocation.payoutAmount,
+      allocated: computeAdjustedAllocationAmount({
+        baseAmount: allocation.payoutAmount,
+        lineNetContribution: allocation.snapshotLine.netContribution,
+        lineAdjustmentTotal: allocation.snapshotLine.adjustments.reduce(
+          (sum, adjustment) => sum.add(adjustment.netContribAdj),
+          ZERO,
+        ),
+      }),
     });
   }
 
@@ -466,6 +483,10 @@ export async function closeReportingPeriod(
     await tx.orderSnapshot.updateMany({
       where: {
         shopId,
+        currentForOrderRecord: { isNot: null },
+        orderRecord: {
+          lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+        },
         createdAt: {
           gte: closingPeriod.startDate,
           lt: closingPeriod.endDate,
@@ -478,6 +499,10 @@ export async function closeReportingPeriod(
       where: {
         shopId,
         snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: {
+            lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+          },
           createdAt: {
             gte: closingPeriod.startDate,
             lt: closingPeriod.endDate,

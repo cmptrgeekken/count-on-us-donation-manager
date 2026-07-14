@@ -15,20 +15,44 @@ export async function recomputeTaxOffsetCache(shopId: string, db = prisma) {
       where: {
         shopId,
         is501c3: true,
+        snapshotLine: {
+          snapshot: {
+            currentForOrderRecord: { isNot: null },
+            orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
+          },
+        },
       },
       _sum: { amount: true },
     }),
     db.orderSnapshotLine.aggregate({
-      where: { shopId },
+      where: {
+        shopId,
+        snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
+        },
+      },
       _sum: { netContribution: true },
     }),
     db.adjustment.aggregate({
-      where: { shopId },
+      where: {
+        shopId,
+        snapshotLine: {
+          snapshot: {
+            currentForOrderRecord: { isNot: null },
+            orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
+          },
+        },
+      },
       _sum: { netContribAdj: true },
     }),
     db.orderSnapshotLine.findMany({
       where: {
         shopId,
+        snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
+        },
         causeAllocations: {
           some: {
             is501c3: true,

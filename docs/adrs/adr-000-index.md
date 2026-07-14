@@ -34,6 +34,7 @@ This directory contains Architecture Decision Records (ADRs) for the Shopify Don
 | [ADR-026](adr-026-customer-facing-artist-cause-merchandising.md) | Customer-facing artist and cause merchandising | Proposed | July 2026 |
 | [ADR-027](adr-027-product-cause-routing-overrides.md) | Product Cause routing overrides for Artist collaborations | Proposed | July 2026 |
 | [ADR-028](adr-028-product-search-metadata-sync.md) | Shopify product search metadata synchronization | Accepted | July 2026 |
+| [ADR-029](adr-029-production-usage-reporting-and-order-lifecycle.md) | Production usage reporting and order lifecycle eligibility | Accepted | July 2026 |
 
 ## Dependencies
 
@@ -64,6 +65,7 @@ ADR-025 (Template assignment product yield) - extends ADR-001, ADR-003, ADR-008,
 ADR-026 (Customer-facing artist and cause merchandising) - extends ADR-004, ADR-012, ADR-013, ADR-014, and ADR-021 for public Artist/Cause directories, metaobject-backed product filtering, artist image overlays, and opt-in product description donation summaries
 ADR-027 (Product Cause routing overrides for Artist collaborations) - extends ADR-001, ADR-013, ADR-017, ADR-024, and ADR-026 for explicit product override precedence, independent Artist and Cause configuration, bulk routing changes, and immutable resolved allocation sources
 ADR-028 (Shopify product search metadata synchronization) - extends ADR-006 and ADR-015 with normalized tags and collections, dual product/collection webhook reconciliation, and local admin search behavior
+ADR-029 (Production usage reporting and order lifecycle eligibility) - extends ADR-001, ADR-002, ADR-008, ADR-013, ADR-019, and ADR-022 with snapshot-based production usage aggregation, cancellation/refund eligibility, and shared lifecycle reconciliation
 ```
 
 ## Conventions
