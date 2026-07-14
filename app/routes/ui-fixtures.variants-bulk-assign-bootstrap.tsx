@@ -35,10 +35,23 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     where: { shopId },
   });
 
+  await prisma.materialLibraryItem.deleteMany({
+    where: { shopId },
+  });
+
   const oldTemplate = await prisma.costTemplate.create({
     data: {
       shopId,
       name: "Old Template",
+      status: "active",
+    },
+  });
+
+  const shippingTemplate = await prisma.costTemplate.create({
+    data: {
+      shopId,
+      name: "Bulk Assigned Shipping Template",
+      type: "shipping",
       status: "active",
     },
   });
@@ -48,7 +61,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       shopId,
       name: "Bulk Assigned Template",
       status: "active",
+      defaultShippingTemplateId: shippingTemplate.id,
     },
+  });
+
+  const [countedMaterial, yieldMaterial, usesMaterial, shippingMaterial] = await Promise.all([
+    prisma.materialLibraryItem.create({
+      data: { shopId, name: "Bulk Counted Material", type: "production", costingModel: "counted", purchasePrice: 10, purchaseQty: 10, perUnitCost: 1 },
+    }),
+    prisma.materialLibraryItem.create({
+      data: { shopId, name: "Bulk Yield Material", type: "production", costingModel: "yield", purchasePrice: 10, purchaseQty: 1, perUnitCost: 10 },
+    }),
+    prisma.materialLibraryItem.create({
+      data: { shopId, name: "Bulk Uses Material", type: "production", costingModel: "uses", purchasePrice: 10, purchaseQty: 1, perUnitCost: 10, totalUsesPerUnit: 20 },
+    }),
+    prisma.materialLibraryItem.create({
+      data: { shopId, name: "Bulk Shipping Material", type: "shipping", costingModel: null, purchasePrice: 10, purchaseQty: 10, perUnitCost: 1 },
+    }),
+  ]);
+
+  await prisma.costTemplateMaterialLine.createMany({
+    data: [
+      { templateId: newTemplate.id, materialId: countedMaterial.id, quantity: 2 },
+      { templateId: newTemplate.id, materialId: yieldMaterial.id, quantity: 2, yield: 8 },
+      { templateId: newTemplate.id, materialId: usesMaterial.id, quantity: 1, usesPerVariant: 3 },
+      { templateId: shippingTemplate.id, materialId: shippingMaterial.id, quantity: 1 },
+    ],
   });
 
   const product = await prisma.product.create({
@@ -86,12 +124,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     },
   });
 
-  await prisma.variantCostConfig.create({
+  const configuredCostConfig = await prisma.variantCostConfig.create({
     data: {
       shopId,
       variantId: configuredVariant.id,
       productionTemplateId: oldTemplate.id,
+      lineItemCount: 4,
     },
+  });
+
+  await prisma.variantMaterialLine.createMany({
+    data: [
+      { shopId, configId: configuredCostConfig.id, materialId: countedMaterial.id, quantity: 2, yield: 99, usesPerVariant: 99 },
+      { shopId, configId: configuredCostConfig.id, materialId: yieldMaterial.id, quantity: 2, yield: 8, usesPerVariant: 99 },
+      { shopId, configId: configuredCostConfig.id, materialId: usesMaterial.id, quantity: 99, yield: 99, usesPerVariant: 3 },
+      { shopId, configId: configuredCostConfig.id, materialId: shippingMaterial.id, quantity: 1, yield: 99, usesPerVariant: 99 },
+    ],
   });
 
   return jsonResponse({

@@ -19,7 +19,7 @@ test("variants bulk template assignment works on the real route", async ({ page,
   const assignDialog = page.getByRole("dialog").filter({ hasText: "Assign template" });
   await expect(assignDialog).toBeVisible();
 
-  await page.locator("#variant-template-assign").selectOption({ label: bootstrap.newTemplateName });
+  await expect(assignDialog).toContainText(bootstrap.newTemplateName);
   await assignDialog.getByRole("button", { name: "Assign", exact: true }).click();
 
   const confirmDialog = page.getByRole("dialog").filter({ hasText: "Overwrite existing configurations?" });
@@ -38,4 +38,26 @@ test("variants bulk template assignment works on the real route", async ({ page,
   await page.reload();
   await expect(page.getByLabel("Select Configured Variant").locator("xpath=ancestor::s-table-row[1]")).toContainText(bootstrap.newTemplateName);
   await expect(page.getByLabel("Select Unconfigured Variant").locator("xpath=ancestor::s-table-row[1]")).toContainText(bootstrap.newTemplateName);
+});
+
+test("bulk assignment removes yield-aware production and shipping duplicates", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/variants-bulk-assign-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.variantsUrl);
+
+  await page.getByLabel("Select Configured Variant").check();
+  await page.getByRole("button", { name: "Assign template" }).click();
+  const assignDialog = page.getByRole("dialog").filter({ hasText: "Assign template" });
+  await expect(assignDialog).toContainText(bootstrap.newTemplateName);
+  await assignDialog.getByLabel("Remove exact duplicate variant lines already included in this template.").check();
+  await assignDialog.getByRole("button", { name: "Assign", exact: true }).click();
+
+  const confirmDialog = page.getByRole("dialog").filter({ hasText: "Overwrite existing configurations?" });
+  await confirmDialog.getByRole("button", { name: "Yes, overwrite" }).click();
+
+  await expect(page.locator("s-banner[tone='success']")).toContainText(
+    "Removed 4 exact duplicate line item(s).",
+  );
 });

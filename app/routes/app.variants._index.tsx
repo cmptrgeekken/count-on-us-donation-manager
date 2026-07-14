@@ -9,10 +9,9 @@ import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { parseOptionalPositiveWholeNumber } from "../utils/number-parsing";
+import { materialLineValuesEqual } from "../utils/material-line-comparison";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
-
-type DecimalLike = { toString(): string };
 
 type BulkAssignmentMismatch = {
   variantId: string;
@@ -22,7 +21,7 @@ type BulkAssignmentMismatch = {
   equipmentNames: string[];
 };
 
-function nullableDecimalEqual(left: DecimalLike | null, right: DecimalLike | null) {
+function nullableDecimalEqual(left: { toString(): string } | null, right: { toString(): string } | null) {
   if (left === null || right === null) return left === right;
   return left.toString() === right.toString();
 }
@@ -39,13 +38,40 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterProductId = url.searchParams.get("product") ?? "";
   const filterCategory = url.searchParams.get("category") ?? "";
   const filterConfigured = url.searchParams.get("configured") ?? "";
+  const filterProductTitle = url.searchParams.get("productTitle")?.trim() ?? "";
+  const filterVariantTitle = url.searchParams.get("variantTitle")?.trim() ?? "";
+  const filterSku = url.searchParams.get("sku")?.trim() ?? "";
+  const filterTemplate = url.searchParams.get("template")?.trim() ?? "";
+  const filterPodProvider = url.searchParams.get("podProvider")?.trim() ?? "";
 
   const [allVariants, products, templates, shop, taxOffsetCache] = await Promise.all([
     prisma.variant.findMany({
       where: {
         shopId,
         ...(filterProductId ? { productId: filterProductId } : {}),
-        ...(filterCategory ? { product: { productCategoryPath: filterCategory } } : {}),
+        ...(filterCategory || filterProductTitle
+          ? {
+              product: {
+                ...(filterCategory ? { productCategoryPath: filterCategory } : {}),
+                ...(filterProductTitle ? { title: { contains: filterProductTitle, mode: "insensitive" } } : {}),
+              },
+            }
+          : {}),
+        ...(filterVariantTitle ? { title: { contains: filterVariantTitle, mode: "insensitive" } } : {}),
+        ...(filterSku ? { sku: { contains: filterSku, mode: "insensitive" } } : {}),
+        ...(filterTemplate
+          ? { costConfig: { productionTemplate: { name: { contains: filterTemplate, mode: "insensitive" } } } }
+          : {}),
+        ...(filterPodProvider
+          ? {
+              providerMappings: {
+                some: {
+                  status: "mapped",
+                  provider: { contains: filterPodProvider, mode: "insensitive" },
+                },
+              },
+            }
+          : {}),
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {
@@ -233,6 +259,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     filterProductId,
     filterCategory,
     filterConfigured,
+    filterProductTitle,
+    filterVariantTitle,
+    filterSku,
+    filterTemplate,
+    filterPodProvider,
   });
 };
 
@@ -279,6 +310,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             material: { select: { name: true, costingModel: true } },
           },
         },
+        defaultShippingTemplate: {
+          select: {
+            materialLines: {
+              select: {
+                id: true,
+                materialId: true,
+                quantity: true,
+                yield: true,
+                usesPerVariant: true,
+                material: { select: { name: true, costingModel: true } },
+              },
+            },
+          },
+        },
         equipmentLines: {
           select: {
             id: true,
@@ -315,6 +360,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
               where: { templateLineId: null },
               include: { equipment: { select: { name: true } } },
             },
+            shippingTemplate: {
+              select: {
+                materialLines: {
+                  select: {
+                    id: true,
+                    materialId: true,
+                    quantity: true,
+                    yield: true,
+                    usesPerVariant: true,
+                    material: { select: { name: true, costingModel: true } },
+                  },
+                },
+              },
+            },
           },
         },
       },
@@ -322,14 +381,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
     if (variantsToAssign.length !== variantIds.length) {
       return jsonResponse({ ok: false, message: "One or more selected variants could not be found." }, { status: 404 });
-    }
-
-    const templateMaterialLinesByMaterialId = new Map<string, typeof template.materialLines>();
-    for (const line of template.materialLines) {
-      templateMaterialLinesByMaterialId.set(line.materialId, [
-        ...(templateMaterialLinesByMaterialId.get(line.materialId) ?? []),
-        line,
-      ]);
     }
 
     const templateEquipmentLinesByEquipmentId = new Map<string, typeof template.equipmentLines>();
@@ -355,19 +406,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         equipmentNames: [],
       };
 
+      const effectiveShippingMaterialLines =
+        variant.costConfig.shippingTemplate?.materialLines ?? template.defaultShippingTemplate?.materialLines ?? [];
+      const effectiveTemplateMaterialLines = [...template.materialLines, ...effectiveShippingMaterialLines];
+      const productionTemplateLineIds = new Set(template.materialLines.map((line) => line.id));
+      const templateMaterialLinesByMaterialId = new Map<string, typeof effectiveTemplateMaterialLines>();
+      for (const line of effectiveTemplateMaterialLines) {
+        templateMaterialLinesByMaterialId.set(line.materialId, [
+          ...(templateMaterialLinesByMaterialId.get(line.materialId) ?? []),
+          line,
+        ]);
+      }
+
       for (const variantLine of variant.costConfig.materialLines) {
         const matchingTemplateLines = templateMaterialLinesByMaterialId.get(variantLine.materialId) ?? [];
         if (matchingTemplateLines.length !== 1) continue;
 
         const templateLine = matchingTemplateLines[0];
         const effectiveTemplateYield =
-          templateProductYield && templateLine.material.costingModel === "yield"
+          productionTemplateLineIds.has(templateLine.id) &&
+          templateProductYield &&
+          templateLine.material.costingModel === "yield"
             ? new Prisma.Decimal(templateProductYield)
             : templateLine.yield;
-        const isExactDuplicate =
-          nullableDecimalEqual(variantLine.quantity, templateLine.quantity) &&
-          nullableDecimalEqual(variantLine.yield, effectiveTemplateYield) &&
-          nullableDecimalEqual(variantLine.usesPerVariant, templateLine.usesPerVariant);
+        const isExactDuplicate = materialLineValuesEqual(
+          templateLine.material.costingModel,
+          variantLine,
+          { ...templateLine, yield: effectiveTemplateYield },
+        );
 
         if (isExactDuplicate) {
           exactDuplicateMaterialLineIds.push(variantLine.id);
@@ -531,7 +597,20 @@ function estimateTotalCost(estimate: VariantEstimatePayload) {
 }
 
 export default function VariantsPage() {
-  const { variants, products, categories, templates, filterProductId, filterCategory, filterConfigured } = useLoaderData<typeof loader>();
+  const {
+    variants,
+    products,
+    categories,
+    templates,
+    filterProductId,
+    filterCategory,
+    filterConfigured,
+    filterProductTitle,
+    filterVariantTitle,
+    filterSku,
+    filterTemplate,
+    filterPodProvider,
+  } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{
     ok: boolean;
     message: string;
@@ -657,6 +736,11 @@ export default function VariantsPage() {
     const product = formData.get("product")?.toString() ?? "";
     const category = formData.get("category")?.toString() ?? "";
     const configured = formData.get("configured")?.toString() ?? "";
+    const productTitle = formData.get("productTitle")?.toString().trim() ?? "";
+    const variantTitle = formData.get("variantTitle")?.toString().trim() ?? "";
+    const sku = formData.get("sku")?.toString().trim() ?? "";
+    const template = formData.get("template")?.toString().trim() ?? "";
+    const podProvider = formData.get("podProvider")?.toString().trim() ?? "";
 
     if (product) params.set("product", product);
     else params.delete("product");
@@ -667,6 +751,11 @@ export default function VariantsPage() {
     if (configured) params.set("configured", configured);
     else params.delete("configured");
 
+    for (const [name, value] of Object.entries({ productTitle, variantTitle, sku, template, podProvider })) {
+      if (value) params.set(name, value);
+      else params.delete(name);
+    }
+
     navigate(`?${params.toString()}`);
   }
 
@@ -675,6 +764,11 @@ export default function VariantsPage() {
     params.delete("product");
     params.delete("category");
     params.delete("configured");
+    params.delete("productTitle");
+    params.delete("variantTitle");
+    params.delete("sku");
+    params.delete("template");
+    params.delete("podProvider");
     navigate(`?${params.toString()}`);
   }
 
@@ -683,9 +777,19 @@ export default function VariantsPage() {
     const product = searchParams.get("product");
     const category = searchParams.get("category");
     const configured = searchParams.get("configured");
+    const productTitle = searchParams.get("productTitle");
+    const variantTitle = searchParams.get("variantTitle");
+    const sku = searchParams.get("sku");
+    const template = searchParams.get("template");
+    const podProvider = searchParams.get("podProvider");
     if (product) params.set("product", product);
     if (category) params.set("category", category);
     if (configured) params.set("configured", configured);
+    if (productTitle) params.set("productTitle", productTitle);
+    if (variantTitle) params.set("variantTitle", variantTitle);
+    if (sku) params.set("sku", sku);
+    if (template) params.set("template", template);
+    if (podProvider) params.set("podProvider", podProvider);
     const query = params.toString();
     return `/app/variants-export${query ? `?${query}` : ""}`;
   }
@@ -778,7 +882,7 @@ export default function VariantsPage() {
           </s-banner>
         ) : null}
 
-        {variants.length === 0 && !filterProductId && !filterCategory && !filterConfigured ? (
+        {variants.length === 0 && !filterProductId && !filterCategory && !filterConfigured && !filterProductTitle && !filterVariantTitle && !filterSku && !filterTemplate && !filterPodProvider ? (
           <s-section heading="No variants synced yet">
             <s-text>Variants will appear here after the initial catalog sync completes.</s-text>
           </s-section>
@@ -872,13 +976,42 @@ export default function VariantsPage() {
                     </select>
                   </div>
 
+                  {[
+                    ["productTitle", "variants-product-title-filter", "Product title", filterProductTitle],
+                    ["variantTitle", "variants-variant-title-filter", "Variant title", filterVariantTitle],
+                    ["sku", "variants-sku-filter", "SKU", filterSku],
+                    ["template", "variants-template-filter", "Template", filterTemplate],
+                    ["podProvider", "variants-pod-provider-filter", "POD provider", filterPodProvider],
+                  ].map(([name, id, label, defaultValue]) => (
+                    <div key={name} style={{ display: "grid", gap: "0.35rem" }}>
+                      <label htmlFor={id}>{label}</label>
+                      <input
+                        id={id}
+                        name={name}
+                        type="search"
+                        defaultValue={defaultValue}
+                        placeholder={`Filter by ${label.toLowerCase()}`}
+                        style={{
+                          width: "100%",
+                          boxSizing: "border-box",
+                          padding: "0.75rem",
+                          borderRadius: "0.75rem",
+                          border: "1px solid var(--p-color-border, #d2d5d8)",
+                          background: "var(--p-color-bg-surface, #fff)",
+                          color: "var(--p-color-text, #303030)",
+                          font: "inherit",
+                        }}
+                      />
+                    </div>
+                  ))}
+
                   <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
                     <s-button type="submit" variant="primary">Apply filters</s-button>
                     <s-button variant="secondary" onClick={clearFilters}>Clear</s-button>
                   </div>
                 </div>
 
-                {(filterProductId || filterCategory || filterConfigured) && (
+                {(filterProductId || filterCategory || filterConfigured || filterProductTitle || filterVariantTitle || filterSku || filterTemplate || filterPodProvider) && (
                   <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
                     {filterProductId && (
                       <s-badge tone="info">
@@ -895,6 +1028,11 @@ export default function VariantsPage() {
                         {filterConfigured === "yes" ? "Configured only" : "Not configured only"}
                       </s-badge>
                     )}
+                    {filterProductTitle && <s-badge tone="info">Product title: {filterProductTitle}</s-badge>}
+                    {filterVariantTitle && <s-badge tone="info">Variant title: {filterVariantTitle}</s-badge>}
+                    {filterSku && <s-badge tone="info">SKU: {filterSku}</s-badge>}
+                    {filterTemplate && <s-badge tone="info">Template: {filterTemplate}</s-badge>}
+                    {filterPodProvider && <s-badge tone="info">POD provider: {filterPodProvider}</s-badge>}
                   </div>
                 )}
               </form>
