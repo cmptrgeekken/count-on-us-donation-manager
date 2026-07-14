@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyShippingTemplateSelectionToVariantDraft,
   applyTemplateSelectionToVariantDraft,
   buildVariantTemplateEquipmentDraftLines,
   buildVariantTemplateMaterialDraftLines,
@@ -27,6 +28,7 @@ const catalogEntry: TemplateCatalogEntry = {
       quantity: "2",
       yield: "10",
       usesPerVariant: null,
+      lineCost: "2.00",
     },
   ],
   equipmentLines: [
@@ -41,6 +43,7 @@ const catalogEntry: TemplateCatalogEntry = {
       yieldDurationMinutes: null,
       yieldUses: null,
       yieldQuantity: null,
+      lineCost: "2.40",
     },
   ],
 };
@@ -108,8 +111,10 @@ describe("staged editor helpers", () => {
           overrideQuantity: "5",
           overrideYield: "8",
           overrideUsesPerVariant: null,
+          overrideLineCost: null,
         },
       ],
+      shippingTemplateMaterialLines: [],
       templateEquipmentLines: [
         {
           ...buildVariantTemplateEquipmentDraftLines(catalogEntry)[0],
@@ -136,10 +141,12 @@ describe("staged editor helpers", () => {
           quantity: "2",
           yield: "10",
           usesPerVariant: null,
+          lineCost: "2.00",
           hasOverride: false,
           overrideQuantity: null,
           overrideYield: null,
           overrideUsesPerVariant: null,
+          overrideLineCost: null,
         },
       ],
       templateEquipmentLines: [
@@ -154,6 +161,7 @@ describe("staged editor helpers", () => {
           yieldDurationMinutes: null,
           yieldUses: null,
           yieldQuantity: null,
+          lineCost: "2.40",
           hasOverride: false,
           overrideUsageMode: null,
           overrideMinutes: null,
@@ -161,6 +169,7 @@ describe("staged editor helpers", () => {
           overrideYieldDurationMinutes: null,
           overrideYieldUses: null,
           overrideYieldQuantity: null,
+          overrideLineCost: null,
         },
       ],
     });
@@ -180,6 +189,7 @@ describe("staged editor helpers", () => {
       laborRate: "",
       mistakeBuffer: "",
       templateMaterialLines: [],
+      shippingTemplateMaterialLines: [],
       templateEquipmentLines: [],
       materialLines: [],
       equipmentLines: [],
@@ -202,6 +212,7 @@ describe("staged editor helpers", () => {
           quantity: "1",
           yield: null,
           usesPerVariant: "2",
+          lineCost: "0.20",
         },
       ],
     };
@@ -212,5 +223,38 @@ describe("staged editor helpers", () => {
       laborMinutes: "12",
       materialLines: [{ materialId: "mat-2", quantity: "1", yield: "", usesPerVariant: "2" }],
     });
+  });
+
+  it("rebuilds shipping template lines and tracks shipping overrides as meaningful state", () => {
+    const emptyDraft: VariantDraft = {
+      productionTemplateId: null,
+      shippingTemplateId: null,
+      preferredPackageId: null,
+      templateProductYield: "",
+      packedLength: "",
+      packedWidth: "",
+      packedHeight: "",
+      packedWeightGrams: "",
+      canSharePackage: true,
+      laborMinutes: "",
+      laborRate: "",
+      mistakeBuffer: "",
+      templateMaterialLines: [],
+      shippingTemplateMaterialLines: [],
+      templateEquipmentLines: [],
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const selected = applyShippingTemplateSelectionToVariantDraft(emptyDraft, catalogEntry);
+    expect(selected.shippingTemplateMaterialLines).toHaveLength(1);
+    expect(hasMeaningfulVariantDraft({
+      ...selected,
+      shippingTemplateId: null,
+      shippingTemplateMaterialLines: selected.shippingTemplateMaterialLines.map((line) => ({
+        ...line,
+        hasOverride: true,
+      })),
+    })).toBe(true);
   });
 });

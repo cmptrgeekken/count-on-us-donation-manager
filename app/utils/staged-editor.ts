@@ -44,6 +44,7 @@ export type TemplateCatalogMaterialLine = {
   quantity: string;
   yield: string | null;
   usesPerVariant: string | null;
+  lineCost: string;
 };
 
 export type TemplateCatalogEquipmentLine = {
@@ -57,6 +58,7 @@ export type TemplateCatalogEquipmentLine = {
   yieldDurationMinutes: string | null;
   yieldUses: string | null;
   yieldQuantity: string | null;
+  lineCost: string;
 };
 
 export type TemplateCatalogEntry = {
@@ -75,6 +77,7 @@ export type VariantTemplateMaterialDraftLine = TemplateCatalogMaterialLine & {
   overrideQuantity: string | null;
   overrideYield: string | null;
   overrideUsesPerVariant: string | null;
+  overrideLineCost: string | null;
 };
 
 export type VariantTemplateEquipmentDraftLine = TemplateCatalogEquipmentLine & {
@@ -85,6 +88,7 @@ export type VariantTemplateEquipmentDraftLine = TemplateCatalogEquipmentLine & {
   overrideYieldDurationMinutes: string | null;
   overrideYieldUses: string | null;
   overrideYieldQuantity: string | null;
+  overrideLineCost: string | null;
 };
 
 export type VariantAdditionalMaterialDraftLine = {
@@ -97,6 +101,7 @@ export type VariantAdditionalMaterialDraftLine = {
   quantity: string;
   yield: string | null;
   usesPerVariant: string | null;
+  lineCost: string | null;
 };
 
 export type VariantAdditionalEquipmentDraftLine = {
@@ -112,6 +117,7 @@ export type VariantAdditionalEquipmentDraftLine = {
   yieldDurationMinutes: string | null;
   yieldUses: string | null;
   yieldQuantity: string | null;
+  lineCost: string | null;
 };
 
 export type VariantDraft = {
@@ -128,6 +134,7 @@ export type VariantDraft = {
   laborRate: string;
   mistakeBuffer: string;
   templateMaterialLines: VariantTemplateMaterialDraftLine[];
+  shippingTemplateMaterialLines: VariantTemplateMaterialDraftLine[];
   templateEquipmentLines: VariantTemplateEquipmentDraftLine[];
   materialLines: VariantAdditionalMaterialDraftLine[];
   equipmentLines: VariantAdditionalEquipmentDraftLine[];
@@ -177,6 +184,7 @@ export function buildVariantTemplateMaterialDraftLines(
     overrideQuantity: null,
     overrideYield: null,
     overrideUsesPerVariant: null,
+    overrideLineCost: null,
   }));
 }
 
@@ -196,6 +204,7 @@ export function buildVariantTemplateEquipmentDraftLines(
     overrideYieldDurationMinutes: null,
     overrideYieldUses: null,
     overrideYieldQuantity: null,
+    overrideLineCost: null,
   }));
 }
 
@@ -219,6 +228,7 @@ export function applyShippingTemplateSelectionToVariantDraft(
   return {
     ...draft,
     shippingTemplateId: template?.id ?? null,
+    shippingTemplateMaterialLines: buildVariantTemplateMaterialDraftLines(template),
   };
 }
 
@@ -237,6 +247,14 @@ export function normalizeVariantDraft(draft: VariantDraft) {
     laborRate: draft.laborRate,
     mistakeBuffer: draft.mistakeBuffer,
     templateMaterialLines: draft.templateMaterialLines.map((line) => ({
+      templateLineId: line.templateLineId,
+      materialId: line.materialId,
+      hasOverride: line.hasOverride,
+      overrideQuantity: line.overrideQuantity ?? "",
+      overrideYield: line.overrideYield ?? "",
+      overrideUsesPerVariant: line.overrideUsesPerVariant ?? "",
+    })),
+    shippingTemplateMaterialLines: draft.shippingTemplateMaterialLines.map((line) => ({
       templateLineId: line.templateLineId,
       materialId: line.materialId,
       hasOverride: line.hasOverride,
@@ -290,6 +308,7 @@ export function hasMeaningfulVariantDraft(draft: VariantDraft) {
       draft.materialLines.length ||
       draft.equipmentLines.length ||
       draft.templateMaterialLines.some((line) => line.hasOverride) ||
+      draft.shippingTemplateMaterialLines.some((line) => line.hasOverride) ||
       draft.templateEquipmentLines.some((line) => line.hasOverride),
   );
 }

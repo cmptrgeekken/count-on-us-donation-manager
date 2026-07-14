@@ -961,6 +961,60 @@ describe("resolveCosts material cost methods", () => {
     expect(result.packagingCost.toString()).toBe("5");
     expect(result.totalCost.toString()).toBe("29");
   });
+
+  it("applies a variant override to an inherited shipping template line", async () => {
+    const shippingMaterial = createMaterial({
+      id: "mailer",
+      type: "shipping",
+      costingModel: "counted",
+      purchasePrice: "2",
+      purchaseQty: "1",
+    });
+    const shippingTemplateLine = {
+      id: "default-ship-line",
+      materialId: "mailer",
+      material: shippingMaterial,
+      quantity: decimal("1"),
+      yield: null,
+      usesPerVariant: null,
+    };
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: {
+        materialLines: [],
+        equipmentLines: [],
+        defaultShippingTemplate: {
+          materialLines: [shippingTemplateLine],
+          equipmentLines: [],
+        },
+      },
+      shippingTemplate: null,
+      materialLines: [{
+        id: "shipping-override",
+        templateLineId: shippingTemplateLine.id,
+        templateLine: shippingTemplateLine,
+        materialId: "mailer",
+        material: shippingMaterial,
+        quantity: decimal("3"),
+        yield: null,
+        usesPerVariant: null,
+      }],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config),
+    );
+
+    expect(result.packagingCost.toString()).toBe("6");
+    expect(result.materialLines).toHaveLength(1);
+  });
 });
 
 describe("resolveCosts provider cache support", () => {

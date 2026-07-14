@@ -107,7 +107,7 @@ function decimalOrZero(value: Prisma.Decimal | null | undefined): Prisma.Decimal
  * Portioned use:  (purchasePrice / purchaseQty / totalUsesPerUnit) * usesPerVariant
  * Legacy flat shipping: perUnitCost * quantity
  */
-function computeMaterialLineCost(params: {
+export function computeMaterialLineCost(params: {
   type: string;
   costingModel: string | null;
   purchasePrice: Prisma.Decimal;
@@ -142,7 +142,7 @@ function computeMaterialLineCost(params: {
  * Duration yield: (hourlyRate * yieldDurationMinutes / 60) / yieldQuantity
  * Use yield: (perUseCost * yieldUses) / yieldQuantity
  */
-function computeEquipmentLineCost(params: {
+export function computeEquipmentLineCost(params: {
   hourlyRate: Prisma.Decimal | null;
   perUseCost: Prisma.Decimal | null;
   usageMode: string | null;
@@ -614,13 +614,15 @@ export async function resolveCosts(
   }
 
   for (const tl of shippingTemplateMaterialLines) {
+    const override = explicitMaterialOverrideMap.get(tl.id);
     allMaterialLines.push({
       materialId: tl.materialId,
-      material: tl.material,
-      yield_: tl.yield,
-      quantity: tl.quantity,
-      usesPerVariant: tl.usesPerVariant,
+      material: override?.material ?? tl.material,
+      yield_: override?.yield ?? tl.yield,
+      quantity: override?.quantity ?? tl.quantity,
+      usesPerVariant: override?.usesPerVariant ?? tl.usesPerVariant,
     });
+    if (override) consumedVariantMaterialLineIds.add(override.id);
   }
 
   // Add variant-only lines (not in template)
