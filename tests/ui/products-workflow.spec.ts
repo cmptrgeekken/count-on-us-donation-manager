@@ -56,3 +56,22 @@ test("variants page filters by product category for bulk selection", async ({ pa
   await expect(page.getByLabel("Select Large").locator("xpath=ancestor::s-table-row[1]")).toContainText("Partial Product");
   await expect(page.getByLabel("Select Default")).toHaveCount(0);
 });
+
+test("product and variant text-column filters narrow search results", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/products-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+  const bootstrap = await bootstrapResponse.json();
+
+  await page.goto(bootstrap.productsUrl);
+  await page.locator("#products-product-filter").fill("configured-product");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect(page.getByText("Configured Product", { exact: true })).toBeVisible();
+  await expect(page.getByText("Partial Product", { exact: true })).toHaveCount(0);
+
+  await page.goto(bootstrap.variantsUrl);
+  await page.locator("#variants-variant-title-filter").fill("large");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect(page.getByLabel("Select Large")).toBeVisible();
+  await expect(page.getByLabel("Select Small")).toHaveCount(0);
+  await expect(page.getByLabel("Select Default")).toHaveCount(0);
+});

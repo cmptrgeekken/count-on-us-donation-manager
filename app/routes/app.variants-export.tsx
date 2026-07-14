@@ -36,15 +36,41 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterProductId = url.searchParams.get("product") ?? "";
   const filterCategory = url.searchParams.get("category") ?? "";
   const filterConfigured = url.searchParams.get("configured") ?? "";
+  const filterProductTitle = url.searchParams.get("productTitle")?.trim() ?? "";
+  const filterVariantTitle = url.searchParams.get("variantTitle")?.trim() ?? "";
+  const filterSku = url.searchParams.get("sku")?.trim() ?? "";
+  const filterTemplate = url.searchParams.get("template")?.trim() ?? "";
+  const filterPodProvider = url.searchParams.get("podProvider")?.trim() ?? "";
 
   const [variants, shop, taxOffsetCache] = await Promise.all([
     prisma.variant.findMany({
       where: {
         shopId,
         ...(filterProductId ? { productId: filterProductId } : {}),
-        ...(filterCategory ? { product: { productCategoryPath: filterCategory } } : {}),
-        ...(filterConfigured === "yes" ? { costConfig: { isNot: null } } : {}),
-        ...(filterConfigured === "no" ? { costConfig: { is: null } } : {}),
+        ...(filterCategory || filterProductTitle
+          ? {
+              product: {
+                ...(filterCategory ? { productCategoryPath: filterCategory } : {}),
+                ...(filterProductTitle ? { title: { contains: filterProductTitle, mode: "insensitive" } } : {}),
+              },
+            }
+          : {}),
+        ...(filterVariantTitle ? { title: { contains: filterVariantTitle, mode: "insensitive" } } : {}),
+        ...(filterSku ? { sku: { contains: filterSku, mode: "insensitive" } } : {}),
+        ...(filterPodProvider
+          ? { providerMappings: { some: { status: "mapped", provider: { contains: filterPodProvider, mode: "insensitive" } } } }
+          : {}),
+        ...(filterTemplate || filterConfigured
+          ? {
+              AND: [
+                ...(filterTemplate
+                  ? [{ costConfig: { productionTemplate: { name: { contains: filterTemplate, mode: "insensitive" as const } } } }]
+                  : []),
+                ...(filterConfigured === "yes" ? [{ costConfig: { isNot: null } }] : []),
+                ...(filterConfigured === "no" ? [{ costConfig: { is: null } }] : []),
+              ],
+            }
+          : {}),
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {

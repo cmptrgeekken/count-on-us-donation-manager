@@ -1,7 +1,7 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, useFetcher, useLoaderData, useLocation, useRouteError } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useLocation, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { AssignmentPicker } from "../components/AssignmentControls";
@@ -47,6 +47,10 @@ const fieldStyle = {
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
+  const url = new URL(request.url);
+  const filterProduct = url.searchParams.get("productQuery")?.trim() ?? "";
+  const filterPodProvider = url.searchParams.get("podProvider")?.trim() ?? "";
+  const filterStatus = url.searchParams.get("status")?.trim() ?? "";
 
   const [shop, latestCatalogSync, products, causes, artists] = await Promise.all([
     prisma.shop.findUnique({
@@ -65,7 +69,32 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     }),
     prisma.product.findMany({
-      where: { shopId },
+      where: {
+        shopId,
+        ...(filterProduct
+          ? {
+              OR: [
+                { title: { contains: filterProduct, mode: "insensitive" } },
+                { handle: { contains: filterProduct, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+        ...(filterStatus ? { status: filterStatus } : {}),
+        ...(filterPodProvider
+          ? {
+              variants: {
+                some: {
+                  providerMappings: {
+                    some: {
+                      status: "mapped",
+                      provider: { contains: filterPodProvider, mode: "insensitive" },
+                    },
+                  },
+                },
+              },
+            }
+          : {}),
+      },
       orderBy: { title: "asc" },
       include: {
         _count: {
@@ -129,12 +158,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       artistAssignmentCount: product.artistAssignments.length,
       donationRoutingMode: product.donationRoutingMode,
       mappedVariantCount: product.variants.filter((variant) => variant.providerMappings.length > 0).length,
-      mappedProviderCount: new Set(
-        product.variants.flatMap((variant) => variant.providerMappings.map((mapping) => mapping.provider)),
-      ).size,
+      mappedProviders: Array.from(
+        new Set(product.variants.flatMap((variant) => variant.providerMappings.map((mapping) => mapping.provider))),
+      ),
     })),
     causes,
     artists,
+    filterProduct,
+    filterPodProvider,
+    filterStatus,
   });
 };
 
@@ -602,7 +634,7 @@ type ProductRow = {
   artistAssignmentCount: number;
   donationRoutingMode: string;
   mappedVariantCount: number;
-  mappedProviderCount: number;
+  mappedProviders: string[];
 };
 
 type SyncActionData = {
@@ -634,6 +666,10 @@ function formatSyncDate(value: string | null) {
   return new Date(value).toLocaleString();
 }
 
+function formatProviderLabel(provider: string): string {
+  return provider.charAt(0).toUpperCase() + provider.slice(1);
+}
+
 function variantCostReadinessTitle(product: ProductRow) {
   if (product.variantCount === 0) {
     return "No variants are synced for this product yet.";
@@ -653,10 +689,21 @@ function donationRoutingLabel(product: ProductRow) {
 }
 
 export default function ProductsPage() {
-  const { catalogSynced, latestCatalogSync, products, causes, artists } = useLoaderData<typeof loader>();
+  const {
+    catalogSynced,
+    latestCatalogSync,
+    products,
+    causes,
+    artists,
+    filterProduct,
+    filterPodProvider,
+    filterStatus,
+  } = useLoaderData<typeof loader>();
   const syncFetcher = useFetcher<SyncActionData>();
   const bulkFetcher = useFetcher<BulkActionData>();
   const { search } = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [bulkMode, setBulkMode] = useState<BulkMode>("artist");
   const [bulkCauseRows, setBulkCauseRows] = useState<BulkCauseRow[]>([]);
@@ -665,6 +712,7 @@ export default function ProductsPage() {
   const allSelected = products.length > 0 && selectedProductIds.length === products.length;
   const isBulkSubmitting = bulkFetcher.state !== "idle";
   const selectedArtist = artists.find((artist: ArtistOption) => artist.id === selectedArtistId) ?? null;
+  const hasProductFilters = Boolean(filterProduct || filterPodProvider || filterStatus);
 
   useEffect(() => {
     setSelectedProductIds((current) => current.filter((id) => products.some((product: ProductRow) => product.id === id)));
@@ -733,6 +781,29 @@ export default function ProductsPage() {
     return `/app/variants${query ? `?${query}` : ""}`;
   }
 
+  function applyProductFilters(form: HTMLFormElement) {
+    const formData = new FormData(form);
+    const params = new URLSearchParams(searchParams);
+    const values = {
+      productQuery: formData.get("productQuery")?.toString().trim() ?? "",
+      podProvider: formData.get("podProvider")?.toString().trim() ?? "",
+      status: formData.get("status")?.toString().trim() ?? "",
+    };
+    for (const [name, value] of Object.entries(values)) {
+      if (value) params.set(name, value);
+      else params.delete(name);
+    }
+    navigate(`?${params.toString()}`);
+  }
+
+  function clearProductFilters() {
+    const params = new URLSearchParams(searchParams);
+    params.delete("productQuery");
+    params.delete("podProvider");
+    params.delete("status");
+    navigate(`?${params.toString()}`);
+  }
+
   return (
     <>
       <ui-title-bar title="Products" />
@@ -783,13 +854,54 @@ export default function ProductsPage() {
           </div>
         </s-section>
 
+        <s-section heading="Filter products">
+          <form
+            method="get"
+            onSubmit={(event) => {
+              event.preventDefault();
+              applyProductFilters(event.currentTarget);
+            }}
+            style={{ display: "grid", gap: "1rem" }}
+          >
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))", gap: "1rem", alignItems: "end" }}>
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor="products-product-filter">Product title or handle</label>
+                <input id="products-product-filter" name="productQuery" type="search" defaultValue={filterProduct} placeholder="Filter by product" style={fieldStyle} />
+              </div>
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor="products-pod-provider-filter">POD provider</label>
+                <input id="products-pod-provider-filter" name="podProvider" type="search" defaultValue={filterPodProvider} placeholder="Filter by POD provider" style={fieldStyle} />
+              </div>
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor="products-status-filter">Status</label>
+                <select id="products-status-filter" name="status" defaultValue={filterStatus} style={fieldStyle}>
+                  <option value="">All statuses</option>
+                  <option value="active">Active</option>
+                  <option value="draft">Draft</option>
+                  <option value="archived">Archived</option>
+                </select>
+              </div>
+              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                <s-button type="submit" variant="primary">Apply filters</s-button>
+                <s-button variant="secondary" onClick={clearProductFilters}>Clear</s-button>
+              </div>
+            </div>
+          </form>
+        </s-section>
+
         {products.length === 0 ? (
-          <s-section heading="No synced products">
+          <s-section heading={hasProductFilters ? "No products match these filters" : "No synced products"}>
             <div style={{ display: "grid", gap: "0.75rem" }}>
-              <s-text>Catalog sync must complete before product-level Cause assignments can be configured.</s-text>
-              <s-text color="subdued">
-                Use the sync action above to import your Shopify catalog while keeping any seed data you already have.
-              </s-text>
+              {hasProductFilters ? (
+                <s-text>Try a different product, POD provider, or status filter.</s-text>
+              ) : (
+                <>
+                  <s-text>Catalog sync must complete before product-level Cause assignments can be configured.</s-text>
+                  <s-text color="subdued">
+                    Use the sync action above to import your Shopify catalog while keeping any seed data you already have.
+                  </s-text>
+                </>
+              )}
             </div>
           </s-section>
         ) : (
@@ -1010,7 +1122,7 @@ export default function ProductsPage() {
                             {product.mappedVariantCount} of {product.variantCount}
                           </strong>
                           <s-text color="subdued">
-                            {product.mappedProviderCount === 1 ? "1 provider mapped" : `${product.mappedProviderCount} providers mapped`}
+                            {product.mappedProviders.map(formatProviderLabel).join(", ")}
                           </s-text>
                         </div>
                       ) : (
