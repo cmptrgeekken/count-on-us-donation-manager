@@ -280,12 +280,55 @@ model Product {
   updatedAt           DateTime @updatedAt
 
   variants         Variant[]
+  tags             ProductTag[]
+  collections      ProductCollection[]
   causeAssignments ProductCauseAssignment[]
   artistAssignments ProductArtistAssignment[]
 
   @@unique([shopId, shopifyId])
   @@index([shopId])
   @@index([shopId, productCategoryPath])
+}
+
+model ProductTag {
+  id        String  @id @default(cuid())
+  shopId    String
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  value     String
+
+  @@unique([productId, value])
+  @@index([shopId, value])
+  @@index([shopId, productId])
+}
+
+model ShopifyCollection {
+  id        String   @id @default(cuid())
+  shopId    String
+  shopifyId String
+  title     String
+  handle    String
+  syncedAt  DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products ProductCollection[]
+
+  @@unique([shopId, shopifyId])
+  @@index([shopId, title])
+  @@index([shopId, handle])
+}
+
+model ProductCollection {
+  shopId       String
+  productId    String
+  collectionId String
+  product      Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  collection   ShopifyCollection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+
+  @@id([productId, collectionId])
+  @@index([shopId, productId])
+  @@index([shopId, collectionId])
 }
 
 model Variant {

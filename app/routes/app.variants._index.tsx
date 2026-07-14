@@ -1,18 +1,36 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { Link, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
+import {
+  Link,
+  useFetcher,
+  useLoaderData,
+  useNavigate,
+  useRouteError,
+  useSearchParams,
+} from "@remix-run/react";
 import { Prisma } from "@prisma/client";
-import { AssignmentPicker } from "../components/AssignmentControls";
-import { ResourceTableHeader, TableColumnFilter, TableTextFilterFields } from "../components/admin-ui";
+import {
+  AssignmentFilterPicker,
+  AssignmentPicker,
+} from "../components/AssignmentControls";
+import {
+  ResourceTableHeader,
+  TableColumnFilter,
+  TableTextFilterFields,
+} from "../components/admin-ui";
 import { prisma } from "../db.server";
-import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
+import {
+  buildVariantEstimatePayload,
+  type VariantEstimatePayload,
+} from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { parseOptionalPositiveWholeNumber } from "../utils/number-parsing";
 import { buildTextFilter, parseTextMatchMode } from "../utils/text-filter";
 import { materialLineValuesEqual } from "../utils/material-line-comparison";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
+import { buildProductSearchFilter } from "../utils/product-search";
 
 type BulkAssignmentMismatch = {
   variantId: string;
@@ -22,7 +40,10 @@ type BulkAssignmentMismatch = {
   equipmentNames: string[];
 };
 
-function nullableDecimalEqual(left: { toString(): string } | null, right: { toString(): string } | null) {
+function nullableDecimalEqual(
+  left: { toString(): string } | null,
+  right: { toString(): string } | null,
+) {
   if (left === null || right === null) return left === right;
   return left.toString() === right.toString();
 }
@@ -56,36 +77,114 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterSku = url.searchParams.get("sku")?.trim() ?? "";
   const filterTemplate = url.searchParams.get("template")?.trim() ?? "";
   const filterPodProvider = url.searchParams.get("podProvider")?.trim() ?? "";
-  const filterProductTitleMatch = parseTextMatchMode(url.searchParams.get("productTitleMatch"));
-  const filterVariantTitleMatch = parseTextMatchMode(url.searchParams.get("variantTitleMatch"));
-  const filterSkuMatch = parseTextMatchMode(url.searchParams.get("skuMatch"), true);
-  const filterTemplateMatch = parseTextMatchMode(url.searchParams.get("templateMatch"), true);
-  const filterPodProviderMatch = parseTextMatchMode(url.searchParams.get("podProviderMatch"), true);
+  const filterTags = [
+    ...new Set(
+      url.searchParams
+        .getAll("tag")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+  const filterCollectionIds = [
+    ...new Set(
+      url.searchParams
+        .getAll("collection")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+  const filterProductTitleMatch = parseTextMatchMode(
+    url.searchParams.get("productTitleMatch"),
+  );
+  const filterVariantTitleMatch = parseTextMatchMode(
+    url.searchParams.get("variantTitleMatch"),
+  );
+  const filterSkuMatch = parseTextMatchMode(
+    url.searchParams.get("skuMatch"),
+    true,
+  );
+  const filterTemplateMatch = parseTextMatchMode(
+    url.searchParams.get("templateMatch"),
+    true,
+  );
+  const filterPodProviderMatch = parseTextMatchMode(
+    url.searchParams.get("podProviderMatch"),
+    true,
+  );
 
-  const [allVariants, products, templates, shop, taxOffsetCache] = await Promise.all([
+  const [
+    allVariants,
+    products,
+    templates,
+    shop,
+    taxOffsetCache,
+    availableTags,
+    availableCollections,
+  ] = await Promise.all([
     prisma.variant.findMany({
       where: {
         shopId,
         ...(filterProductId ? { productId: filterProductId } : {}),
-        ...(filterCategory || filterProductTitle
+        ...(filterCategory ||
+        filterProductTitle ||
+        filterTags.length > 0 ||
+        filterCollectionIds.length > 0
           ? {
               product: {
-                ...(filterCategory ? { productCategoryPath: filterCategory } : {}),
-                ...(filterProductTitle ? { title: buildTextFilter(filterProductTitle, filterProductTitleMatch) } : {}),
+                ...(filterCategory
+                  ? { productCategoryPath: filterCategory }
+                  : {}),
+                ...(filterProductTitle
+                  ? buildProductSearchFilter(
+                      filterProductTitle,
+                      filterProductTitleMatch,
+                    )
+                  : {}),
+                ...(filterTags.length > 0
+                  ? { tags: { some: { shopId, value: { in: filterTags } } } }
+                  : {}),
+                ...(filterCollectionIds.length > 0
+                  ? {
+                      collections: {
+                        some: {
+                          shopId,
+                          collectionId: { in: filterCollectionIds },
+                        },
+                      },
+                    }
+                  : {}),
               },
             }
           : {}),
-        ...(filterVariantTitle ? { title: buildTextFilter(filterVariantTitle, filterVariantTitleMatch) } : {}),
-        ...(filterSkuMatch !== "empty" && filterSku ? { sku: buildTextFilter(filterSku, filterSkuMatch) } : {}),
+        ...(filterVariantTitle
+          ? {
+              title: buildTextFilter(
+                filterVariantTitle,
+                filterVariantTitleMatch,
+              ),
+            }
+          : {}),
+        ...(filterSkuMatch !== "empty" && filterSku
+          ? { sku: buildTextFilter(filterSku, filterSkuMatch) }
+          : {}),
         ...(filterTemplateMatch !== "empty" && filterTemplate
-          ? { costConfig: { productionTemplate: { name: buildTextFilter(filterTemplate, filterTemplateMatch) } } }
+          ? {
+              costConfig: {
+                productionTemplate: {
+                  name: buildTextFilter(filterTemplate, filterTemplateMatch),
+                },
+              },
+            }
           : {}),
         ...(filterPodProviderMatch !== "empty" && filterPodProvider
           ? {
               providerMappings: {
                 some: {
                   status: "mapped",
-                  provider: buildTextFilter(filterPodProvider, filterPodProviderMatch),
+                  provider: buildTextFilter(
+                    filterPodProvider,
+                    filterPodProviderMatch,
+                  ),
                 },
               },
             }
@@ -93,9 +192,22 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         ...(filterSkuMatch === "empty" || filterTemplateMatch === "empty"
           ? {
               AND: [
-                ...(filterSkuMatch === "empty" ? [{ OR: [{ sku: null }, { sku: "" }] }] : []),
+                ...(filterSkuMatch === "empty"
+                  ? [{ OR: [{ sku: null }, { sku: "" }] }]
+                  : []),
                 ...(filterTemplateMatch === "empty"
-                  ? [{ OR: [{ costConfig: { is: null } }, { costConfig: { is: { productionTemplate: { is: null } } } }] }]
+                  ? [
+                      {
+                        OR: [
+                          { costConfig: { is: null } },
+                          {
+                            costConfig: {
+                              is: { productionTemplate: { is: null } },
+                            },
+                          },
+                        ],
+                      },
+                    ]
                   : []),
               ],
             }
@@ -106,7 +218,9 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {
-        product: { select: { id: true, title: true, donationRoutingMode: true } },
+        product: {
+          select: { id: true, title: true, donationRoutingMode: true },
+        },
         costConfig: {
           select: {
             productionTemplateId: true,
@@ -134,7 +248,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     prisma.product.findMany({
       where: { shopId },
       orderBy: { title: "asc" },
-      select: { id: true, title: true, productCategoryName: true, productCategoryPath: true },
+      select: {
+        id: true,
+        title: true,
+        productCategoryName: true,
+        productCategoryPath: true,
+      },
     }),
     prisma.costTemplate.findMany({
       where: { shopId, status: "active", type: "production" },
@@ -156,11 +275,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         widgetTaxSuppressed: true,
       },
     }),
+    prisma.productTag.findMany({
+      where: { shopId },
+      distinct: ["value"],
+      orderBy: { value: "asc" },
+      select: { value: true },
+    }),
+    prisma.shopifyCollection.findMany({
+      where: { shopId },
+      orderBy: { title: "asc" },
+      select: { id: true, title: true, handle: true },
+    }),
   ]);
 
   const variants = allVariants.filter((variant) => {
-    if (filterConfigured === "yes") return isVariantCostConfigured(variant.costConfig);
-    if (filterConfigured === "no") return !isVariantCostConfigured(variant.costConfig);
+    if (filterConfigured === "yes")
+      return isVariantCostConfigured(variant.costConfig);
+    if (filterConfigured === "no")
+      return !isVariantCostConfigured(variant.costConfig);
     return true;
   });
 
@@ -224,17 +356,24 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     },
   });
-  const causeAssignmentsByProductId = new Map<string, typeof causeAssignments>();
+  const causeAssignmentsByProductId = new Map<
+    string,
+    typeof causeAssignments
+  >();
   for (const assignment of causeAssignments) {
     if (!assignment.productId) continue;
     const current = causeAssignmentsByProductId.get(assignment.productId) ?? [];
     current.push(assignment);
     causeAssignmentsByProductId.set(assignment.productId, current);
   }
-  const artistAssignmentsByProductId = new Map<string, typeof artistAssignments>();
+  const artistAssignmentsByProductId = new Map<
+    string,
+    typeof artistAssignments
+  >();
   for (const assignment of artistAssignments) {
     if (!assignment.productId) continue;
-    const current = artistAssignmentsByProductId.get(assignment.productId) ?? [];
+    const current =
+      artistAssignmentsByProductId.get(assignment.productId) ?? [];
     current.push(assignment);
     artistAssignmentsByProductId.set(assignment.productId, current);
   }
@@ -245,8 +384,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           buildVariantEstimatePayload({
             shopId,
             variant,
-            causeAssignments: causeAssignmentsByProductId.get(variant.productId) ?? [],
-            artistAssignments: artistAssignmentsByProductId.get(variant.productId) ?? [],
+            causeAssignments:
+              causeAssignmentsByProductId.get(variant.productId) ?? [],
+            artistAssignments:
+              artistAssignmentsByProductId.get(variant.productId) ?? [],
             donationRoutingMode: variant.product.donationRoutingMode,
             shop,
             widgetTaxSuppressed,
@@ -267,9 +408,13 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       price: v.price.toString(),
       hasConfig: isVariantCostConfigured(v.costConfig),
       templateName: v.costConfig?.productionTemplate?.name ?? null,
-      templateProductYield: v.costConfig?.templateProductYield?.toString() ?? null,
-      mappedProviders: Array.from(new Set(v.providerMappings.map((mapping) => mapping.provider))),
-      latestProviderSyncAt: v.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? null,
+      templateProductYield:
+        v.costConfig?.templateProductYield?.toString() ?? null,
+      mappedProviders: Array.from(
+        new Set(v.providerMappings.map((mapping) => mapping.provider)),
+      ),
+      latestProviderSyncAt:
+        v.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? null,
       estimate: estimates[index],
     })),
     products: products.map((p) => ({ id: p.id, title: p.title })),
@@ -287,6 +432,15 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       ).values(),
     ).sort((a, b) => a.label.localeCompare(b.label)),
     templates: templates.map((t) => ({ id: t.id, name: t.name })),
+    availableTags: availableTags.map((tag) => ({
+      id: tag.value,
+      label: tag.value,
+    })),
+    availableCollections: availableCollections.map((collection) => ({
+      id: collection.id,
+      label: collection.title,
+      description: collection.handle,
+    })),
     filterProductId,
     filterCategory,
     filterConfigured,
@@ -295,6 +449,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     filterSku,
     filterTemplate,
     filterPodProvider,
+    filterTags,
+    filterCollectionIds,
     filterProductTitleMatch,
     filterVariantTitleMatch,
     filterSkuMatch,
@@ -312,24 +468,38 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 
   if (intent === "bulk-assign-template") {
     const templateId = formData.get("templateId")?.toString() ?? "";
-    const templateProductYieldInput = formData.get("templateProductYield")?.toString() ?? "";
+    const templateProductYieldInput =
+      formData.get("templateProductYield")?.toString() ?? "";
     let templateProductYield: number | null;
     try {
-      templateProductYield = parseOptionalPositiveWholeNumber(templateProductYieldInput, "Template product yield");
+      templateProductYield = parseOptionalPositiveWholeNumber(
+        templateProductYieldInput,
+        "Template product yield",
+      );
     } catch (error) {
       if (error instanceof Response) {
-        return jsonResponse({ ok: false, message: await error.text() }, { status: error.status });
+        return jsonResponse(
+          { ok: false, message: await error.text() },
+          { status: error.status },
+        );
       }
       throw error;
     }
     const variantIds = [...new Set(formData.getAll("variantId").map(String))];
-    const cleanupExactDuplicates = formData.get("cleanupExactDuplicates")?.toString() === "true";
+    const cleanupExactDuplicates =
+      formData.get("cleanupExactDuplicates")?.toString() === "true";
 
     if (!templateId) {
-      return jsonResponse({ ok: false, message: "No template selected." }, { status: 400 });
+      return jsonResponse(
+        { ok: false, message: "No template selected." },
+        { status: 400 },
+      );
     }
     if (variantIds.length === 0) {
-      return jsonResponse({ ok: false, message: "No variants selected." }, { status: 400 });
+      return jsonResponse(
+        { ok: false, message: "No variants selected." },
+        { status: 400 },
+      );
     }
 
     const template = await prisma.costTemplate.findFirst({
@@ -377,7 +547,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (!template) {
-      return jsonResponse({ ok: false, message: "Template not found." }, { status: 404 });
+      return jsonResponse(
+        { ok: false, message: "Template not found." },
+        { status: 404 },
+      );
     }
 
     const variantsToAssign = await prisma.variant.findMany({
@@ -416,10 +589,19 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     if (variantsToAssign.length !== variantIds.length) {
-      return jsonResponse({ ok: false, message: "One or more selected variants could not be found." }, { status: 404 });
+      return jsonResponse(
+        {
+          ok: false,
+          message: "One or more selected variants could not be found.",
+        },
+        { status: 404 },
+      );
     }
 
-    const templateEquipmentLinesByEquipmentId = new Map<string, typeof template.equipmentLines>();
+    const templateEquipmentLinesByEquipmentId = new Map<
+      string,
+      typeof template.equipmentLines
+    >();
     for (const line of template.equipmentLines) {
       templateEquipmentLinesByEquipmentId.set(line.equipmentId, [
         ...(templateEquipmentLinesByEquipmentId.get(line.equipmentId) ?? []),
@@ -443,10 +625,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       };
 
       const effectiveShippingMaterialLines =
-        variant.costConfig.shippingTemplate?.materialLines ?? template.defaultShippingTemplate?.materialLines ?? [];
-      const effectiveTemplateMaterialLines = [...template.materialLines, ...effectiveShippingMaterialLines];
-      const productionTemplateLineIds = new Set(template.materialLines.map((line) => line.id));
-      const templateMaterialLinesByMaterialId = new Map<string, typeof effectiveTemplateMaterialLines>();
+        variant.costConfig.shippingTemplate?.materialLines ??
+        template.defaultShippingTemplate?.materialLines ??
+        [];
+      const effectiveTemplateMaterialLines = [
+        ...template.materialLines,
+        ...effectiveShippingMaterialLines,
+      ];
+      const productionTemplateLineIds = new Set(
+        template.materialLines.map((line) => line.id),
+      );
+      const templateMaterialLinesByMaterialId = new Map<
+        string,
+        typeof effectiveTemplateMaterialLines
+      >();
       for (const line of effectiveTemplateMaterialLines) {
         templateMaterialLinesByMaterialId.set(line.materialId, [
           ...(templateMaterialLinesByMaterialId.get(line.materialId) ?? []),
@@ -455,7 +647,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       for (const variantLine of variant.costConfig.materialLines) {
-        const matchingTemplateLines = templateMaterialLinesByMaterialId.get(variantLine.materialId) ?? [];
+        const matchingTemplateLines =
+          templateMaterialLinesByMaterialId.get(variantLine.materialId) ?? [];
         if (matchingTemplateLines.length !== 1) continue;
 
         const templateLine = matchingTemplateLines[0];
@@ -479,21 +672,31 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       }
 
       for (const variantLine of variant.costConfig.equipmentLines) {
-        const matchingTemplateLines = templateEquipmentLinesByEquipmentId.get(variantLine.equipmentId) ?? [];
+        const matchingTemplateLines =
+          templateEquipmentLinesByEquipmentId.get(variantLine.equipmentId) ??
+          [];
         if (matchingTemplateLines.length !== 1) continue;
 
         const templateLine = matchingTemplateLines[0];
         const effectiveTemplateYieldQuantity =
-          templateProductYield && (templateLine.usageMode === "duration_yield" || templateLine.usageMode === "use_yield")
+          templateProductYield &&
+          (templateLine.usageMode === "duration_yield" ||
+            templateLine.usageMode === "use_yield")
             ? new Prisma.Decimal(templateProductYield)
             : templateLine.yieldQuantity;
         const isExactDuplicate =
           variantLine.usageMode === templateLine.usageMode &&
           nullableDecimalEqual(variantLine.minutes, templateLine.minutes) &&
           nullableDecimalEqual(variantLine.uses, templateLine.uses) &&
-          nullableDecimalEqual(variantLine.yieldDurationMinutes, templateLine.yieldDurationMinutes) &&
+          nullableDecimalEqual(
+            variantLine.yieldDurationMinutes,
+            templateLine.yieldDurationMinutes,
+          ) &&
           nullableDecimalEqual(variantLine.yieldUses, templateLine.yieldUses) &&
-          nullableDecimalEqual(variantLine.yieldQuantity, effectiveTemplateYieldQuantity);
+          nullableDecimalEqual(
+            variantLine.yieldQuantity,
+            effectiveTemplateYieldQuantity,
+          );
 
         if (isExactDuplicate) {
           exactDuplicateEquipmentLineIds.push(variantLine.id);
@@ -502,7 +705,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         }
       }
 
-      if (mismatch.materialNames.length > 0 || mismatch.equipmentNames.length > 0) {
+      if (
+        mismatch.materialNames.length > 0 ||
+        mismatch.equipmentNames.length > 0
+      ) {
         mismatches.push(mismatch);
       }
     }
@@ -516,7 +722,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           });
         } else {
           await tx.variantCostConfig.create({
-            data: { shopId, variantId: variant.id, productionTemplateId: templateId, templateProductYield },
+            data: {
+              shopId,
+              variantId: variant.id,
+              productionTemplateId: templateId,
+              templateProductYield,
+            },
           });
         }
       }
@@ -571,8 +782,12 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             templateProductYield,
             variantCount: variantIds.length,
             cleanupExactDuplicates,
-            cleanedMaterialLineCount: cleanupExactDuplicates ? exactDuplicateMaterialLineIds.length : 0,
-            cleanedEquipmentLineCount: cleanupExactDuplicates ? exactDuplicateEquipmentLineIds.length : 0,
+            cleanedMaterialLineCount: cleanupExactDuplicates
+              ? exactDuplicateMaterialLineIds.length
+              : 0,
+            cleanedEquipmentLineCount: cleanupExactDuplicates
+              ? exactDuplicateEquipmentLineIds.length
+              : 0,
             mismatchVariantCount: mismatches.length,
           },
         },
@@ -580,7 +795,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
 
     const cleanedLineCount = cleanupExactDuplicates
-      ? exactDuplicateMaterialLineIds.length + exactDuplicateEquipmentLineIds.length
+      ? exactDuplicateMaterialLineIds.length +
+        exactDuplicateEquipmentLineIds.length
       : 0;
 
     return jsonResponse({
@@ -593,7 +809,10 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     });
   }
 
-  return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
+  return jsonResponse(
+    { ok: false, message: "Unknown action." },
+    { status: 400 },
+  );
 };
 
 type VariantRow = {
@@ -638,6 +857,8 @@ export default function VariantsPage() {
     products,
     categories,
     templates,
+    availableTags,
+    availableCollections,
     filterProductId,
     filterCategory,
     filterConfigured,
@@ -646,6 +867,8 @@ export default function VariantsPage() {
     filterSku,
     filterTemplate,
     filterPodProvider,
+    filterTags,
+    filterCollectionIds,
     filterProductTitleMatch,
     filterVariantTitleMatch,
     filterSkuMatch,
@@ -676,7 +899,11 @@ export default function VariantsPage() {
   const [exportError, setExportError] = useState("");
 
   useEffect(() => {
-    setSelectedVariantIds((current) => current.filter((id) => variants.some((variant: VariantRow) => variant.id === id)));
+    setSelectedVariantIds((current) =>
+      current.filter((id) =>
+        variants.some((variant: VariantRow) => variant.id === id),
+      ),
+    );
   }, [variants]);
 
   useEffect(() => {
@@ -703,28 +930,55 @@ export default function VariantsPage() {
 
   const isSubmitting = fetcher.state !== "idle";
   const statusMessage = fetcher.data?.message ?? "";
-  const assignmentMismatches = fetcher.data?.ok ? (fetcher.data.mismatches ?? []) : [];
-  const allSelected = variants.length > 0 && selectedVariantIds.length === variants.length;
-  const selectedTemplate = templates.find((template: { id: string; name: string }) => template.id === selectedTemplateId) ?? null;
+  const assignmentMismatches = fetcher.data?.ok
+    ? (fetcher.data.mismatches ?? [])
+    : [];
+  const allSelected =
+    variants.length > 0 && selectedVariantIds.length === variants.length;
+  const selectedTemplate =
+    templates.find(
+      (template: { id: string; name: string }) =>
+        template.id === selectedTemplateId,
+    ) ?? null;
   const hasActiveFilters = Boolean(
-    filterProductId || filterCategory || filterConfigured || filterProductTitle || filterVariantTitle ||
-    filterSku || filterTemplate || filterPodProvider || filterSkuMatch === "empty" ||
-    filterTemplateMatch === "empty" || filterPodProviderMatch === "empty",
+    filterProductId ||
+    filterCategory ||
+    filterConfigured ||
+    filterProductTitle ||
+    filterTags.length > 0 ||
+    filterCollectionIds.length > 0 ||
+    filterVariantTitle ||
+    filterSku ||
+    filterTemplate ||
+    filterPodProvider ||
+    filterSkuMatch === "empty" ||
+    filterTemplateMatch === "empty" ||
+    filterPodProviderMatch === "empty",
   );
 
   const selectedConfiguredCount = useMemo(
-    () => variants.filter((variant: VariantRow) => selectedVariantIds.includes(variant.id) && variant.hasConfig).length,
+    () =>
+      variants.filter(
+        (variant: VariantRow) =>
+          selectedVariantIds.includes(variant.id) && variant.hasConfig,
+      ).length,
     [selectedVariantIds, variants],
   );
 
   function updateSelection(id: string, checked: boolean) {
     setSelectedVariantIds((current) =>
-      checked ? (current.includes(id) ? current : [...current, id]) : current.filter((value) => value !== id),
+      checked
+        ? current.includes(id)
+          ? current
+          : [...current, id]
+        : current.filter((value) => value !== id),
     );
   }
 
   function toggleSelectAll(checked: boolean) {
-    setSelectedVariantIds(checked ? variants.map((variant: VariantRow) => variant.id) : []);
+    setSelectedVariantIds(
+      checked ? variants.map((variant: VariantRow) => variant.id) : [],
+    );
   }
 
   function clearSelection() {
@@ -780,17 +1034,37 @@ export default function VariantsPage() {
     const formData = new FormData(form);
     const params = new URLSearchParams(searchParams);
 
-    for (const name of ["product", "category", "configured", "productTitle", "variantTitle", "sku", "template", "podProvider"]) {
+    for (const name of [
+      "product",
+      "category",
+      "configured",
+      "productTitle",
+      "variantTitle",
+      "sku",
+      "template",
+      "podProvider",
+    ]) {
       if (!formData.has(name)) continue;
       const value = formData.get(name)?.toString().trim() ?? "";
       if (value) params.set(name, value);
       else params.delete(name);
     }
-    for (const name of ["productTitleMatch", "variantTitleMatch", "skuMatch", "templateMatch", "podProviderMatch"]) {
+    for (const name of [
+      "productTitleMatch",
+      "variantTitleMatch",
+      "skuMatch",
+      "templateMatch",
+      "podProviderMatch",
+    ]) {
       if (!formData.has(name)) continue;
       const value = formData.get(name)?.toString() ?? "contains";
       if (value !== "contains") params.set(name, value);
       else params.delete(name);
+    }
+    for (const name of ["tag", "collection"]) {
+      params.delete(name);
+      for (const value of formData.getAll(name).map(String).filter(Boolean))
+        params.append(name, value);
     }
 
     navigate(`?${params.toString()}`);
@@ -817,6 +1091,8 @@ export default function VariantsPage() {
     params.delete("skuMatch");
     params.delete("templateMatch");
     params.delete("podProviderMatch");
+    params.delete("tag");
+    params.delete("collection");
     navigate(`?${params.toString()}`);
   }
 
@@ -835,6 +1111,8 @@ export default function VariantsPage() {
     const skuMatch = searchParams.get("skuMatch");
     const templateMatch = searchParams.get("templateMatch");
     const podProviderMatch = searchParams.get("podProviderMatch");
+    const tags = searchParams.getAll("tag");
+    const collections = searchParams.getAll("collection");
     if (product) params.set("product", product);
     if (category) params.set("category", category);
     if (configured) params.set("configured", configured);
@@ -848,6 +1126,10 @@ export default function VariantsPage() {
     if (skuMatch) params.set("skuMatch", skuMatch);
     if (templateMatch) params.set("templateMatch", templateMatch);
     if (podProviderMatch) params.set("podProviderMatch", podProviderMatch);
+    tags.forEach((tag) => params.append("tag", tag));
+    collections.forEach((collection) =>
+      params.append("collection", collection),
+    );
     const query = params.toString();
     return `/app/variants-export${query ? `?${query}` : ""}`;
   }
@@ -878,7 +1160,11 @@ export default function VariantsPage() {
       link.remove();
       window.URL.revokeObjectURL(objectUrl);
     } catch (error) {
-      setExportError(error instanceof Error ? error.message : "Unable to export variant estimates.");
+      setExportError(
+        error instanceof Error
+          ? error.message
+          : "Unable to export variant estimates.",
+      );
     } finally {
       setExportingEstimates(false);
     }
@@ -918,7 +1204,9 @@ export default function VariantsPage() {
           <s-banner tone="warning">
             <div style={{ display: "grid", gap: "0.75rem" }}>
               <s-text>
-                Review {assignmentMismatches.length} variant{assignmentMismatches.length === 1 ? "" : "s"} with matching template items but different line settings.
+                Review {assignmentMismatches.length} variant
+                {assignmentMismatches.length === 1 ? "" : "s"} with matching
+                template items but different line settings.
               </s-text>
               <ul style={{ margin: 0, paddingLeft: "1.25rem" }}>
                 {assignmentMismatches.map((mismatch) => (
@@ -926,8 +1214,12 @@ export default function VariantsPage() {
                     <Link to={`/app/variants/${mismatch.variantId}`}>
                       {mismatch.productTitle} / {mismatch.variantTitle}
                     </Link>
-                    {mismatch.materialNames.length > 0 ? ` - Materials: ${mismatch.materialNames.join(", ")}` : ""}
-                    {mismatch.equipmentNames.length > 0 ? `${mismatch.materialNames.length > 0 ? "; " : " - "}Equipment: ${mismatch.equipmentNames.join(", ")}` : ""}
+                    {mismatch.materialNames.length > 0
+                      ? ` - Materials: ${mismatch.materialNames.join(", ")}`
+                      : ""}
+                    {mismatch.equipmentNames.length > 0
+                      ? `${mismatch.materialNames.length > 0 ? "; " : " - "}Equipment: ${mismatch.equipmentNames.join(", ")}`
+                      : ""}
                   </li>
                 ))}
               </ul>
@@ -940,26 +1232,63 @@ export default function VariantsPage() {
           </s-banner>
         ) : null}
 
-        {variants.length === 0 && !filterProductId && !filterCategory && !filterConfigured && !filterProductTitle && !filterVariantTitle && !filterSku && !filterTemplate && !filterPodProvider && filterSkuMatch !== "empty" && filterTemplateMatch !== "empty" && filterPodProviderMatch !== "empty" ? (
+        {variants.length === 0 &&
+        !filterProductId &&
+        !filterCategory &&
+        !filterConfigured &&
+        !filterProductTitle &&
+        !filterVariantTitle &&
+        !filterSku &&
+        !filterTemplate &&
+        !filterPodProvider &&
+        filterSkuMatch !== "empty" &&
+        filterTemplateMatch !== "empty" &&
+        filterPodProviderMatch !== "empty" ? (
           <s-section heading="No variants synced yet">
-            <s-text>Variants will appear here after the initial catalog sync completes.</s-text>
+            <s-text>
+              Variants will appear here after the initial catalog sync
+              completes.
+            </s-text>
           </s-section>
         ) : (
           <>
             {selectedVariantIds.length > 0 && (
               <s-section>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: "1rem",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
                   <div style={{ display: "grid", gap: "0.25rem" }}>
-                    <strong>{selectedVariantIds.length} variant{selectedVariantIds.length !== 1 ? "s" : ""} selected</strong>
+                    <strong>
+                      {selectedVariantIds.length} variant
+                      {selectedVariantIds.length !== 1 ? "s" : ""} selected
+                    </strong>
                     <s-text color="subdued">
                       {selectedConfiguredCount > 0
                         ? `${selectedConfiguredCount} selected variant(s) already have a configuration.`
                         : "Assign a template to the selected variants."}
                     </s-text>
                   </div>
-                  <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                    <s-button variant="secondary" onClick={clearSelection}>Clear selection</s-button>
-                    <s-button variant="primary" onClick={openAssignDialog} disabled={templates.length === 0}>
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: "0.75rem",
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <s-button variant="secondary" onClick={clearSelection}>
+                      Clear selection
+                    </s-button>
+                    <s-button
+                      variant="primary"
+                      onClick={openAssignDialog}
+                      disabled={templates.length === 0}
+                    >
                       Assign template
                     </s-button>
                   </div>
@@ -974,18 +1303,36 @@ export default function VariantsPage() {
                   description="Filter, select, assign templates, and export detailed estimates."
                   action={
                     <>
-                    {hasActiveFilters ? <s-button variant="secondary" onClick={clearFilters}>Clear filters</s-button> : null}
-                    <s-button variant="secondary" onClick={() => void exportEstimates()} disabled={exportingEstimates}>
-                      {exportingEstimates ? "Exporting..." : "Export estimates CSV"}
-                    </s-button>
-                    <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                      <input
-                        type="checkbox"
-                        checked={allSelected}
-                        onChange={(event) => toggleSelectAll(event.currentTarget.checked)}
-                      />
-                      <span>Select all visible</span>
-                    </label>
+                      {hasActiveFilters ? (
+                        <s-button variant="secondary" onClick={clearFilters}>
+                          Clear filters
+                        </s-button>
+                      ) : null}
+                      <s-button
+                        variant="secondary"
+                        onClick={() => void exportEstimates()}
+                        disabled={exportingEstimates}
+                      >
+                        {exportingEstimates
+                          ? "Exporting..."
+                          : "Export estimates CSV"}
+                      </s-button>
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.5rem",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allSelected}
+                          onChange={(event) =>
+                            toggleSelectAll(event.currentTarget.checked)
+                          }
+                        />
+                        <span>Select all visible</span>
+                      </label>
                     </>
                   }
                 />
@@ -993,69 +1340,271 @@ export default function VariantsPage() {
                 <s-table-header-row>
                   <s-table-header>Select</s-table-header>
                   <s-table-header listSlot="secondary">
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                      }}
+                    >
                       <span>Product</span>
                       <TableColumnFilter
                         title="Product"
-                        active={Boolean(filterProductId || filterCategory || filterProductTitle)}
+                        active={Boolean(
+                          filterProductId ||
+                          filterCategory ||
+                          filterProductTitle ||
+                          filterTags.length > 0 ||
+                          filterCollectionIds.length > 0,
+                        )}
                         onApply={applyFilters}
-                        onClear={() => clearFilterNames(["product", "category", "productTitle", "productTitleMatch"])}
+                        onClear={() =>
+                          clearFilterNames([
+                            "product",
+                            "category",
+                            "productTitle",
+                            "productTitleMatch",
+                            "tag",
+                            "collection",
+                          ])
+                        }
                       >
                         <label htmlFor="variants-product-filter">Product</label>
-                        <select id="variants-product-filter" name="product" defaultValue={filterProductId} style={filterControlStyle}>
+                        <select
+                          id="variants-product-filter"
+                          name="product"
+                          defaultValue={filterProductId}
+                          style={filterControlStyle}
+                        >
                           <option value="">All products</option>
-                          {products.map((product: { id: string; title: string }) => <option key={product.id} value={product.id}>{product.title}</option>)}
+                          {products.map(
+                            (product: { id: string; title: string }) => (
+                              <option key={product.id} value={product.id}>
+                                {product.title}
+                              </option>
+                            ),
+                          )}
                         </select>
-                        <label htmlFor="variants-category-filter">Product category</label>
-                        <select id="variants-category-filter" name="category" defaultValue={filterCategory} style={filterControlStyle}>
+                        <label htmlFor="variants-category-filter">
+                          Product category
+                        </label>
+                        <select
+                          id="variants-category-filter"
+                          name="category"
+                          defaultValue={filterCategory}
+                          style={filterControlStyle}
+                        >
                           <option value="">All categories</option>
-                          {categories.map((category: { value: string; label: string }) => <option key={category.value} value={category.value}>{category.label}</option>)}
+                          {categories.map(
+                            (category: { value: string; label: string }) => (
+                              <option
+                                key={category.value}
+                                value={category.value}
+                              >
+                                {category.label}
+                              </option>
+                            ),
+                          )}
                         </select>
-                        <TableTextFilterFields id="variants-product-title-filter" name="productTitle" label="Product title" value={filterProductTitle} matchId="variants-product-title-match-filter" matchName="productTitleMatch" matchValue={filterProductTitleMatch} fieldStyle={filterControlStyle} />
+                        <TableTextFilterFields
+                          id="variants-product-title-filter"
+                          name="productTitle"
+                          label="Product title or handle"
+                          value={filterProductTitle}
+                          matchId="variants-product-title-match-filter"
+                          matchName="productTitleMatch"
+                          matchValue={filterProductTitleMatch}
+                          fieldStyle={filterControlStyle}
+                        />
+                        <AssignmentFilterPicker
+                          id="variants-tag-filter"
+                          name="tag"
+                          label="Tags"
+                          options={availableTags}
+                          values={filterTags}
+                          searchPlaceholder="Search tags"
+                          emptyText="No matching tags."
+                        />
+                        <AssignmentFilterPicker
+                          id="variants-collection-filter"
+                          name="collection"
+                          label="Collections"
+                          options={availableCollections}
+                          values={filterCollectionIds}
+                          searchPlaceholder="Search collections"
+                          emptyText="No matching collections."
+                        />
                       </TableColumnFilter>
                     </div>
                   </s-table-header>
                   <s-table-header listSlot="primary">
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                      }}
+                    >
                       <span>Variant</span>
-                      <TableColumnFilter title="Variant" active={Boolean(filterVariantTitle)} onApply={applyFilters} onClear={() => clearFilterNames(["variantTitle", "variantTitleMatch"])}>
-                        <TableTextFilterFields id="variants-variant-title-filter" name="variantTitle" label="Variant title" value={filterVariantTitle} matchId="variants-variant-title-match-filter" matchName="variantTitleMatch" matchValue={filterVariantTitleMatch} fieldStyle={filterControlStyle} />
+                      <TableColumnFilter
+                        title="Variant"
+                        active={Boolean(filterVariantTitle)}
+                        onApply={applyFilters}
+                        onClear={() =>
+                          clearFilterNames([
+                            "variantTitle",
+                            "variantTitleMatch",
+                          ])
+                        }
+                      >
+                        <TableTextFilterFields
+                          id="variants-variant-title-filter"
+                          name="variantTitle"
+                          label="Variant title"
+                          value={filterVariantTitle}
+                          matchId="variants-variant-title-match-filter"
+                          matchName="variantTitleMatch"
+                          matchValue={filterVariantTitleMatch}
+                          fieldStyle={filterControlStyle}
+                        />
                       </TableColumnFilter>
                     </div>
                   </s-table-header>
                   <s-table-header listSlot="secondary">
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                      }}
+                    >
                       <span>SKU</span>
-                      <TableColumnFilter title="SKU" active={Boolean(filterSku || filterSkuMatch === "empty")} onApply={applyFilters} onClear={() => clearFilterNames(["sku", "skuMatch"])}>
-                        <TableTextFilterFields id="variants-sku-filter" name="sku" label="SKU" value={filterSku} matchId="variants-sku-match-filter" matchName="skuMatch" matchValue={filterSkuMatch} allowEmpty fieldStyle={filterControlStyle} />
+                      <TableColumnFilter
+                        title="SKU"
+                        active={Boolean(
+                          filterSku || filterSkuMatch === "empty",
+                        )}
+                        onApply={applyFilters}
+                        onClear={() => clearFilterNames(["sku", "skuMatch"])}
+                      >
+                        <TableTextFilterFields
+                          id="variants-sku-filter"
+                          name="sku"
+                          label="SKU"
+                          value={filterSku}
+                          matchId="variants-sku-match-filter"
+                          matchName="skuMatch"
+                          matchValue={filterSkuMatch}
+                          allowEmpty
+                          fieldStyle={filterControlStyle}
+                        />
                       </TableColumnFilter>
                     </div>
                   </s-table-header>
-                  <s-table-header listSlot="labeled" format="currency">Price</s-table-header>
-                  <s-table-header listSlot="labeled" format="currency">Est. costs</s-table-header>
-                  <s-table-header listSlot="labeled" format="currency">Est. donation</s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">
+                    Price
+                  </s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">
+                    Est. costs
+                  </s-table-header>
+                  <s-table-header listSlot="labeled" format="currency">
+                    Est. donation
+                  </s-table-header>
                   <s-table-header listSlot="secondary">
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                      }}
+                    >
                       <span>Template</span>
-                      <TableColumnFilter title="Template" active={Boolean(filterTemplate || filterTemplateMatch === "empty")} onApply={applyFilters} onClear={() => clearFilterNames(["template", "templateMatch"])}>
-                        <TableTextFilterFields id="variants-template-filter" name="template" label="Template" value={filterTemplate} matchId="variants-template-match-filter" matchName="templateMatch" matchValue={filterTemplateMatch} allowEmpty fieldStyle={filterControlStyle} />
+                      <TableColumnFilter
+                        title="Template"
+                        active={Boolean(
+                          filterTemplate || filterTemplateMatch === "empty",
+                        )}
+                        onApply={applyFilters}
+                        onClear={() =>
+                          clearFilterNames(["template", "templateMatch"])
+                        }
+                      >
+                        <TableTextFilterFields
+                          id="variants-template-filter"
+                          name="template"
+                          label="Template"
+                          value={filterTemplate}
+                          matchId="variants-template-match-filter"
+                          matchName="templateMatch"
+                          matchValue={filterTemplateMatch}
+                          allowEmpty
+                          fieldStyle={filterControlStyle}
+                        />
                       </TableColumnFilter>
                     </div>
                   </s-table-header>
                   <s-table-header listSlot="secondary">
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                      }}
+                    >
                       <span>POD</span>
-                      <TableColumnFilter title="POD" active={Boolean(filterPodProvider || filterPodProviderMatch === "empty")} onApply={applyFilters} onClear={() => clearFilterNames(["podProvider", "podProviderMatch"])}>
-                        <TableTextFilterFields id="variants-pod-provider-filter" name="podProvider" label="POD provider" value={filterPodProvider} matchId="variants-pod-provider-match-filter" matchName="podProviderMatch" matchValue={filterPodProviderMatch} allowEmpty fieldStyle={filterControlStyle} />
+                      <TableColumnFilter
+                        title="POD"
+                        active={Boolean(
+                          filterPodProvider ||
+                          filterPodProviderMatch === "empty",
+                        )}
+                        onApply={applyFilters}
+                        onClear={() =>
+                          clearFilterNames(["podProvider", "podProviderMatch"])
+                        }
+                      >
+                        <TableTextFilterFields
+                          id="variants-pod-provider-filter"
+                          name="podProvider"
+                          label="POD provider"
+                          value={filterPodProvider}
+                          matchId="variants-pod-provider-match-filter"
+                          matchName="podProviderMatch"
+                          matchValue={filterPodProviderMatch}
+                          allowEmpty
+                          fieldStyle={filterControlStyle}
+                        />
                       </TableColumnFilter>
                     </div>
                   </s-table-header>
                   <s-table-header listSlot="inline">
-                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                      }}
+                    >
                       <span>Status</span>
-                      <TableColumnFilter title="Status" active={Boolean(filterConfigured)} onApply={applyFilters} onClear={() => clearFilterNames(["configured"])}>
-                        <label htmlFor="variants-configured-filter">Configuration status</label>
-                        <select id="variants-configured-filter" name="configured" defaultValue={filterConfigured} style={filterControlStyle}><option value="">All</option><option value="yes">Configured</option><option value="no">Not configured</option></select>
+                      <TableColumnFilter
+                        title="Status"
+                        active={Boolean(filterConfigured)}
+                        onApply={applyFilters}
+                        onClear={() => clearFilterNames(["configured"])}
+                      >
+                        <label htmlFor="variants-configured-filter">
+                          Configuration status
+                        </label>
+                        <select
+                          id="variants-configured-filter"
+                          name="configured"
+                          defaultValue={filterConfigured}
+                          style={filterControlStyle}
+                        >
+                          <option value="">All</option>
+                          <option value="yes">Configured</option>
+                          <option value="no">Not configured</option>
+                        </select>
                       </TableColumnFilter>
                     </div>
                   </s-table-header>
@@ -1069,7 +1618,12 @@ export default function VariantsPage() {
                         <input
                           type="checkbox"
                           checked={selectedVariantIds.includes(variant.id)}
-                          onChange={(event) => updateSelection(variant.id, event.currentTarget.checked)}
+                          onChange={(event) =>
+                            updateSelection(
+                              variant.id,
+                              event.currentTarget.checked,
+                            )
+                          }
                           aria-label={`Select ${variant.title}`}
                         />
                       </s-table-cell>
@@ -1079,14 +1633,21 @@ export default function VariantsPage() {
                       <s-table-cell>{formatMoney(variant.price)}</s-table-cell>
                       <s-table-cell>
                         {variant.estimate ? (
-                          <strong>{formatMoney(estimateTotalCost(variant.estimate))}</strong>
+                          <strong>
+                            {formatMoney(estimateTotalCost(variant.estimate))}
+                          </strong>
                         ) : (
                           <s-text color="subdued">Unavailable</s-text>
                         )}
                       </s-table-cell>
                       <s-table-cell>
                         {variant.estimate ? (
-                          <strong>{formatMoney(variant.estimate.reconciliation.allocatedDonations)}</strong>
+                          <strong>
+                            {formatMoney(
+                              variant.estimate.reconciliation
+                                .allocatedDonations,
+                            )}
+                          </strong>
                         ) : (
                           <s-text color="subdued">Unavailable</s-text>
                         )}
@@ -1096,7 +1657,9 @@ export default function VariantsPage() {
                           <div style={{ display: "grid", gap: "0.2rem" }}>
                             <span>{variant.templateName}</span>
                             {variant.templateProductYield ? (
-                              <s-text color="subdued">Yield {variant.templateProductYield}</s-text>
+                              <s-text color="subdued">
+                                Yield {variant.templateProductYield}
+                              </s-text>
                             ) : null}
                           </div>
                         ) : (
@@ -1106,7 +1669,11 @@ export default function VariantsPage() {
                       <s-table-cell>
                         {variant.mappedProviders.length > 0 ? (
                           <div style={{ display: "grid", gap: "0.2rem" }}>
-                            <strong>{variant.mappedProviders.map(formatProviderLabel).join(", ")}</strong>
+                            <strong>
+                              {variant.mappedProviders
+                                .map(formatProviderLabel)
+                                .join(", ")}
+                            </strong>
                             <s-text color="subdued">
                               {variant.latestProviderSyncAt
                                 ? `Last synced ${new Date(variant.latestProviderSyncAt).toLocaleString()}`
@@ -1118,11 +1685,23 @@ export default function VariantsPage() {
                         )}
                       </s-table-cell>
                       <s-table-cell>
-                        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                          <s-badge tone={variant.hasConfig ? "success" : "enabled"}>
-                            {variant.hasConfig ? "Configured" : "Not configured"}
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: "0.4rem",
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          <s-badge
+                            tone={variant.hasConfig ? "success" : "enabled"}
+                          >
+                            {variant.hasConfig
+                              ? "Configured"
+                              : "Not configured"}
                           </s-badge>
-                          {variant.mappedProviders.length > 0 ? <s-badge tone="info">POD mapped</s-badge> : null}
+                          {variant.mappedProviders.length > 0 ? (
+                            <s-badge tone="info">POD mapped</s-badge>
+                          ) : null}
                         </div>
                       </s-table-cell>
                       <s-table-cell>
@@ -1151,11 +1730,19 @@ export default function VariantsPage() {
         }}
       >
         <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "1rem",
+              alignItems: "start",
+            }}
+          >
             <div style={{ display: "grid", gap: "0.25rem" }}>
               <strong>Assign template</strong>
               <s-text color="subdued">
-                Assign a template to {selectedVariantIds.length} selected variant{selectedVariantIds.length !== 1 ? "s" : ""}.
+                Assign a template to {selectedVariantIds.length} selected
+                variant{selectedVariantIds.length !== 1 ? "s" : ""}.
               </s-text>
             </div>
             <button
@@ -1175,20 +1762,47 @@ export default function VariantsPage() {
           </div>
 
           {templates.length === 0 ? (
-            <s-text>No active templates are available. Create a template first.</s-text>
+            <s-text>
+              No active templates are available. Create a template first.
+            </s-text>
           ) : (
             <div style={{ display: "grid", gap: "0.35rem" }}>
               <strong>Template</strong>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", alignItems: "center", flexWrap: "wrap" }}>
-                <span style={{ color: selectedTemplate ? "inherit" : "var(--p-color-text-subdued, #6d7175)" }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  gap: "0.75rem",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                }}
+              >
+                <span
+                  style={{
+                    color: selectedTemplate
+                      ? "inherit"
+                      : "var(--p-color-text-subdued, #6d7175)",
+                  }}
+                >
                   {selectedTemplate?.name ?? "No template selected"}
                 </span>
                 <AssignmentPicker
                   id="variants-bulk-template-picker"
                   label="Choose template"
-                  triggerLabel={selectedTemplate ? "Change template" : "Choose template"}
-                  options={templates.map((template: { id: string; name: string }) => ({ id: template.id, label: template.name }))}
-                  selectedIds={selectedTemplateId ? new Set([selectedTemplateId]) : new Set()}
+                  triggerLabel={
+                    selectedTemplate ? "Change template" : "Choose template"
+                  }
+                  options={templates.map(
+                    (template: { id: string; name: string }) => ({
+                      id: template.id,
+                      label: template.name,
+                    }),
+                  )}
+                  selectedIds={
+                    selectedTemplateId
+                      ? new Set([selectedTemplateId])
+                      : new Set()
+                  }
                   onAdd={(ids) => setSelectedTemplateId(ids[0] ?? "")}
                   multi={false}
                   hideSelected={false}
@@ -1196,25 +1810,36 @@ export default function VariantsPage() {
                   emptyText="No templates match that search."
                 />
               </div>
-              <label style={{ display: "flex", gap: "0.5rem", alignItems: "start" }}>
+              <label
+                style={{ display: "flex", gap: "0.5rem", alignItems: "start" }}
+              >
                 <input
                   type="checkbox"
                   checked={cleanupExactDuplicates}
-                  onChange={(event) => setCleanupExactDuplicates(event.currentTarget.checked)}
+                  onChange={(event) =>
+                    setCleanupExactDuplicates(event.currentTarget.checked)
+                  }
                 />
                 <span>
-                  Remove exact duplicate variant lines already included in this template.
+                  Remove exact duplicate variant lines already included in this
+                  template.
                 </span>
               </label>
-              <div style={{ display: "grid", gap: "0.35rem", maxWidth: "14rem" }}>
-                <label htmlFor="bulk-template-product-yield">Products made</label>
+              <div
+                style={{ display: "grid", gap: "0.35rem", maxWidth: "14rem" }}
+              >
+                <label htmlFor="bulk-template-product-yield">
+                  Products made
+                </label>
                 <input
                   id="bulk-template-product-yield"
                   type="number"
                   min={1}
                   step={1}
                   value={templateProductYield}
-                  onChange={(event) => setTemplateProductYield(event.currentTarget.value)}
+                  onChange={(event) =>
+                    setTemplateProductYield(event.currentTarget.value)
+                  }
                   style={{
                     width: "100%",
                     boxSizing: "border-box",
@@ -1227,17 +1852,32 @@ export default function VariantsPage() {
                   }}
                 />
                 <s-text color="subdued">
-                  Optional. Use when the selected template makes a different number of sellable items for these variants.
+                  Optional. Use when the selected template makes a different
+                  number of sellable items for these variants.
                 </s-text>
               </div>
             </div>
           )}
 
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
-            <s-button variant="secondary" onClick={closeAssignDialog}>Cancel</s-button>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "0.75rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <s-button variant="secondary" onClick={closeAssignDialog}>
+              Cancel
+            </s-button>
             <s-button
               variant="primary"
-              disabled={isSubmitting || templates.length === 0 || selectedVariantIds.length === 0 || !selectedTemplateId}
+              disabled={
+                isSubmitting ||
+                templates.length === 0 ||
+                selectedVariantIds.length === 0 ||
+                !selectedTemplateId
+              }
               onClick={handleBulkAssign}
             >
               Assign
@@ -1258,10 +1898,19 @@ export default function VariantsPage() {
         }}
       >
         <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              gap: "1rem",
+              alignItems: "start",
+            }}
+          >
             <div style={{ display: "grid", gap: "0.25rem" }}>
               <strong>Overwrite existing configurations?</strong>
-              <s-text color="subdued">Some selected variants already have a configuration.</s-text>
+              <s-text color="subdued">
+                Some selected variants already have a configuration.
+              </s-text>
             </div>
             <button
               type="button"
@@ -1279,17 +1928,32 @@ export default function VariantsPage() {
             </button>
           </div>
 
-	          <s-text>
-	            {overwriteCount} of the selected variant(s) already have a cost configuration. Assigning this template will replace their current template assignment. Per-variant line overrides and labor settings will be preserved.
-	          </s-text>
+          <s-text>
+            {overwriteCount} of the selected variant(s) already have a cost
+            configuration. Assigning this template will replace their current
+            template assignment. Per-variant line overrides and labor settings
+            will be preserved.
+          </s-text>
           {cleanupExactDuplicates ? (
             <s-text>
-              Exact duplicate variant material/equipment lines included in the template will be removed. Lines with different quantities, yields, uses, or equipment settings will be kept and shown for review after assignment.
+              Exact duplicate variant material/equipment lines included in the
+              template will be removed. Lines with different quantities, yields,
+              uses, or equipment settings will be kept and shown for review
+              after assignment.
             </s-text>
           ) : null}
 
-	          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
-            <s-button variant="secondary" onClick={closeConfirmDialog}>Cancel</s-button>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: "0.75rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <s-button variant="secondary" onClick={closeConfirmDialog}>
+              Cancel
+            </s-button>
             <s-button
               variant="primary"
               tone="critical"
@@ -1313,7 +1977,9 @@ export function ErrorBoundary() {
       <ui-title-bar title="Variants" />
       <s-page>
         <s-banner tone="critical">
-          <s-text>Something went wrong loading variants. Please refresh the page.</s-text>
+          <s-text>
+            Something went wrong loading variants. Please refresh the page.
+          </s-text>
         </s-banner>
       </s-page>
     </>

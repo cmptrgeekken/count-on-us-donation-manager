@@ -2,6 +2,26 @@ import type { ActionFunctionArgs } from "@remix-run/node";
 import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
 import { verifyWebhookHmac } from "../middleware/hmac.server";
+import { parseCatalogWebhookOperation } from "../utils/shopify-webhook-resource";
+
+async function queueSettledSync(
+  queueName: "catalog.sync.incremental" | "catalog.sync.collection",
+  data:
+    | { shopId: string; productGid: string }
+    | { shopId: string; collectionGid: string },
+  singletonKey: string,
+): Promise<void> {
+  await jobQueue.send(queueName, data, {
+    singletonKey: `${singletonKey}:immediate`,
+    singletonSeconds: 30,
+  });
+  await jobQueue.sendAfter(
+    queueName,
+    data,
+    { singletonKey: `${singletonKey}:settled`, singletonSeconds: 120 },
+    new Date(Date.now() + 45_000),
+  );
+}
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   // Read raw body before any parsing — HMAC depends on unmodified bytes
@@ -26,6 +46,37 @@ export const action = async ({ request }: ActionFunctionArgs) => {
     return new Response(null, { status: 400 });
   }
 
+  const catalogOperation = parseCatalogWebhookOperation(topic, payload);
+  if (catalogOperation === null) return new Response(null, { status: 400 });
+  if (catalogOperation?.kind === "product-sync") {
+    await queueSettledSync(
+      "catalog.sync.incremental",
+      { shopId: shop, productGid: catalogOperation.productGid },
+      `${shop}:${catalogOperation.productGid}`,
+    );
+    return new Response(null, { status: 200 });
+  }
+  if (catalogOperation?.kind === "product-delete") {
+    await prisma.product.deleteMany({
+      where: { shopId: shop, shopifyId: catalogOperation.productGid },
+    });
+    return new Response(null, { status: 200 });
+  }
+  if (catalogOperation?.kind === "collection-sync") {
+    await queueSettledSync(
+      "catalog.sync.collection",
+      { shopId: shop, collectionGid: catalogOperation.collectionGid },
+      `${shop}:${catalogOperation.collectionGid}`,
+    );
+    return new Response(null, { status: 200 });
+  }
+  if (catalogOperation?.kind === "collection-delete") {
+    await prisma.shopifyCollection.deleteMany({
+      where: { shopId: shop, shopifyId: catalogOperation.collectionGid },
+    });
+    return new Response(null, { status: 200 });
+  }
+
   switch (topic) {
     case "app/uninstalled":
       await handleAppUninstalled(shop);
@@ -35,7 +86,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await jobQueue.send("orders.snapshot", {
         shopId: shop,
         shopifyOrderId:
-          (payload as { admin_graphql_api_id?: string })?.admin_graphql_api_id ??
+          (payload as { admin_graphql_api_id?: string })
+            ?.admin_graphql_api_id ??
           (payload as { id?: string | number })?.id?.toString() ??
           "unknown",
         payload,
@@ -46,7 +98,8 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       await jobQueue.send("orders.updated", {
         shopId: shop,
         shopifyOrderId:
-          (payload as { admin_graphql_api_id?: string })?.admin_graphql_api_id ??
+          (payload as { admin_graphql_api_id?: string })
+            ?.admin_graphql_api_id ??
           (payload as { id?: string | number })?.id?.toString() ??
           "unknown",
         payload,
@@ -59,14 +112,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         payload,
       });
       break;
-
-    case "products/update": {
-      const productGid = (payload as { admin_graphql_api_id?: string })?.admin_graphql_api_id;
-      if (productGid) {
-        await jobQueue.send("catalog.sync.incremental", { shopId: shop, productGid });
-      }
-      break;
-    }
 
     default:
       console.warn(`[webhook] Unhandled topic: ${topic}`);
@@ -104,5 +149,7 @@ async function handleAppUninstalled(shopId: string): Promise<void> {
     scheduledFor,
   );
 
-  console.log(`[webhook] APP_UNINSTALLED: DeletionJob created for ${shopId}, scheduled for ${scheduledFor.toISOString()}`);
+  console.log(
+    `[webhook] APP_UNINSTALLED: DeletionJob created for ${shopId}, scheduled for ${scheduledFor.toISOString()}`,
+  );
 }

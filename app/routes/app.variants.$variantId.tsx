@@ -1,7 +1,7 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
+import { Link, useFetcher, useLoaderData, useRevalidator, useRouteError } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import {
   Badge,
@@ -22,7 +22,12 @@ import { z } from "zod";
 import { AssignmentPicker } from "../components/AssignmentControls";
 import { AppSaveBar } from "../components/AppSaveBar";
 import { prisma } from "../db.server";
-import { resolveEquipmentEffectiveRates, type EquipmentForCosting } from "../services/costEngine.server";
+import {
+  computeEquipmentLineCost,
+  computeMaterialLineCost,
+  resolveEquipmentEffectiveRates,
+  type EquipmentForCosting,
+} from "../services/costEngine.server";
 import { createEquipmentLibraryItem, createMaterialLibraryItem } from "../services/libraryCreate.server";
 import { buildAdminVariantEstimate, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
@@ -51,6 +56,7 @@ import { resolveEffectiveTemplateSelection } from "../utils/effective-template-s
 import {
   applyShippingTemplateSelectionToVariantDraft,
   applyTemplateSelectionToVariantDraft,
+  buildVariantTemplateMaterialDraftLines,
   cloneDraft,
   createClientId,
   normalizeVariantDraft,
@@ -68,6 +74,7 @@ type SerializedMaterialLine = {
   materialType: string;
   costingModel: string | null;
   perUnitCost: string;
+  lineCost: string | null;
   yield: string | null;
   quantity: string;
   usesPerVariant: string | null;
@@ -86,6 +93,7 @@ type SerializedEquipmentLine = {
   yieldDurationMinutes: string | null;
   yieldUses: string | null;
   yieldQuantity: string | null;
+  lineCost: string | null;
 };
 
 type TemplateMaterialOverrideLine = {
@@ -102,6 +110,8 @@ type TemplateMaterialOverrideLine = {
   overrideYield: string | null;
   overrideUsesPerVariant: string | null;
   hasOverride: boolean;
+  lineCost: string;
+  overrideLineCost: string | null;
 };
 
 type TemplateEquipmentOverrideLine = {
@@ -123,7 +133,36 @@ type TemplateEquipmentOverrideLine = {
   overrideYieldUses: string | null;
   overrideYieldQuantity: string | null;
   hasOverride: boolean;
+  lineCost: string;
+  overrideLineCost: string | null;
 };
+
+type MaterialForLineCost = {
+  type: string;
+  costingModel: string | null;
+  purchasePrice: Prisma.Decimal;
+  purchaseQty: Prisma.Decimal;
+  totalUsesPerUnit: Prisma.Decimal | null;
+};
+
+type MaterialUsageForLineCost = {
+  yield: Prisma.Decimal | null;
+  quantity: Prisma.Decimal;
+  usesPerVariant: Prisma.Decimal | null;
+};
+
+function materialLineCost(material: MaterialForLineCost, line: MaterialUsageForLineCost): string {
+  return computeMaterialLineCost({
+    type: material.type,
+    costingModel: material.costingModel,
+    purchasePrice: material.purchasePrice,
+    purchaseQty: material.purchaseQty,
+    totalUsesPerUnit: material.totalUsesPerUnit,
+    yield_: line.yield,
+    quantity: line.quantity,
+    usesPerVariant: line.usesPerVariant,
+  }).toString();
+}
 
 type SerializedProviderCostLine = {
   costLineType: string;
@@ -160,10 +199,18 @@ function serializeVariantMaterialLine(
   line: {
     id: string;
     materialId: string;
-    material: { name: string; type: string; costingModel: string | null; perUnitCost: { toString(): string } };
-    yield: { toString(): string } | null;
-    quantity: { toString(): string };
-    usesPerVariant: { toString(): string } | null;
+    material: {
+      name: string;
+      type: string;
+      costingModel: string | null;
+      perUnitCost: Prisma.Decimal;
+      purchasePrice: Prisma.Decimal;
+      purchaseQty: Prisma.Decimal;
+      totalUsesPerUnit: Prisma.Decimal | null;
+    };
+    yield: Prisma.Decimal | null;
+    quantity: Prisma.Decimal;
+    usesPerVariant: Prisma.Decimal | null;
   },
 ): SerializedMaterialLine {
   return {
@@ -173,6 +220,7 @@ function serializeVariantMaterialLine(
     materialType: line.material.type,
     costingModel: line.material.costingModel,
     perUnitCost: line.material.perUnitCost.toString(),
+    lineCost: materialLineCost(line.material, line),
     yield: line.yield?.toString() ?? null,
     quantity: line.quantity.toString(),
     usesPerVariant: line.usesPerVariant?.toString() ?? null,
@@ -185,11 +233,11 @@ function serializeVariantEquipmentLine(
     equipmentId: string;
     equipment: EquipmentForCosting & { name: string; usageBasis: string };
     usageMode: string;
-    minutes: { toString(): string } | null;
-    uses: { toString(): string } | null;
-    yieldDurationMinutes: { toString(): string } | null;
-    yieldUses: { toString(): string } | null;
-    yieldQuantity: { toString(): string } | null;
+    minutes: Prisma.Decimal | null;
+    uses: Prisma.Decimal | null;
+    yieldDurationMinutes: Prisma.Decimal | null;
+    yieldUses: Prisma.Decimal | null;
+    yieldQuantity: Prisma.Decimal | null;
   },
   defaultElectricityCostPerKwh?: Prisma.Decimal | null,
 ): SerializedEquipmentLine {
@@ -207,6 +255,16 @@ function serializeVariantEquipmentLine(
     yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
     yieldUses: line.yieldUses?.toString() ?? null,
     yieldQuantity: line.yieldQuantity?.toString() ?? null,
+    lineCost: computeEquipmentLineCost({
+      hourlyRate: rates.hourlyRate,
+      perUseCost: rates.perUseCost,
+      usageMode: line.usageMode,
+      minutes: line.minutes,
+      uses: line.uses,
+      yieldDurationMinutes: line.yieldDurationMinutes,
+      yieldUses: line.yieldUses,
+      yieldQuantity: line.yieldQuantity,
+    }).toString(),
   };
 }
 
@@ -244,6 +302,14 @@ const variantDraftSchema = z.object({
   laborRate: z.string(),
   mistakeBuffer: z.string(),
   templateMaterialLines: z.array(z.object({
+    templateLineId: z.string(),
+    materialId: z.string(),
+    hasOverride: z.boolean(),
+    overrideQuantity: z.string().nullable(),
+    overrideYield: z.string().nullable(),
+    overrideUsesPerVariant: z.string().nullable(),
+  })),
+  shippingTemplateMaterialLines: z.array(z.object({
     templateLineId: z.string(),
     materialId: z.string(),
     hasOverride: z.boolean(),
@@ -318,7 +384,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const variant = await prisma.variant.findFirst({
     where: { id: variantId, shopId },
     include: {
-      product: { select: { shopifyId: true, title: true } },
+      product: { select: { id: true, shopifyId: true, title: true } },
       providerMappings: {
         orderBy: [{ updatedAt: "desc" }],
         include: {
@@ -400,6 +466,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const config = variant.costConfig;
 
   let templateMaterialLines: TemplateMaterialOverrideLine[] = [];
+  let shippingTemplateMaterialLines: TemplateMaterialOverrideLine[] = [];
   let templateEquipmentLines: TemplateEquipmentOverrideLine[] = [];
   let additionalMaterialLines: SerializedMaterialLine[] = [];
   let additionalEquipmentLines: SerializedEquipmentLine[] = [];
@@ -429,6 +496,9 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       const legacyOverride = explicitOverride ? null : legacyMaterialOverrides.get(line.materialId);
       const legacyDuplicate = explicitOverride ? legacyMaterialOverrides.get(line.materialId) : null;
       const override = explicitOverride ?? legacyOverride;
+      const effectiveYield = !override && line.material.costingModel === "yield" && config.templateProductYield
+        ? config.templateProductYield
+        : line.yield;
 
       if (override) consumedMaterialLineIds.add(override.id);
       if (legacyDuplicate) consumedMaterialLineIds.add(legacyDuplicate.id);
@@ -447,6 +517,35 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         overrideYield: override?.yield?.toString() ?? null,
         overrideUsesPerVariant: override?.usesPerVariant?.toString() ?? null,
         hasOverride: Boolean(override),
+        lineCost: materialLineCost(line.material, { ...line, yield: effectiveYield }),
+        overrideLineCost: override ? materialLineCost(override.material, override) : null,
+      };
+    });
+
+    const effectiveShippingTemplateId =
+      config.shippingTemplateId ?? config.productionTemplate?.defaultShippingTemplateId ?? null;
+    const effectiveShippingTemplate = templates.find((template) => template.id === effectiveShippingTemplateId) ?? null;
+
+    shippingTemplateMaterialLines = (effectiveShippingTemplate?.materialLines ?? []).map((line) => {
+      const override = explicitMaterialOverrides.get(line.id);
+      if (override) consumedMaterialLineIds.add(override.id);
+
+      return {
+        templateLineId: line.id,
+        materialId: line.materialId,
+        materialName: line.material.name,
+        materialType: line.material.type,
+        costingModel: line.material.costingModel,
+        quantity: line.quantity.toString(),
+        yield: line.yield?.toString() ?? null,
+        usesPerVariant: line.usesPerVariant?.toString() ?? null,
+        overrideLineId: override?.id ?? null,
+        overrideQuantity: override?.quantity.toString() ?? null,
+        overrideYield: override?.yield?.toString() ?? null,
+        overrideUsesPerVariant: override?.usesPerVariant?.toString() ?? null,
+        hasOverride: Boolean(override),
+        lineCost: materialLineCost(line.material, line),
+        overrideLineCost: override ? materialLineCost(override.material, override) : null,
       };
     });
 
@@ -479,6 +578,12 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       const legacyOverride = explicitOverride ? null : legacyEquipmentOverrides.get(line.equipmentId);
       const legacyDuplicate = explicitOverride ? legacyEquipmentOverrides.get(line.equipmentId) : null;
       const override = explicitOverride ?? legacyOverride;
+      const rates = resolveEquipmentEffectiveRates(line.equipment, defaultElectricityCostPerKwh);
+      const effectiveYieldQuantity = !override &&
+        (line.usageMode === "duration_yield" || line.usageMode === "use_yield") &&
+        config.templateProductYield
+        ? config.templateProductYield
+        : line.yieldQuantity;
 
       if (override) consumedEquipmentLineIds.add(override.id);
       if (legacyDuplicate) consumedEquipmentLineIds.add(legacyDuplicate.id);
@@ -502,6 +607,28 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         overrideYieldUses: override?.yieldUses?.toString() ?? null,
         overrideYieldQuantity: override?.yieldQuantity?.toString() ?? null,
         hasOverride: Boolean(override),
+        lineCost: computeEquipmentLineCost({
+          hourlyRate: rates.hourlyRate,
+          perUseCost: rates.perUseCost,
+          usageMode: line.usageMode,
+          minutes: line.minutes,
+          uses: line.uses,
+          yieldDurationMinutes: line.yieldDurationMinutes,
+          yieldUses: line.yieldUses,
+          yieldQuantity: effectiveYieldQuantity,
+        }).toString(),
+        overrideLineCost: override
+          ? computeEquipmentLineCost({
+              hourlyRate: rates.hourlyRate,
+              perUseCost: rates.perUseCost,
+              usageMode: override.usageMode,
+              minutes: override.minutes,
+              uses: override.uses,
+              yieldDurationMinutes: override.yieldDurationMinutes,
+              yieldUses: override.yieldUses,
+              yieldQuantity: override.yieldQuantity,
+            }).toString()
+          : null,
       };
     });
 
@@ -542,6 +669,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   return jsonResponse({
     variant: {
       id: variant.id,
+      productId: variant.product.id,
       shopifyAdminUrl: shopifyAdminVariantUrl({
         shopDomain: shopId,
         shopifyProductId: variant.product.shopifyId,
@@ -576,6 +704,7 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
           mistakeBuffer: config.mistakeBuffer ? (Number(config.mistakeBuffer) * 100).toFixed(2) : "",
           lineItemCount: config.lineItemCount,
           templateMaterialLines,
+          shippingTemplateMaterialLines,
           templateEquipmentLines,
           materialLines: additionalMaterialLines,
           equipmentLines: additionalEquipmentLines,
@@ -597,19 +726,33 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
         quantity: line.quantity.toString(),
         yield: line.yield?.toString() ?? null,
         usesPerVariant: line.usesPerVariant?.toString() ?? null,
+        lineCost: materialLineCost(line.material, line),
       })),
-      equipmentLines: template.equipmentLines.map((line) => ({
-        templateLineId: line.id,
-        equipmentId: line.equipmentId,
-        equipmentName: line.equipment.name,
-        usageBasis: line.equipment.usageBasis ?? "time_and_unit",
-        usageMode: line.usageMode ?? "direct",
-        minutes: line.minutes?.toString() ?? null,
-        uses: line.uses?.toString() ?? null,
-        yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
-        yieldUses: line.yieldUses?.toString() ?? null,
-        yieldQuantity: line.yieldQuantity?.toString() ?? null,
-      })),
+      equipmentLines: template.equipmentLines.map((line) => {
+        const rates = resolveEquipmentEffectiveRates(line.equipment, defaultElectricityCostPerKwh);
+        return {
+          templateLineId: line.id,
+          equipmentId: line.equipmentId,
+          equipmentName: line.equipment.name,
+          usageBasis: line.equipment.usageBasis ?? "time_and_unit",
+          usageMode: line.usageMode ?? "direct",
+          minutes: line.minutes?.toString() ?? null,
+          uses: line.uses?.toString() ?? null,
+          yieldDurationMinutes: line.yieldDurationMinutes?.toString() ?? null,
+          yieldUses: line.yieldUses?.toString() ?? null,
+          yieldQuantity: line.yieldQuantity?.toString() ?? null,
+          lineCost: computeEquipmentLineCost({
+            hourlyRate: rates.hourlyRate,
+            perUseCost: rates.perUseCost,
+            usageMode: line.usageMode,
+            minutes: line.minutes,
+            uses: line.uses,
+            yieldDurationMinutes: line.yieldDurationMinutes,
+            yieldUses: line.yieldUses,
+            yieldQuantity: line.yieldQuantity,
+          }).toString(),
+        };
+      }),
     })),
     availableMaterials: materials.map((material) => ({
       id: material.id,
@@ -879,9 +1022,25 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     const selectedShippingTemplate = normalizedShippingTemplateId
       ? await prisma.costTemplate.findFirst({
           where: { id: normalizedShippingTemplateId, shopId },
-          select: { id: true, type: true },
+          select: {
+            id: true,
+            type: true,
+            materialLines: { select: { id: true, materialId: true } },
+          },
         })
       : null;
+
+    const inheritedShippingTemplate = !normalizedShippingTemplateId && selectedTemplate?.defaultShippingTemplateId
+      ? await prisma.costTemplate.findFirst({
+          where: { id: selectedTemplate.defaultShippingTemplateId, shopId, type: "shipping" },
+          select: {
+            id: true,
+            type: true,
+            materialLines: { select: { id: true, materialId: true } },
+          },
+        })
+      : null;
+    const effectiveSelectedShippingTemplate = selectedShippingTemplate ?? inheritedShippingTemplate;
 
     if (normalizedProductionTemplateId && !selectedTemplate) {
       return jsonResponse({ ok: false, message: "Production template not found." }, { status: 404 });
@@ -910,6 +1069,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     }
 
     const materialMap = new Map((selectedTemplate?.materialLines ?? []).map((line) => [line.id, line.materialId]));
+    const shippingMaterialMap = new Map(
+      (effectiveSelectedShippingTemplate?.materialLines ?? []).map((line) => [line.id, line.materialId]),
+    );
     const equipmentMap = new Map((selectedTemplate?.equipmentLines ?? []).map((line) => [line.id, line.equipmentId]));
     const equipmentUsageBasisById = new Map(
       (selectedTemplate?.equipmentLines ?? []).map((line) => [line.equipmentId, line.equipment.usageBasis ?? "time_and_unit"]),
@@ -918,6 +1080,12 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
     for (const line of draft.templateMaterialLines) {
       if (!materialMap.has(line.templateLineId) || materialMap.get(line.templateLineId) !== line.materialId) {
         return jsonResponse({ ok: false, message: "One or more material overrides are invalid." }, { status: 400 });
+      }
+    }
+
+    for (const line of draft.shippingTemplateMaterialLines) {
+      if (!shippingMaterialMap.has(line.templateLineId) || shippingMaterialMap.get(line.templateLineId) !== line.materialId) {
+        return jsonResponse({ ok: false, message: "One or more shipping material overrides are invalid." }, { status: 400 });
       }
     }
 
@@ -971,6 +1139,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         draft.materialLines.length ||
         draft.equipmentLines.length ||
         draft.templateMaterialLines.some((line) => line.hasOverride) ||
+        draft.shippingTemplateMaterialLines.some((line) => line.hasOverride) ||
         draft.templateEquipmentLines.some((line) => line.hasOverride),
     );
 
@@ -995,7 +1164,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       });
     }
 
-    const materialOverrideLines = draft.templateMaterialLines
+    const materialOverrideLines = [...draft.templateMaterialLines, ...draft.shippingTemplateMaterialLines]
       .filter((line) => line.hasOverride)
       .map((line) => ({
         shopId,
@@ -2443,6 +2612,7 @@ function buildVariantDraft(config: {
   laborRate: string;
   mistakeBuffer: string;
   templateMaterialLines: TemplateMaterialOverrideLine[];
+  shippingTemplateMaterialLines: TemplateMaterialOverrideLine[];
   templateEquipmentLines: TemplateEquipmentOverrideLine[];
   materialLines: SerializedMaterialLine[];
   equipmentLines: SerializedEquipmentLine[];
@@ -2461,6 +2631,7 @@ function buildVariantDraft(config: {
     laborRate: config?.laborRate ?? "",
     mistakeBuffer: config?.mistakeBuffer ?? "",
     templateMaterialLines: cloneDraft(config?.templateMaterialLines ?? []),
+    shippingTemplateMaterialLines: cloneDraft(config?.shippingTemplateMaterialLines ?? []),
     templateEquipmentLines: cloneDraft(config?.templateEquipmentLines ?? []),
     materialLines: cloneDraft(config?.materialLines ?? []),
     equipmentLines: cloneDraft(config?.equipmentLines ?? []),
@@ -2499,6 +2670,8 @@ export default function VariantDetailPage() {
   const revalidator = useRevalidator();
 
   const { formatMoney, formatPct, getCurrencySymbol } = useAppLocalization();
+  const formatLineCost = (lineCost: string | null, prefix = "Cost per item") =>
+    lineCost === null ? `${prefix}: save to calculate` : `${prefix}: ${formatMoney(lineCost)}`;
 
   const [assignTemplateOpen, setAssignTemplateOpen] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState(
@@ -2515,6 +2688,7 @@ export default function VariantDetailPage() {
   );
 
   const [addMaterialOpen, setAddMaterialOpen] = useState(false);
+  const [editingMaterialLineId, setEditingMaterialLineId] = useState<string | null>(null);
   const [selectedMaterialId, setSelectedMaterialId] = useState("");
   const [materialSearchValue, setMaterialSearchValue] = useState("");
   const [matQty, setMatQty] = useState("1");
@@ -2537,6 +2711,7 @@ export default function VariantDetailPage() {
   const [overrideMatUses, setOverrideMatUses] = useState("");
 
   const [addEquipmentOpen, setAddEquipmentOpen] = useState(false);
+  const [editingEquipmentLineId, setEditingEquipmentLineId] = useState<string | null>(null);
   const [selectedEquipmentId, setSelectedEquipmentId] = useState("");
   const [equipmentSearchValue, setEquipmentSearchValue] = useState("");
   const [eqUsageMode, setEqUsageMode] = useState("direct");
@@ -2611,7 +2786,7 @@ export default function VariantDetailPage() {
     templates.find((template: TemplateCatalogEntry) => template.id === effectiveTemplateSelection.productionTemplateId) ?? null;
   const effectiveShippingTemplate =
     templates.find((template: TemplateCatalogEntry) => template.id === effectiveTemplateSelection.shippingTemplateId) ?? null;
-  const shippingTemplateMaterialLines = effectiveShippingTemplate?.materialLines ?? [];
+  const shippingTemplateMaterialLines = draft.shippingTemplateMaterialLines;
   const preview = previewFetcher.data?.preview;
   const selectedMaterial = availableMaterials.find((material: AvailableMaterial) => material.id === selectedMaterialId);
   const selectedEquipment = availableEquipment.find((equipment: AvailableEquipment) => equipment.id === selectedEquipmentId);
@@ -2683,7 +2858,8 @@ export default function VariantDetailPage() {
     draft.templateEquipmentLines.map((line: VariantTemplateEquipmentDraftLine) => line.equipmentId),
   );
   const materialOverrideTarget =
-    draft.templateMaterialLines.find((line) => line.templateLineId === materialOverrideTargetId) ?? null;
+    [...draft.templateMaterialLines, ...draft.shippingTemplateMaterialLines]
+      .find((line) => line.templateLineId === materialOverrideTargetId) ?? null;
   const isDirty = serializeVariantDraftState(draft) !== serializeVariantDraftState(baseDraft);
   const { confirmThenNavigate } = useUnsavedChangesGuard(isDirty);
   const shopDefaultLaborRate = shopDefaults.defaultLaborRate;
@@ -2752,11 +2928,16 @@ export default function VariantDetailPage() {
     })),
   ];
   const promotableShippingMaterialLines = [
-    ...shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => ({
+    ...shippingTemplateMaterialLines.map((line: VariantTemplateMaterialDraftLine) => ({
       key: `template:${line.templateLineId}`,
       name: line.materialName,
       source: "Shipping template",
-      description: describeMaterialLine(line),
+      description: describeMaterialLine({
+        costingModel: line.costingModel,
+        quantity: line.hasOverride ? line.overrideQuantity : line.quantity,
+        yield: line.hasOverride ? line.overrideYield : line.yield,
+        usesPerVariant: line.hasOverride ? line.overrideUsesPerVariant : line.usesPerVariant,
+      }),
     })),
     ...additionalShippingMaterialLines.map((line: SerializedMaterialLine) => ({
       key: `variant:${line.id}`,
@@ -2847,6 +3028,7 @@ export default function VariantDetailPage() {
   }, [config, loadedVariantDraftState]);
 
   function resetAdditionalMaterialModal() {
+    setEditingMaterialLineId(null);
     setSelectedMaterialId("");
     setMaterialSearchValue("");
     setMatQty("1");
@@ -2855,6 +3037,7 @@ export default function VariantDetailPage() {
   }
 
   function resetAdditionalEquipmentModal() {
+    setEditingEquipmentLineId(null);
     setSelectedEquipmentId("");
     setEquipmentSearchValue("");
     setEqUsageMode("direct");
@@ -3057,6 +3240,11 @@ export default function VariantDetailPage() {
     setDraft((current) => ({
       ...applyTemplateSelectionToVariantDraft(current, nextTemplate),
       templateProductYield: nextTemplate ? selectedTemplateProductYield : "",
+      shippingTemplateMaterialLines: current.shippingTemplateId
+        ? current.shippingTemplateMaterialLines
+        : buildVariantTemplateMaterialDraftLines(
+            templates.find((template: TemplateCatalogEntry) => template.id === nextTemplate?.defaultShippingTemplateId) ?? null,
+          ),
     }));
     setAssignTemplateOpen(false);
   }
@@ -3069,11 +3257,26 @@ export default function VariantDetailPage() {
   }
 
   function removeSelectedTemplate() {
-    setDraft((current) => applyTemplateSelectionToVariantDraft(current, null));
+    setDraft((current) => ({
+      ...applyTemplateSelectionToVariantDraft(current, null),
+      shippingTemplateMaterialLines: current.shippingTemplateId ? current.shippingTemplateMaterialLines : [],
+    }));
   }
 
   function removeSelectedShippingTemplate() {
-    setDraft((current) => applyShippingTemplateSelectionToVariantDraft(current, null));
+    setDraft((current) => {
+      const productionTemplate = templates.find(
+        (template: TemplateCatalogEntry) => template.id === current.productionTemplateId,
+      );
+      const inheritedShippingTemplate = templates.find(
+        (template: TemplateCatalogEntry) => template.id === productionTemplate?.defaultShippingTemplateId,
+      ) ?? null;
+      return {
+        ...current,
+        shippingTemplateId: null,
+        shippingTemplateMaterialLines: buildVariantTemplateMaterialDraftLines(inheritedShippingTemplate),
+      };
+    });
   }
 
   function addAdditionalMaterialLine() {
@@ -3086,6 +3289,7 @@ export default function VariantDetailPage() {
       materialType: selectedMaterial.type,
       costingModel: selectedMaterial.costingModel,
       perUnitCost: selectedMaterial.perUnitCost,
+      lineCost: null,
       quantity: matQty,
       yield: selectedMaterial.costingModel === "yield" ? (matYield || null) : null,
       usesPerVariant: selectedMaterial.costingModel === "uses" ? (matUses || null) : null,
@@ -3093,10 +3297,24 @@ export default function VariantDetailPage() {
 
     setDraft((current) => ({
       ...current,
-      materialLines: sortSerializedMaterialLines([...current.materialLines, nextLine]),
+      materialLines: sortSerializedMaterialLines(
+        editingMaterialLineId
+          ? current.materialLines.map((line) => line.id === editingMaterialLineId ? { ...nextLine, id: line.id } : line)
+          : [...current.materialLines, nextLine],
+      ),
     }));
     setAddMaterialOpen(false);
     resetAdditionalMaterialModal();
+  }
+
+  function openAdditionalMaterialEdit(line: SerializedMaterialLine) {
+    setEditingMaterialLineId(line.id);
+    setSelectedMaterialId(line.materialId);
+    setMaterialSearchValue(line.materialName);
+    setMatQty(line.quantity);
+    setMatYield(line.yield ?? "");
+    setMatUses(line.usesPerVariant ?? "");
+    setAddMaterialOpen(true);
   }
 
   function removeAdditionalMaterialLine(lineId: string) {
@@ -3122,14 +3340,32 @@ export default function VariantDetailPage() {
       yieldDurationMinutes: eqUsageMode === "duration_yield" ? (eqYieldDurationMinutes || null) : null,
       yieldUses: eqUsageMode === "use_yield" ? (eqYieldUses || null) : null,
       yieldQuantity: eqUsageMode !== "direct" ? (eqYieldQuantity || null) : null,
+      lineCost: null,
     };
 
     setDraft((current) => ({
       ...current,
-      equipmentLines: sortSerializedEquipmentLines([...current.equipmentLines, nextLine]),
+      equipmentLines: sortSerializedEquipmentLines(
+        editingEquipmentLineId
+          ? current.equipmentLines.map((line) => line.id === editingEquipmentLineId ? { ...nextLine, id: line.id } : line)
+          : [...current.equipmentLines, nextLine],
+      ),
     }));
     setAddEquipmentOpen(false);
     resetAdditionalEquipmentModal();
+  }
+
+  function openAdditionalEquipmentEdit(line: SerializedEquipmentLine) {
+    setEditingEquipmentLineId(line.id);
+    setSelectedEquipmentId(line.equipmentId);
+    setEquipmentSearchValue(line.equipmentName);
+    setEqUsageMode(line.usageMode);
+    setEqMinutes(line.minutes ?? "");
+    setEqUses(line.uses ?? "");
+    setEqYieldDurationMinutes(line.yieldDurationMinutes ?? "");
+    setEqYieldUses(line.yieldUses ?? "");
+    setEqYieldQuantity(line.yieldQuantity ?? "");
+    setAddEquipmentOpen(true);
   }
 
   function removeAdditionalEquipmentLine(lineId: string) {
@@ -3152,6 +3388,19 @@ export default function VariantDetailPage() {
               overrideQuantity: overrideMatQty,
               overrideYield: line.costingModel === "yield" ? (overrideMatYield || null) : null,
               overrideUsesPerVariant: line.costingModel === "uses" ? (overrideMatUses || null) : null,
+              overrideLineCost: null,
+            }
+          : line,
+      ),
+      shippingTemplateMaterialLines: current.shippingTemplateMaterialLines.map((line) =>
+        line.templateLineId === materialOverrideTarget.templateLineId
+          ? {
+              ...line,
+              hasOverride: true,
+              overrideQuantity: overrideMatQty,
+              overrideYield: line.costingModel === "yield" ? (overrideMatYield || null) : null,
+              overrideUsesPerVariant: line.costingModel === "uses" ? (overrideMatUses || null) : null,
+              overrideLineCost: null,
             }
           : line,
       ),
@@ -3163,6 +3412,17 @@ export default function VariantDetailPage() {
     setDraft((current) => ({
       ...current,
       templateMaterialLines: current.templateMaterialLines.map((line) =>
+        line.templateLineId === templateLineId
+          ? {
+              ...line,
+              hasOverride: false,
+              overrideQuantity: null,
+              overrideYield: null,
+              overrideUsesPerVariant: null,
+            }
+          : line,
+      ),
+      shippingTemplateMaterialLines: current.shippingTemplateMaterialLines.map((line) =>
         line.templateLineId === templateLineId
           ? {
               ...line,
@@ -3192,6 +3452,7 @@ export default function VariantDetailPage() {
               overrideYieldDurationMinutes: overrideEqUsageMode === "duration_yield" ? (overrideEqYieldDurationMinutes || null) : null,
               overrideYieldUses: overrideEqUsageMode === "use_yield" ? (overrideEqYieldUses || null) : null,
               overrideYieldQuantity: overrideEqUsageMode !== "direct" ? (overrideEqYieldQuantity || null) : null,
+              overrideLineCost: null,
             }
           : line,
       ),
@@ -3247,6 +3508,7 @@ export default function VariantDetailPage() {
             <InlineStack gap="400">
               <Text as="p" variant="bodyMd" tone="subdued">SKU: {variant.sku || "-"}</Text>
               <Text as="p" variant="bodyMd" tone="subdued">Price: {formatMoney(variant.price)}</Text>
+              <Link to={`/app/products/${variant.productId}`}>View product</Link>
               {variant.shopifyAdminUrl ? (
                 <a href={variant.shopifyAdminUrl} target="_blank" rel="noreferrer">Open variant in Shopify</a>
               ) : null}
@@ -3556,6 +3818,9 @@ export default function VariantDetailPage() {
                           <Text as="p" variant="bodyMd" tone="subdued">
                             Default: {describeMaterialLine(line)}
                           </Text>
+                          <Text as="p" variant="bodyMd" tone="subdued">
+                            {formatLineCost(line.lineCost, line.hasOverride ? "Default cost per item" : "Cost per item")}
+                          </Text>
                           {!line.hasOverride && draft.templateProductYield && line.costingModel === "yield" ? (
                             <Text as="p" variant="bodyMd" tone="subdued">
                               Assignment yield: {draft.templateProductYield} products; quantity stays {line.quantity}.
@@ -3569,6 +3834,11 @@ export default function VariantDetailPage() {
                                 yield: line.overrideYield,
                                 usesPerVariant: line.overrideUsesPerVariant,
                               })}
+                            </Text>
+                          ) : null}
+                          {line.hasOverride ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              {formatLineCost(line.overrideLineCost, "Override cost per item")}
                             </Text>
                           ) : null}
                         </BlockStack>
@@ -3592,15 +3862,48 @@ export default function VariantDetailPage() {
                 {shippingTemplateMaterialLines.length > 0 ? (
                   <BlockStack gap="300">
                     <Text as="h3" variant="headingSm">Shipping template</Text>
-                    {shippingTemplateMaterialLines.map((line: TemplateCatalogMaterialLine) => (
-                      <BlockStack key={line.templateLineId} gap="100">
-                        <InlineStack gap="200" blockAlign="center">
-                          <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                          <Badge tone="info">Shipping template</Badge>
-                          <Badge tone="info">Shipping</Badge>
+                    {shippingTemplateMaterialLines.map((line: VariantTemplateMaterialDraftLine) => (
+                      <InlineStack key={line.templateLineId} align="space-between" blockAlign="center">
+                        <BlockStack gap="100">
+                          <InlineStack gap="200" blockAlign="center">
+                            <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
+                            <Badge tone="info">Shipping template</Badge>
+                            <Badge tone="info">Shipping</Badge>
+                            {line.hasOverride ? <Badge tone="attention">Override active</Badge> : null}
+                          </InlineStack>
+                          <Text as="p" variant="bodyMd" tone="subdued">
+                            Default: {describeMaterialLine(line)}
+                          </Text>
+                          <Text as="p" variant="bodyMd" tone="subdued">
+                            {formatLineCost(line.lineCost, line.hasOverride ? "Default cost per item" : "Cost per item")}
+                          </Text>
+                          {line.hasOverride ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              Override: {describeMaterialLine({
+                                costingModel: line.costingModel,
+                                quantity: line.overrideQuantity,
+                                yield: line.overrideYield,
+                                usesPerVariant: line.overrideUsesPerVariant,
+                              })}
+                            </Text>
+                          ) : null}
+                          {line.hasOverride ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              {formatLineCost(line.overrideLineCost, "Override cost per item")}
+                            </Text>
+                          ) : null}
+                        </BlockStack>
+                        <InlineStack gap="200">
+                          <Button variant="plain" onClick={() => openMaterialOverride(line)}>
+                            {line.hasOverride ? "Edit override" : "Override"}
+                          </Button>
+                          {line.hasOverride ? (
+                            <Button variant="plain" onClick={() => resetMaterialOverride(line.templateLineId)}>
+                              Reset
+                            </Button>
+                          ) : null}
                         </InlineStack>
-                        <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
-                      </BlockStack>
+                      </InlineStack>
                     ))}
                   </BlockStack>
                 ) : effectiveShippingTemplate ? (
@@ -3634,10 +3937,16 @@ export default function VariantDetailPage() {
                               {alsoInTemplate ? <Badge tone="warning">Also in template</Badge> : null}
                             </InlineStack>
                             <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
+                            <Text as="p" variant="bodyMd" tone="subdued">{formatLineCost(line.lineCost)}</Text>
                           </BlockStack>
-                          <Button variant="plain" tone="critical" onClick={() => removeAdditionalMaterialLine(line.id)}>
-                            Remove
-                          </Button>
+                          <InlineStack gap="200">
+                            <Button variant="plain" onClick={() => openAdditionalMaterialEdit(line)}>
+                              Edit
+                            </Button>
+                            <Button variant="plain" tone="critical" onClick={() => removeAdditionalMaterialLine(line.id)}>
+                              Remove
+                            </Button>
+                          </InlineStack>
                         </InlineStack>
                       );
                     })}
@@ -3687,11 +3996,19 @@ export default function VariantDetailPage() {
                           <Text as="p" variant="bodyMd" tone="subdued">
                             Default: {describeEquipmentLine(line)}
                           </Text>
+                          <Text as="p" variant="bodyMd" tone="subdued">
+                            {formatLineCost(line.lineCost, line.hasOverride ? "Default cost per item" : "Cost per item")}
+                          </Text>
                           {!line.hasOverride &&
                           draft.templateProductYield &&
                           (line.usageMode === "duration_yield" || line.usageMode === "use_yield") ? (
                             <Text as="p" variant="bodyMd" tone="subdued">
                               Assignment yield: {draft.templateProductYield} products.
+                            </Text>
+                          ) : null}
+                          {line.hasOverride ? (
+                            <Text as="p" variant="bodyMd" tone="subdued">
+                              {formatLineCost(line.overrideLineCost, "Override cost per item")}
                             </Text>
                           ) : null}
                           {line.hasOverride ? (
@@ -3738,10 +4055,16 @@ export default function VariantDetailPage() {
                             ) : null}
                           </InlineStack>
                           <Text as="p" variant="bodyMd" tone="subdued">{describeEquipmentLine(line)}</Text>
+                          <Text as="p" variant="bodyMd" tone="subdued">{formatLineCost(line.lineCost)}</Text>
                         </BlockStack>
-                        <Button variant="plain" tone="critical" onClick={() => removeAdditionalEquipmentLine(line.id)}>
-                          Remove
-                        </Button>
+                        <InlineStack gap="200">
+                          <Button variant="plain" onClick={() => openAdditionalEquipmentEdit(line)}>
+                            Edit
+                          </Button>
+                          <Button variant="plain" tone="critical" onClick={() => removeAdditionalEquipmentLine(line.id)}>
+                            Remove
+                          </Button>
+                        </InlineStack>
                       </InlineStack>
                     ))}
                   </BlockStack>
@@ -4359,9 +4682,9 @@ export default function VariantDetailPage() {
           setAddMaterialOpen(false);
           resetAdditionalMaterialModal();
         }}
-        title="Add material line"
+        title={editingMaterialLineId ? "Edit material line" : "Add material line"}
         primaryAction={{
-          content: "Add",
+          content: editingMaterialLineId ? "Save" : "Add",
           loading: isSaving,
           disabled: !selectedMaterialId,
           onAction: addAdditionalMaterialLine,
@@ -4575,9 +4898,9 @@ export default function VariantDetailPage() {
           setAddEquipmentOpen(false);
           resetAdditionalEquipmentModal();
         }}
-        title="Add equipment line"
+        title={editingEquipmentLineId ? "Edit equipment line" : "Add equipment line"}
         primaryAction={{
-          content: "Add",
+          content: editingEquipmentLineId ? "Save" : "Add",
           loading: isSaving,
           disabled: !selectedEquipmentId,
           onAction: addAdditionalEquipmentLine,

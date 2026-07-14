@@ -82,7 +82,14 @@ export function AssignmentPicker({
     return options.filter((option) => {
       if (hideSelected && selectedIds.has(option.id)) return false;
       if (!normalized) return true;
-      const haystack = [option.label, option.description, ...(option.meta ?? [])].filter(Boolean).join(" ").toLowerCase();
+      const haystack = [
+        option.label,
+        option.description,
+        ...(option.meta ?? []),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
       return haystack.includes(normalized);
     });
   }, [hideSelected, options, query, selectedIds]);
@@ -119,7 +126,12 @@ export function AssignmentPicker({
 
   return (
     <>
-      <button type="button" onClick={openPicker} disabled={disabled} style={secondaryButtonStyle}>
+      <button
+        type="button"
+        onClick={openPicker}
+        disabled={disabled}
+        style={secondaryButtonStyle}
+      >
         {triggerLabel}
       </button>
       {open ? (
@@ -150,9 +162,20 @@ export function AssignmentPicker({
               boxShadow: "0 24px 64px rgba(0, 0, 0, 0.2)",
             }}
           >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: "1rem",
+                alignItems: "center",
+              }}
+            >
               <strong id={`${id}-title`}>{label}</strong>
-              <button type="button" onClick={closePicker} style={secondaryButtonStyle}>
+              <button
+                type="button"
+                onClick={closePicker}
+                style={secondaryButtonStyle}
+              >
                 Close
               </button>
             </div>
@@ -170,7 +193,14 @@ export function AssignmentPicker({
               }}
             >
               {visibleOptions.length === 0 ? (
-                <div style={{ padding: "1rem", color: "var(--p-color-text-subdued, #6d7175)" }}>{emptyText}</div>
+                <div
+                  style={{
+                    padding: "1rem",
+                    color: "var(--p-color-text-subdued, #6d7175)",
+                  }}
+                >
+                  {emptyText}
+                </div>
               ) : (
                 visibleOptions.map((option) => {
                   const checked = pendingIds.includes(option.id);
@@ -182,7 +212,8 @@ export function AssignmentPicker({
                         gridTemplateColumns: "auto 1fr",
                         gap: "0.75rem",
                         padding: "0.8rem 1rem",
-                        borderBottom: "1px solid var(--p-color-border-subdued, #ebebeb)",
+                        borderBottom:
+                          "1px solid var(--p-color-border-subdued, #ebebeb)",
                         cursor: option.disabled ? "not-allowed" : "pointer",
                         opacity: option.disabled ? 0.55 : 1,
                       }}
@@ -195,12 +226,32 @@ export function AssignmentPicker({
                       />
                       <span style={{ display: "grid", gap: "0.2rem" }}>
                         <strong>{option.label}</strong>
-                        {option.description ? <span style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>{option.description}</span> : null}
+                        {option.description ? (
+                          <span
+                            style={{
+                              color: "var(--p-color-text-subdued, #6d7175)",
+                            }}
+                          >
+                            {option.description}
+                          </span>
+                        ) : null}
                         {option.meta && option.meta.length > 0 ? (
-                          <span style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>{option.meta.join(" · ")}</span>
+                          <span
+                            style={{
+                              color: "var(--p-color-text-subdued, #6d7175)",
+                            }}
+                          >
+                            {option.meta.join(" · ")}
+                          </span>
                         ) : null}
                         {option.disabledReason ? (
-                          <span style={{ color: "var(--p-color-text-critical, #8e1f1f)" }}>{option.disabledReason}</span>
+                          <span
+                            style={{
+                              color: "var(--p-color-text-critical, #8e1f1f)",
+                            }}
+                          >
+                            {option.disabledReason}
+                          </span>
                         ) : null}
                       </span>
                     </label>
@@ -208,15 +259,37 @@ export function AssignmentPicker({
                 })
               )}
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
-              <span style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>{pendingIds.length} selected</span>
-              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                gap: "0.75rem",
+                flexWrap: "wrap",
+                alignItems: "center",
+              }}
+            >
+              <span style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>
+                {pendingIds.length} selected
+              </span>
+              <div
+                style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}
+              >
                 {multi ? (
-                  <button type="button" onClick={() => addSelected(true)} disabled={pendingIds.length === 0} style={secondaryButtonStyle}>
+                  <button
+                    type="button"
+                    onClick={() => addSelected(true)}
+                    disabled={pendingIds.length === 0}
+                    style={secondaryButtonStyle}
+                  >
                     Add and keep open
                   </button>
                 ) : null}
-                <button type="button" onClick={() => addSelected(false)} disabled={pendingIds.length === 0} style={primaryButtonStyle}>
+                <button
+                  type="button"
+                  onClick={() => addSelected(false)}
+                  disabled={pendingIds.length === 0}
+                  style={primaryButtonStyle}
+                >
                   Add selected
                 </button>
               </div>
@@ -225,6 +298,83 @@ export function AssignmentPicker({
         </div>
       ) : null}
     </>
+  );
+}
+
+export function AssignmentFilterPicker({
+  id,
+  name,
+  label,
+  options,
+  values,
+  searchPlaceholder,
+  emptyText,
+}: {
+  id: string;
+  name: string;
+  label: string;
+  options: AssignmentPickerOption[];
+  values: string[];
+  searchPlaceholder: string;
+  emptyText: string;
+}) {
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(values),
+  );
+  const valuesKey = values.join("\u0000");
+
+  useEffect(() => {
+    setSelectedIds(new Set(valuesKey ? valuesKey.split("\u0000") : []));
+  }, [valuesKey]);
+
+  const selectedOptions = options.filter((option) =>
+    selectedIds.has(option.id),
+  );
+
+  return (
+    <div style={{ display: "grid", gap: "0.6rem" }}>
+      <span>{label}</span>
+      {[...selectedIds].map((selectedId) => (
+        <input key={selectedId} type="hidden" name={name} value={selectedId} />
+      ))}
+      <AssignmentPicker
+        id={id}
+        label={`Select ${label}`}
+        triggerLabel={`Choose ${label}`}
+        options={options}
+        selectedIds={selectedIds}
+        onAdd={(ids) =>
+          setSelectedIds((current) => new Set([...current, ...ids]))
+        }
+        searchPlaceholder={searchPlaceholder}
+        emptyText={emptyText}
+      />
+      {selectedOptions.length > 0 ? (
+        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+          {selectedOptions.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() =>
+                setSelectedIds((current) => {
+                  const next = new Set(current);
+                  next.delete(option.id);
+                  return next;
+                })
+              }
+              aria-label={`Remove ${option.label}`}
+              style={{ ...secondaryButtonStyle, padding: "0.35rem 0.55rem" }}
+            >
+              {option.label} ×
+            </button>
+          ))}
+        </div>
+      ) : (
+        <span style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>
+          Any
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -239,7 +389,10 @@ export function CompactAssignmentList({
 }) {
   const [query, setQuery] = useState("");
   const [expandedIds, setExpandedIds] = useState<Set<string>>(
-    () => new Set(items.filter((item) => item.defaultExpanded).map((item) => item.id)),
+    () =>
+      new Set(
+        items.filter((item) => item.defaultExpanded).map((item) => item.id),
+      ),
   );
 
   useEffect(() => {
@@ -260,7 +413,10 @@ export function CompactAssignmentList({
     const normalized = query.trim().toLowerCase();
     if (!normalized) return items;
     return items.filter((item) => {
-      const haystack = [item.title, item.subtitle, item.searchText].filter(Boolean).join(" ").toLowerCase();
+      const haystack = [item.title, item.subtitle, item.searchText]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
       return haystack.includes(normalized);
     });
   }, [items, query]);
@@ -282,23 +438,42 @@ export function CompactAssignmentList({
   }
 
   if (items.length === 0) {
-    return <p style={{ margin: 0, color: "var(--p-color-text-subdued, #6d7175)" }}>{emptyText}</p>;
+    return (
+      <p style={{ margin: 0, color: "var(--p-color-text-subdued, #6d7175)" }}>
+        {emptyText}
+      </p>
+    );
   }
 
   return (
     <div style={{ display: "grid", gap: "0.75rem" }}>
       {items.length > 5 ? (
-        <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap", alignItems: "center" }}>
+        <div
+          style={{
+            display: "flex",
+            gap: "0.75rem",
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
           <input
             value={query}
             onChange={(event) => setQuery(event.currentTarget.value)}
             placeholder={searchPlaceholder}
             style={{ ...fieldStyle, flex: "1 1 18rem" }}
           />
-          <button type="button" onClick={() => setAllExpanded(true)} style={secondaryButtonStyle}>
+          <button
+            type="button"
+            onClick={() => setAllExpanded(true)}
+            style={secondaryButtonStyle}
+          >
             Expand all
           </button>
-          <button type="button" onClick={() => setAllExpanded(false)} style={secondaryButtonStyle}>
+          <button
+            type="button"
+            onClick={() => setAllExpanded(false)}
+            style={secondaryButtonStyle}
+          >
             Collapse all
           </button>
         </div>
@@ -322,20 +497,33 @@ export function CompactAssignmentList({
                 style={{
                   display: "grid",
                   gap: "0.75rem",
-                  gridTemplateColumns: "minmax(12rem, 1fr) minmax(9rem, auto) auto auto",
+                  gridTemplateColumns:
+                    "minmax(12rem, 1fr) minmax(9rem, auto) auto auto",
                   alignItems: "center",
                 }}
               >
                 <div style={{ display: "grid", gap: "0.18rem", minWidth: 0 }}>
                   <strong>{item.title}</strong>
-                  {item.subtitle ? <span style={{ color: "var(--p-color-text-subdued, #6d7175)" }}>{item.subtitle}</span> : null}
+                  {item.subtitle ? (
+                    <span
+                      style={{ color: "var(--p-color-text-subdued, #6d7175)" }}
+                    >
+                      {item.subtitle}
+                    </span>
+                  ) : null}
                 </div>
                 <div>{item.summary}</div>
                 {item.details ? (
-                  <button type="button" onClick={() => toggleExpanded(item.id)} style={secondaryButtonStyle}>
+                  <button
+                    type="button"
+                    onClick={() => toggleExpanded(item.id)}
+                    style={secondaryButtonStyle}
+                  >
                     {expanded ? "Hide details" : "Edit"}
                   </button>
-                ) : <span />}
+                ) : (
+                  <span />
+                )}
                 <div>{item.actions}</div>
               </div>
               {expanded && item.details ? <div>{item.details}</div> : null}

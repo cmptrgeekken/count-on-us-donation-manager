@@ -1,7 +1,11 @@
 import type { LoaderFunctionArgs } from "@remix-run/node";
 import { prisma } from "../db.server";
-import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
+import {
+  buildVariantEstimatePayload,
+  type VariantEstimatePayload,
+} from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { buildProductSearchFilter } from "../utils/product-search";
 import { buildTextFilter, parseTextMatchMode } from "../utils/text-filter";
 
 function csvCell(value: string | number | boolean | null | undefined) {
@@ -10,8 +14,13 @@ function csvCell(value: string | number | boolean | null | undefined) {
 }
 
 function buildCauseEstimateSummary(estimate: VariantEstimatePayload) {
-  return [...estimate.causes
-    .flatMap((cause) => [cause.name, cause.estimatedDonationAmount, cause.donationPercentage])];
+  return [
+    ...estimate.causes.flatMap((cause) => [
+      cause.name,
+      cause.estimatedDonationAmount,
+      cause.donationPercentage,
+    ]),
+  ];
 }
 
 function estimateTotalCost(estimate: VariantEstimatePayload) {
@@ -42,45 +51,146 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterSku = url.searchParams.get("sku")?.trim() ?? "";
   const filterTemplate = url.searchParams.get("template")?.trim() ?? "";
   const filterPodProvider = url.searchParams.get("podProvider")?.trim() ?? "";
-  const filterProductTitleMatch = parseTextMatchMode(url.searchParams.get("productTitleMatch"));
-  const filterVariantTitleMatch = parseTextMatchMode(url.searchParams.get("variantTitleMatch"));
-  const filterSkuMatch = parseTextMatchMode(url.searchParams.get("skuMatch"), true);
-  const filterTemplateMatch = parseTextMatchMode(url.searchParams.get("templateMatch"), true);
-  const filterPodProviderMatch = parseTextMatchMode(url.searchParams.get("podProviderMatch"), true);
+  const filterTags = [
+    ...new Set(
+      url.searchParams
+        .getAll("tag")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+  const filterCollectionIds = [
+    ...new Set(
+      url.searchParams
+        .getAll("collection")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+  const filterProductTitleMatch = parseTextMatchMode(
+    url.searchParams.get("productTitleMatch"),
+  );
+  const filterVariantTitleMatch = parseTextMatchMode(
+    url.searchParams.get("variantTitleMatch"),
+  );
+  const filterSkuMatch = parseTextMatchMode(
+    url.searchParams.get("skuMatch"),
+    true,
+  );
+  const filterTemplateMatch = parseTextMatchMode(
+    url.searchParams.get("templateMatch"),
+    true,
+  );
+  const filterPodProviderMatch = parseTextMatchMode(
+    url.searchParams.get("podProviderMatch"),
+    true,
+  );
 
   const [variants, shop, taxOffsetCache] = await Promise.all([
     prisma.variant.findMany({
       where: {
         shopId,
         ...(filterProductId ? { productId: filterProductId } : {}),
-        ...(filterCategory || filterProductTitle
+        ...(filterCategory ||
+        filterProductTitle ||
+        filterTags.length > 0 ||
+        filterCollectionIds.length > 0
           ? {
               product: {
-                ...(filterCategory ? { productCategoryPath: filterCategory } : {}),
-                ...(filterProductTitle ? { title: buildTextFilter(filterProductTitle, filterProductTitleMatch) } : {}),
+                ...(filterCategory
+                  ? { productCategoryPath: filterCategory }
+                  : {}),
+                ...(filterProductTitle
+                  ? buildProductSearchFilter(
+                      filterProductTitle,
+                      filterProductTitleMatch,
+                    )
+                  : {}),
+                ...(filterTags.length > 0
+                  ? { tags: { some: { shopId, value: { in: filterTags } } } }
+                  : {}),
+                ...(filterCollectionIds.length > 0
+                  ? {
+                      collections: {
+                        some: {
+                          shopId,
+                          collectionId: { in: filterCollectionIds },
+                        },
+                      },
+                    }
+                  : {}),
               },
             }
           : {}),
-        ...(filterVariantTitle ? { title: buildTextFilter(filterVariantTitle, filterVariantTitleMatch) } : {}),
-        ...(filterSkuMatch !== "empty" && filterSku ? { sku: buildTextFilter(filterSku, filterSkuMatch) } : {}),
-        ...(filterPodProviderMatch !== "empty" && filterPodProvider
-          ? { providerMappings: { some: { status: "mapped", provider: buildTextFilter(filterPodProvider, filterPodProviderMatch) } } }
+        ...(filterVariantTitle
+          ? {
+              title: buildTextFilter(
+                filterVariantTitle,
+                filterVariantTitleMatch,
+              ),
+            }
           : {}),
-        ...(filterPodProviderMatch === "empty" ? { providerMappings: { none: { status: "mapped" } } } : {}),
+        ...(filterSkuMatch !== "empty" && filterSku
+          ? { sku: buildTextFilter(filterSku, filterSkuMatch) }
+          : {}),
+        ...(filterPodProviderMatch !== "empty" && filterPodProvider
+          ? {
+              providerMappings: {
+                some: {
+                  status: "mapped",
+                  provider: buildTextFilter(
+                    filterPodProvider,
+                    filterPodProviderMatch,
+                  ),
+                },
+              },
+            }
+          : {}),
+        ...(filterPodProviderMatch === "empty"
+          ? { providerMappings: { none: { status: "mapped" } } }
+          : {}),
         ...((filterTemplateMatch !== "empty" && filterTemplate) ||
-          filterConfigured ||
-          filterSkuMatch === "empty" ||
-          filterTemplateMatch === "empty"
+        filterConfigured ||
+        filterSkuMatch === "empty" ||
+        filterTemplateMatch === "empty"
           ? {
               AND: [
                 ...(filterTemplateMatch !== "empty" && filterTemplate
-                  ? [{ costConfig: { productionTemplate: { name: buildTextFilter(filterTemplate, filterTemplateMatch) } } }]
+                  ? [
+                      {
+                        costConfig: {
+                          productionTemplate: {
+                            name: buildTextFilter(
+                              filterTemplate,
+                              filterTemplateMatch,
+                            ),
+                          },
+                        },
+                      },
+                    ]
                   : []),
-                ...(filterConfigured === "yes" ? [{ costConfig: { isNot: null } }] : []),
-                ...(filterConfigured === "no" ? [{ costConfig: { is: null } }] : []),
-                ...(filterSkuMatch === "empty" ? [{ OR: [{ sku: null }, { sku: "" }] }] : []),
+                ...(filterConfigured === "yes"
+                  ? [{ costConfig: { isNot: null } }]
+                  : []),
+                ...(filterConfigured === "no"
+                  ? [{ costConfig: { is: null } }]
+                  : []),
+                ...(filterSkuMatch === "empty"
+                  ? [{ OR: [{ sku: null }, { sku: "" }] }]
+                  : []),
                 ...(filterTemplateMatch === "empty"
-                  ? [{ OR: [{ costConfig: { is: null } }, { costConfig: { is: { productionTemplate: { is: null } } } }] }]
+                  ? [
+                      {
+                        OR: [
+                          { costConfig: { is: null } },
+                          {
+                            costConfig: {
+                              is: { productionTemplate: { is: null } },
+                            },
+                          },
+                        ],
+                      },
+                    ]
                   : []),
               ],
             }
@@ -88,7 +198,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
       include: {
-        product: { select: { id: true, title: true, productCategoryPath: true, donationRoutingMode: true } },
+        product: {
+          select: {
+            id: true,
+            title: true,
+            productCategoryPath: true,
+            donationRoutingMode: true,
+          },
+        },
         costConfig: {
           select: {
             productionTemplate: { select: { name: true } },
@@ -185,7 +302,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       },
     },
   });
-  const causeAssignmentsByProductId = new Map<string, typeof causeAssignments>();
+  const causeAssignmentsByProductId = new Map<
+    string,
+    typeof causeAssignments
+  >();
   let maxCauseCount = 0;
   for (const assignment of causeAssignments) {
     if (!assignment.productId) continue;
@@ -194,14 +314,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     maxCauseCount = Math.max(maxCauseCount, current.length);
     causeAssignmentsByProductId.set(assignment.productId, current);
   }
-  const artistAssignmentsByProductId = new Map<string, typeof artistAssignments>();
+  const artistAssignmentsByProductId = new Map<
+    string,
+    typeof artistAssignments
+  >();
   for (const assignment of artistAssignments) {
     if (!assignment.productId) continue;
-    const current = artistAssignmentsByProductId.get(assignment.productId) ?? [];
+    const current =
+      artistAssignmentsByProductId.get(assignment.productId) ?? [];
     current.push(assignment);
     artistAssignmentsByProductId.set(assignment.productId, current);
   }
-
 
   const widgetTaxSuppressed = taxOffsetCache?.widgetTaxSuppressed ?? true;
   const rows = await Promise.all(
@@ -209,8 +332,10 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       const estimate = await buildVariantEstimatePayload({
         shopId,
         variant,
-        causeAssignments: causeAssignmentsByProductId.get(variant.productId) ?? [],
-        artistAssignments: artistAssignmentsByProductId.get(variant.productId) ?? [],
+        causeAssignments:
+          causeAssignmentsByProductId.get(variant.productId) ?? [],
+        artistAssignments:
+          artistAssignmentsByProductId.get(variant.productId) ?? [],
         donationRoutingMode: variant.product.donationRoutingMode,
         shop,
         widgetTaxSuppressed,
@@ -221,13 +346,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         variant.product.title,
         variant.product.productCategoryPath ?? "",
         variant.title,
-        variant.title != "Default Title" ? `${variant.product.title} - ${variant.title}` : variant.product.title,
+        variant.title != "Default Title"
+          ? `${variant.product.title} - ${variant.title}`
+          : variant.product.title,
         variant.sku ?? "",
         variant.shopifyId,
         estimate.currencyCode,
         estimate.price,
         variant.costConfig?.productionTemplate?.name ?? "",
-        Array.from(new Set(variant.providerMappings.map((mapping) => mapping.provider))).join("; "),
+        Array.from(
+          new Set(variant.providerMappings.map((mapping) => mapping.provider)),
+        ).join("; "),
         variant.providerMappings[0]?.lastCostSyncedAt?.toISOString() ?? "",
         estimateTotalCost(estimate),
         estimate.reconciliation.labor,
@@ -250,8 +379,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   );
 
   const causeHeaders = [];
-  for(let causeIdx=1;causeIdx <= maxCauseCount;causeIdx++) {
-    causeHeaders.push(`Cause ${causeIdx}`, `Cause ${causeIdx} Amt`, `Cause ${causeIdx} Pct`)
+  for (let causeIdx = 1; causeIdx <= maxCauseCount; causeIdx++) {
+    causeHeaders.push(
+      `Cause ${causeIdx}`,
+      `Cause ${causeIdx} Amt`,
+      `Cause ${causeIdx} Pct`,
+    );
   }
 
   const headers = [
@@ -281,9 +414,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     "Rounding remainder",
     "Tax reserve suppressed",
     "Estimated tax rate",
-    ...causeHeaders
+    ...causeHeaders,
   ];
-  const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
+  const csv = [headers, ...rows]
+    .map((row) => row.map(csvCell).join(","))
+    .join("\n");
 
   return new Response(`${csv}\n`, {
     headers: {

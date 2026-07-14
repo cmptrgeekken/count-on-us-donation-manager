@@ -305,6 +305,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   return jsonResponse({
     shopId,
+    productId: product.id,
     variantId: variant.id,
     sourceVariantId: sourceVariant.id,
     variantUrl: `${baseUrl}/app/variants/${variant.id}?__playwrightShop=${encodeURIComponent(shopId)}`,
