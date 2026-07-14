@@ -1,5 +1,5 @@
 import { jsonResponse } from "~/utils/json-response.server";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import {
   Link,
@@ -38,6 +38,10 @@ import {
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
 import { buildTextFilter, parseTextMatchMode } from "../utils/text-filter";
 import { buildProductSearchFilter } from "../utils/product-search";
+import {
+  formatCausePercentage,
+  MAX_VISIBLE_CAUSE_ALLOCATIONS,
+} from "../utils/cause-routing-display";
 
 const bulkAssignmentSchema = z.object({
   productIds: z.array(z.string().min(1)).min(1, "Select at least one product."),
@@ -168,7 +172,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       orderBy: { title: "asc" },
       include: {
         _count: {
-          select: { causeAssignments: true, variants: true },
+          select: { variants: true },
+        },
+        causeAssignments: {
+          where: { shopId },
+          orderBy: [{ percentage: "desc" }, { cause: { name: "asc" } }],
+          select: {
+            percentage: true,
+            cause: {
+              select: { id: true, name: true },
+            },
+          },
         },
         artistAssignments: {
           where: { shopId, status: "active" },
@@ -237,7 +251,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       configuredVariantCount: product.variants.filter((variant) =>
         isVariantCostConfigured(variant.costConfig),
       ).length,
-      causeAssignmentCount: product._count.causeAssignments,
+      causeAssignmentCount: product.causeAssignments.length,
+      causeAssignments: product.causeAssignments.map((assignment) => ({
+        id: assignment.cause.id,
+        name: assignment.cause.name,
+        percentage: assignment.percentage.toString(),
+      })),
       artistAssignmentCount: product.artistAssignments.length,
       donationRoutingMode: product.donationRoutingMode,
       mappedVariantCount: product.variants.filter(
@@ -905,10 +924,17 @@ type ProductRow = {
   variantCount: number;
   configuredVariantCount: number;
   causeAssignmentCount: number;
+  causeAssignments: CauseAllocation[];
   artistAssignmentCount: number;
   donationRoutingMode: string;
   mappedVariantCount: number;
   mappedProviders: string[];
+};
+
+type CauseAllocation = {
+  id: string;
+  name: string;
+  percentage: string;
 };
 
 type SyncActionData = {
@@ -989,6 +1015,9 @@ export default function ProductsPage() {
   const [bulkMode, setBulkMode] = useState<BulkMode>("artist");
   const [bulkCauseRows, setBulkCauseRows] = useState<BulkCauseRow[]>([]);
   const [bulkNoCauseOverride, setBulkNoCauseOverride] = useState(false);
+  const [causeDetailsProduct, setCauseDetailsProduct] =
+    useState<ProductRow | null>(null);
+  const causeDetailsDialogRef = useRef<HTMLDialogElement>(null);
   const [selectedArtistId, setSelectedArtistId] = useState(
     artists[0]?.id ?? "",
   );
@@ -1023,6 +1052,13 @@ export default function ProductsPage() {
       setSelectedArtistId(artists[0].id);
     }
   }, [artists, selectedArtistId]);
+
+  useEffect(() => {
+    const dialog = causeDetailsDialogRef.current;
+    if (causeDetailsProduct && dialog && !dialog.open) {
+      dialog.showModal();
+    }
+  }, [causeDetailsProduct]);
 
   function updateSelection(id: string, checked: boolean) {
     setSelectedProductIds((current) =>
@@ -1616,8 +1652,8 @@ export default function ProductsPage() {
                   <s-table-header listSlot="secondary" format="numeric">
                     Artists
                   </s-table-header>
-                  <s-table-header listSlot="secondary" format="numeric">
-                    Cause assignments
+                  <s-table-header listSlot="secondary">
+                    Causes
                   </s-table-header>
                   <s-table-header listSlot="secondary">
                     <div
@@ -1740,8 +1776,70 @@ export default function ProductsPage() {
                         {product.artistAssignmentCount}
                       </s-table-cell>
                       <s-table-cell>
-                        <div style={{ display: "grid", gap: "0.2rem" }}>
-                          <span>{product.causeAssignmentCount}</span>
+                        <div
+                          style={{
+                            display: "grid",
+                            gap: "0.25rem",
+                            minWidth: "10rem",
+                            maxWidth: "15rem",
+                          }}
+                        >
+                          {product.causeAssignments.length > 0 ? (
+                            product.causeAssignments
+                              .slice(0, MAX_VISIBLE_CAUSE_ALLOCATIONS)
+                              .map((assignment) => (
+                                <div
+                                  key={assignment.id}
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: "minmax(0, 1fr) auto",
+                                    alignItems: "baseline",
+                                    gap: "0.5rem",
+                                  }}
+                                >
+                                  <span
+                                    title={assignment.name}
+                                    style={{
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    {assignment.name}
+                                  </span>
+                                  <strong>
+                                    {formatCausePercentage(
+                                      assignment.percentage,
+                                    )}
+                                  </strong>
+                                </div>
+                              ))
+                          ) : (
+                            <s-text color="subdued">No causes allocated</s-text>
+                          )}
+                          {product.causeAssignments.length >
+                            MAX_VISIBLE_CAUSE_ALLOCATIONS && (
+                            <button
+                              type="button"
+                              onClick={() => setCauseDetailsProduct(product)}
+                              aria-label={`View all ${product.causeAssignments.length} cause allocations for ${product.title}`}
+                              style={{
+                                justifySelf: "start",
+                                border: 0,
+                                padding: 0,
+                                background: "transparent",
+                                color: "var(--p-color-text-link, #005bd3)",
+                                cursor: "pointer",
+                                font: "inherit",
+                                textDecoration: "underline",
+                              }}
+                            >
+                              +
+                              {product.causeAssignments.length -
+                                MAX_VISIBLE_CAUSE_ALLOCATIONS}{" "}
+                              more
+                            </button>
+                          )}
                           <s-badge
                             tone={
                               product.donationRoutingMode === "product_override"
@@ -1805,6 +1903,94 @@ export default function ProductsPage() {
                   ))}
                 </s-table-body>
               </s-table>
+              <dialog
+                ref={causeDetailsDialogRef}
+                aria-labelledby="product-cause-details-title"
+                onClose={() => setCauseDetailsProduct(null)}
+                style={{
+                  border: "none",
+                  borderRadius: "0.75rem",
+                  padding: 0,
+                  width: "min(32rem, calc(100% - 2rem))",
+                  boxShadow: "0 24px 64px rgba(0, 0, 0, 0.22)",
+                }}
+              >
+                <div
+                  style={{ display: "grid", gap: "1rem", padding: "1.25rem" }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "start",
+                      gap: "1rem",
+                    }}
+                  >
+                    <div style={{ display: "grid", gap: "0.25rem" }}>
+                      <strong id="product-cause-details-title">
+                        Cause allocations
+                      </strong>
+                      <s-text color="subdued">
+                        {causeDetailsProduct?.title ?? "Product"}
+                      </s-text>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => causeDetailsDialogRef.current?.close()}
+                      aria-label="Close Cause allocations"
+                      style={{
+                        border: 0,
+                        background: "transparent",
+                        cursor: "pointer",
+                        fontSize: "1.25rem",
+                      }}
+                    >
+                      ×
+                    </button>
+                  </div>
+                  <div style={{ display: "grid", gap: "0.75rem" }}>
+                    {causeDetailsProduct?.causeAssignments.map((assignment) => (
+                      <div
+                        key={assignment.id}
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns: "minmax(0, 1fr) auto",
+                          gap: "1rem",
+                          alignItems: "baseline",
+                        }}
+                      >
+                        <span>{assignment.name}</span>
+                        <strong>
+                          {formatCausePercentage(assignment.percentage)}
+                        </strong>
+                      </div>
+                    ))}
+                  </div>
+                  {causeDetailsProduct && (
+                    <s-badge
+                      tone={
+                        causeDetailsProduct.donationRoutingMode ===
+                        "product_override"
+                          ? "info"
+                          : causeDetailsProduct.causeAssignmentCount > 0
+                            ? "success"
+                            : "warning"
+                      }
+                    >
+                      {donationRoutingLabel(causeDetailsProduct)}
+                    </s-badge>
+                  )}
+                  <div style={{ display: "flex", justifyContent: "end" }}>
+                    <button
+                      type="button"
+                      onClick={() => causeDetailsDialogRef.current?.close()}
+                      style={{ ...fieldStyle, width: "auto" }}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              </dialog>
             </s-section>
           </>
         )}
