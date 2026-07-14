@@ -572,6 +572,13 @@ describe("createSnapshot", () => {
     );
 
     expect(result).toEqual({ created: true, snapshotId: "snapshot-1" });
+    expect(db.variant.findMany).toHaveBeenCalledWith({
+      where: {
+        shopId: "shop-1",
+        shopifyId: { in: ["gid://shopify/ProductVariant/100"] },
+      },
+      select: { id: true, shopifyId: true },
+    });
     expect(db.__spies.orderSnapshotCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
