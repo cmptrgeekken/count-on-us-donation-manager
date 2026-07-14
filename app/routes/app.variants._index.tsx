@@ -4,11 +4,12 @@ import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { Link, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "@remix-run/react";
 import { Prisma } from "@prisma/client";
 import { AssignmentPicker } from "../components/AssignmentControls";
-import { ResourceTableHeader } from "../components/admin-ui";
+import { ResourceTableHeader, TableColumnFilter, TableTextFilterFields } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { parseOptionalPositiveWholeNumber } from "../utils/number-parsing";
+import { buildTextFilter, parseTextMatchMode } from "../utils/text-filter";
 import { materialLineValuesEqual } from "../utils/material-line-comparison";
 import { useAppLocalization } from "../utils/use-app-localization";
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
@@ -30,6 +31,18 @@ function pushUnique(values: string[], value: string) {
   if (!values.includes(value)) values.push(value);
 }
 
+const filterControlStyle = {
+  width: "100%",
+  minWidth: 0,
+  boxSizing: "border-box" as const,
+  padding: "0.75rem",
+  borderRadius: "0.75rem",
+  border: "1px solid var(--p-color-border, #d2d5d8)",
+  background: "var(--p-color-bg-surface, #fff)",
+  color: "var(--p-color-text, #303030)",
+  font: "inherit",
+};
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticateAdminRequest(request);
   const shopId = session.shop;
@@ -43,6 +56,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterSku = url.searchParams.get("sku")?.trim() ?? "";
   const filterTemplate = url.searchParams.get("template")?.trim() ?? "";
   const filterPodProvider = url.searchParams.get("podProvider")?.trim() ?? "";
+  const filterProductTitleMatch = parseTextMatchMode(url.searchParams.get("productTitleMatch"));
+  const filterVariantTitleMatch = parseTextMatchMode(url.searchParams.get("variantTitleMatch"));
+  const filterSkuMatch = parseTextMatchMode(url.searchParams.get("skuMatch"), true);
+  const filterTemplateMatch = parseTextMatchMode(url.searchParams.get("templateMatch"), true);
+  const filterPodProviderMatch = parseTextMatchMode(url.searchParams.get("podProviderMatch"), true);
 
   const [allVariants, products, templates, shop, taxOffsetCache] = await Promise.all([
     prisma.variant.findMany({
@@ -53,24 +71,37 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           ? {
               product: {
                 ...(filterCategory ? { productCategoryPath: filterCategory } : {}),
-                ...(filterProductTitle ? { title: { contains: filterProductTitle, mode: "insensitive" } } : {}),
+                ...(filterProductTitle ? { title: buildTextFilter(filterProductTitle, filterProductTitleMatch) } : {}),
               },
             }
           : {}),
-        ...(filterVariantTitle ? { title: { contains: filterVariantTitle, mode: "insensitive" } } : {}),
-        ...(filterSku ? { sku: { contains: filterSku, mode: "insensitive" } } : {}),
-        ...(filterTemplate
-          ? { costConfig: { productionTemplate: { name: { contains: filterTemplate, mode: "insensitive" } } } }
+        ...(filterVariantTitle ? { title: buildTextFilter(filterVariantTitle, filterVariantTitleMatch) } : {}),
+        ...(filterSkuMatch !== "empty" && filterSku ? { sku: buildTextFilter(filterSku, filterSkuMatch) } : {}),
+        ...(filterTemplateMatch !== "empty" && filterTemplate
+          ? { costConfig: { productionTemplate: { name: buildTextFilter(filterTemplate, filterTemplateMatch) } } }
           : {}),
-        ...(filterPodProvider
+        ...(filterPodProviderMatch !== "empty" && filterPodProvider
           ? {
               providerMappings: {
                 some: {
                   status: "mapped",
-                  provider: { contains: filterPodProvider, mode: "insensitive" },
+                  provider: buildTextFilter(filterPodProvider, filterPodProviderMatch),
                 },
               },
             }
+          : {}),
+        ...(filterSkuMatch === "empty" || filterTemplateMatch === "empty"
+          ? {
+              AND: [
+                ...(filterSkuMatch === "empty" ? [{ OR: [{ sku: null }, { sku: "" }] }] : []),
+                ...(filterTemplateMatch === "empty"
+                  ? [{ OR: [{ costConfig: { is: null } }, { costConfig: { is: { productionTemplate: { is: null } } } }] }]
+                  : []),
+              ],
+            }
+          : {}),
+        ...(filterPodProviderMatch === "empty"
+          ? { providerMappings: { none: { status: "mapped" } } }
           : {}),
       },
       orderBy: [{ product: { title: "asc" } }, { title: "asc" }],
@@ -264,6 +295,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     filterSku,
     filterTemplate,
     filterPodProvider,
+    filterProductTitleMatch,
+    filterVariantTitleMatch,
+    filterSkuMatch,
+    filterTemplateMatch,
+    filterPodProviderMatch,
   });
 };
 
@@ -610,6 +646,11 @@ export default function VariantsPage() {
     filterSku,
     filterTemplate,
     filterPodProvider,
+    filterProductTitleMatch,
+    filterVariantTitleMatch,
+    filterSkuMatch,
+    filterTemplateMatch,
+    filterPodProviderMatch,
   } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<{
     ok: boolean;
@@ -624,7 +665,7 @@ export default function VariantsPage() {
   const confirmDialogRef = useRef<HTMLDialogElement>(null);
 
   const [selectedVariantIds, setSelectedVariantIds] = useState<string[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState(templates[0]?.id ?? "");
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [templateProductYield, setTemplateProductYield] = useState("");
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [confirmDialogOpen, setConfirmDialogOpen] = useState(false);
@@ -665,6 +706,11 @@ export default function VariantsPage() {
   const assignmentMismatches = fetcher.data?.ok ? (fetcher.data.mismatches ?? []) : [];
   const allSelected = variants.length > 0 && selectedVariantIds.length === variants.length;
   const selectedTemplate = templates.find((template: { id: string; name: string }) => template.id === selectedTemplateId) ?? null;
+  const hasActiveFilters = Boolean(
+    filterProductId || filterCategory || filterConfigured || filterProductTitle || filterVariantTitle ||
+    filterSku || filterTemplate || filterPodProvider || filterSkuMatch === "empty" ||
+    filterTemplateMatch === "empty" || filterPodProviderMatch === "empty",
+  );
 
   const selectedConfiguredCount = useMemo(
     () => variants.filter((variant: VariantRow) => selectedVariantIds.includes(variant.id) && variant.hasConfig).length,
@@ -686,8 +732,9 @@ export default function VariantsPage() {
   }
 
   function openAssignDialog() {
-    setSelectedTemplateId(templates[0]?.id ?? "");
+    setSelectedTemplateId("");
     setTemplateProductYield("");
+    setCleanupExactDuplicates(false);
     setAssignDialogOpen(true);
   }
 
@@ -715,7 +762,7 @@ export default function VariantsPage() {
   }
 
   function handleBulkAssign() {
-    if (selectedVariantIds.length === 0) {
+    if (selectedVariantIds.length === 0 || !selectedTemplateId) {
       return;
     }
 
@@ -733,29 +780,25 @@ export default function VariantsPage() {
     const formData = new FormData(form);
     const params = new URLSearchParams(searchParams);
 
-    const product = formData.get("product")?.toString() ?? "";
-    const category = formData.get("category")?.toString() ?? "";
-    const configured = formData.get("configured")?.toString() ?? "";
-    const productTitle = formData.get("productTitle")?.toString().trim() ?? "";
-    const variantTitle = formData.get("variantTitle")?.toString().trim() ?? "";
-    const sku = formData.get("sku")?.toString().trim() ?? "";
-    const template = formData.get("template")?.toString().trim() ?? "";
-    const podProvider = formData.get("podProvider")?.toString().trim() ?? "";
-
-    if (product) params.set("product", product);
-    else params.delete("product");
-
-    if (category) params.set("category", category);
-    else params.delete("category");
-
-    if (configured) params.set("configured", configured);
-    else params.delete("configured");
-
-    for (const [name, value] of Object.entries({ productTitle, variantTitle, sku, template, podProvider })) {
+    for (const name of ["product", "category", "configured", "productTitle", "variantTitle", "sku", "template", "podProvider"]) {
+      if (!formData.has(name)) continue;
+      const value = formData.get(name)?.toString().trim() ?? "";
       if (value) params.set(name, value);
       else params.delete(name);
     }
+    for (const name of ["productTitleMatch", "variantTitleMatch", "skuMatch", "templateMatch", "podProviderMatch"]) {
+      if (!formData.has(name)) continue;
+      const value = formData.get(name)?.toString() ?? "contains";
+      if (value !== "contains") params.set(name, value);
+      else params.delete(name);
+    }
 
+    navigate(`?${params.toString()}`);
+  }
+
+  function clearFilterNames(names: string[]): void {
+    const params = new URLSearchParams(searchParams);
+    for (const name of names) params.delete(name);
     navigate(`?${params.toString()}`);
   }
 
@@ -769,6 +812,11 @@ export default function VariantsPage() {
     params.delete("sku");
     params.delete("template");
     params.delete("podProvider");
+    params.delete("productTitleMatch");
+    params.delete("variantTitleMatch");
+    params.delete("skuMatch");
+    params.delete("templateMatch");
+    params.delete("podProviderMatch");
     navigate(`?${params.toString()}`);
   }
 
@@ -782,6 +830,11 @@ export default function VariantsPage() {
     const sku = searchParams.get("sku");
     const template = searchParams.get("template");
     const podProvider = searchParams.get("podProvider");
+    const productTitleMatch = searchParams.get("productTitleMatch");
+    const variantTitleMatch = searchParams.get("variantTitleMatch");
+    const skuMatch = searchParams.get("skuMatch");
+    const templateMatch = searchParams.get("templateMatch");
+    const podProviderMatch = searchParams.get("podProviderMatch");
     if (product) params.set("product", product);
     if (category) params.set("category", category);
     if (configured) params.set("configured", configured);
@@ -790,6 +843,11 @@ export default function VariantsPage() {
     if (sku) params.set("sku", sku);
     if (template) params.set("template", template);
     if (podProvider) params.set("podProvider", podProvider);
+    if (productTitleMatch) params.set("productTitleMatch", productTitleMatch);
+    if (variantTitleMatch) params.set("variantTitleMatch", variantTitleMatch);
+    if (skuMatch) params.set("skuMatch", skuMatch);
+    if (templateMatch) params.set("templateMatch", templateMatch);
+    if (podProviderMatch) params.set("podProviderMatch", podProviderMatch);
     const query = params.toString();
     return `/app/variants-export${query ? `?${query}` : ""}`;
   }
@@ -882,162 +940,12 @@ export default function VariantsPage() {
           </s-banner>
         ) : null}
 
-        {variants.length === 0 && !filterProductId && !filterCategory && !filterConfigured && !filterProductTitle && !filterVariantTitle && !filterSku && !filterTemplate && !filterPodProvider ? (
+        {variants.length === 0 && !filterProductId && !filterCategory && !filterConfigured && !filterProductTitle && !filterVariantTitle && !filterSku && !filterTemplate && !filterPodProvider && filterSkuMatch !== "empty" && filterTemplateMatch !== "empty" && filterPodProviderMatch !== "empty" ? (
           <s-section heading="No variants synced yet">
             <s-text>Variants will appear here after the initial catalog sync completes.</s-text>
           </s-section>
         ) : (
           <>
-            <s-section>
-              <form
-                method="get"
-                style={{ display: "grid", gap: "1rem" }}
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  applyFilters(event.currentTarget);
-                }}
-              >
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-                    gap: "1rem",
-                    alignItems: "end",
-                  }}
-                >
-                  <div style={{ display: "grid", gap: "0.35rem" }}>
-                    <label htmlFor="variants-product-filter">Product</label>
-                    <select
-                      id="variants-product-filter"
-                      name="product"
-                      defaultValue={filterProductId}
-                      style={{
-                        width: "100%",
-                        boxSizing: "border-box",
-                        padding: "0.75rem",
-                        borderRadius: "0.75rem",
-                        border: "1px solid var(--p-color-border, #d2d5d8)",
-                        background: "var(--p-color-bg-surface, #fff)",
-                        color: "var(--p-color-text, #303030)",
-                        font: "inherit",
-                      }}
-                    >
-                      <option value="">All products</option>
-                      {products.map((product: { id: string; title: string }) => (
-                        <option key={product.id} value={product.id}>{product.title}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div style={{ display: "grid", gap: "0.35rem" }}>
-                    <label htmlFor="variants-category-filter">Product category</label>
-                    <select
-                      id="variants-category-filter"
-                      name="category"
-                      defaultValue={filterCategory}
-                      style={{
-                        width: "100%",
-                        boxSizing: "border-box",
-                        padding: "0.75rem",
-                        borderRadius: "0.75rem",
-                        border: "1px solid var(--p-color-border, #d2d5d8)",
-                        background: "var(--p-color-bg-surface, #fff)",
-                        color: "var(--p-color-text, #303030)",
-                        font: "inherit",
-                      }}
-                    >
-                      <option value="">All categories</option>
-                      {categories.map((category: { value: string; label: string }) => (
-                        <option key={category.value} value={category.value}>{category.label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div style={{ display: "grid", gap: "0.35rem" }}>
-                    <label htmlFor="variants-configured-filter">Configuration status</label>
-                    <select
-                      id="variants-configured-filter"
-                      name="configured"
-                      defaultValue={filterConfigured}
-                      style={{
-                        width: "100%",
-                        boxSizing: "border-box",
-                        padding: "0.75rem",
-                        borderRadius: "0.75rem",
-                        border: "1px solid var(--p-color-border, #d2d5d8)",
-                        background: "var(--p-color-bg-surface, #fff)",
-                        color: "var(--p-color-text, #303030)",
-                        font: "inherit",
-                      }}
-                    >
-                      <option value="">All</option>
-                      <option value="yes">Configured</option>
-                      <option value="no">Not configured</option>
-                    </select>
-                  </div>
-
-                  {[
-                    ["productTitle", "variants-product-title-filter", "Product title", filterProductTitle],
-                    ["variantTitle", "variants-variant-title-filter", "Variant title", filterVariantTitle],
-                    ["sku", "variants-sku-filter", "SKU", filterSku],
-                    ["template", "variants-template-filter", "Template", filterTemplate],
-                    ["podProvider", "variants-pod-provider-filter", "POD provider", filterPodProvider],
-                  ].map(([name, id, label, defaultValue]) => (
-                    <div key={name} style={{ display: "grid", gap: "0.35rem" }}>
-                      <label htmlFor={id}>{label}</label>
-                      <input
-                        id={id}
-                        name={name}
-                        type="search"
-                        defaultValue={defaultValue}
-                        placeholder={`Filter by ${label.toLowerCase()}`}
-                        style={{
-                          width: "100%",
-                          boxSizing: "border-box",
-                          padding: "0.75rem",
-                          borderRadius: "0.75rem",
-                          border: "1px solid var(--p-color-border, #d2d5d8)",
-                          background: "var(--p-color-bg-surface, #fff)",
-                          color: "var(--p-color-text, #303030)",
-                          font: "inherit",
-                        }}
-                      />
-                    </div>
-                  ))}
-
-                  <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                    <s-button type="submit" variant="primary">Apply filters</s-button>
-                    <s-button variant="secondary" onClick={clearFilters}>Clear</s-button>
-                  </div>
-                </div>
-
-                {(filterProductId || filterCategory || filterConfigured || filterProductTitle || filterVariantTitle || filterSku || filterTemplate || filterPodProvider) && (
-                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                    {filterProductId && (
-                      <s-badge tone="info">
-                        Product: {products.find((product: { id: string; title: string }) => product.id === filterProductId)?.title ?? filterProductId}
-                      </s-badge>
-                    )}
-                    {filterCategory && (
-                      <s-badge tone="info">
-                        Category: {categories.find((category: { value: string; label: string }) => category.value === filterCategory)?.label ?? filterCategory}
-                      </s-badge>
-                    )}
-                    {filterConfigured && (
-                      <s-badge tone="info">
-                        {filterConfigured === "yes" ? "Configured only" : "Not configured only"}
-                      </s-badge>
-                    )}
-                    {filterProductTitle && <s-badge tone="info">Product title: {filterProductTitle}</s-badge>}
-                    {filterVariantTitle && <s-badge tone="info">Variant title: {filterVariantTitle}</s-badge>}
-                    {filterSku && <s-badge tone="info">SKU: {filterSku}</s-badge>}
-                    {filterTemplate && <s-badge tone="info">Template: {filterTemplate}</s-badge>}
-                    {filterPodProvider && <s-badge tone="info">POD provider: {filterPodProvider}</s-badge>}
-                  </div>
-                )}
-              </form>
-            </s-section>
-
             {selectedVariantIds.length > 0 && (
               <s-section>
                 <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center", flexWrap: "wrap" }}>
@@ -1066,6 +974,7 @@ export default function VariantsPage() {
                   description="Filter, select, assign templates, and export detailed estimates."
                   action={
                     <>
+                    {hasActiveFilters ? <s-button variant="secondary" onClick={clearFilters}>Clear filters</s-button> : null}
                     <s-button variant="secondary" onClick={() => void exportEstimates()} disabled={exportingEstimates}>
                       {exportingEstimates ? "Exporting..." : "Export estimates CSV"}
                     </s-button>
@@ -1083,15 +992,73 @@ export default function VariantsPage() {
 
                 <s-table-header-row>
                   <s-table-header>Select</s-table-header>
-                  <s-table-header listSlot="secondary">Product</s-table-header>
-                  <s-table-header listSlot="primary">Variant</s-table-header>
-                  <s-table-header listSlot="secondary">SKU</s-table-header>
+                  <s-table-header listSlot="secondary">
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <span>Product</span>
+                      <TableColumnFilter
+                        title="Product"
+                        active={Boolean(filterProductId || filterCategory || filterProductTitle)}
+                        onApply={applyFilters}
+                        onClear={() => clearFilterNames(["product", "category", "productTitle", "productTitleMatch"])}
+                      >
+                        <label htmlFor="variants-product-filter">Product</label>
+                        <select id="variants-product-filter" name="product" defaultValue={filterProductId} style={filterControlStyle}>
+                          <option value="">All products</option>
+                          {products.map((product: { id: string; title: string }) => <option key={product.id} value={product.id}>{product.title}</option>)}
+                        </select>
+                        <label htmlFor="variants-category-filter">Product category</label>
+                        <select id="variants-category-filter" name="category" defaultValue={filterCategory} style={filterControlStyle}>
+                          <option value="">All categories</option>
+                          {categories.map((category: { value: string; label: string }) => <option key={category.value} value={category.value}>{category.label}</option>)}
+                        </select>
+                        <TableTextFilterFields id="variants-product-title-filter" name="productTitle" label="Product title" value={filterProductTitle} matchId="variants-product-title-match-filter" matchName="productTitleMatch" matchValue={filterProductTitleMatch} fieldStyle={filterControlStyle} />
+                      </TableColumnFilter>
+                    </div>
+                  </s-table-header>
+                  <s-table-header listSlot="primary">
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <span>Variant</span>
+                      <TableColumnFilter title="Variant" active={Boolean(filterVariantTitle)} onApply={applyFilters} onClear={() => clearFilterNames(["variantTitle", "variantTitleMatch"])}>
+                        <TableTextFilterFields id="variants-variant-title-filter" name="variantTitle" label="Variant title" value={filterVariantTitle} matchId="variants-variant-title-match-filter" matchName="variantTitleMatch" matchValue={filterVariantTitleMatch} fieldStyle={filterControlStyle} />
+                      </TableColumnFilter>
+                    </div>
+                  </s-table-header>
+                  <s-table-header listSlot="secondary">
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <span>SKU</span>
+                      <TableColumnFilter title="SKU" active={Boolean(filterSku || filterSkuMatch === "empty")} onApply={applyFilters} onClear={() => clearFilterNames(["sku", "skuMatch"])}>
+                        <TableTextFilterFields id="variants-sku-filter" name="sku" label="SKU" value={filterSku} matchId="variants-sku-match-filter" matchName="skuMatch" matchValue={filterSkuMatch} allowEmpty fieldStyle={filterControlStyle} />
+                      </TableColumnFilter>
+                    </div>
+                  </s-table-header>
                   <s-table-header listSlot="labeled" format="currency">Price</s-table-header>
                   <s-table-header listSlot="labeled" format="currency">Est. costs</s-table-header>
                   <s-table-header listSlot="labeled" format="currency">Est. donation</s-table-header>
-                  <s-table-header listSlot="secondary">Template</s-table-header>
-                  <s-table-header listSlot="secondary">POD</s-table-header>
-                  <s-table-header listSlot="inline">Status</s-table-header>
+                  <s-table-header listSlot="secondary">
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <span>Template</span>
+                      <TableColumnFilter title="Template" active={Boolean(filterTemplate || filterTemplateMatch === "empty")} onApply={applyFilters} onClear={() => clearFilterNames(["template", "templateMatch"])}>
+                        <TableTextFilterFields id="variants-template-filter" name="template" label="Template" value={filterTemplate} matchId="variants-template-match-filter" matchName="templateMatch" matchValue={filterTemplateMatch} allowEmpty fieldStyle={filterControlStyle} />
+                      </TableColumnFilter>
+                    </div>
+                  </s-table-header>
+                  <s-table-header listSlot="secondary">
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <span>POD</span>
+                      <TableColumnFilter title="POD" active={Boolean(filterPodProvider || filterPodProviderMatch === "empty")} onApply={applyFilters} onClear={() => clearFilterNames(["podProvider", "podProviderMatch"])}>
+                        <TableTextFilterFields id="variants-pod-provider-filter" name="podProvider" label="POD provider" value={filterPodProvider} matchId="variants-pod-provider-match-filter" matchName="podProviderMatch" matchValue={filterPodProviderMatch} allowEmpty fieldStyle={filterControlStyle} />
+                      </TableColumnFilter>
+                    </div>
+                  </s-table-header>
+                  <s-table-header listSlot="inline">
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                      <span>Status</span>
+                      <TableColumnFilter title="Status" active={Boolean(filterConfigured)} onApply={applyFilters} onClear={() => clearFilterNames(["configured"])}>
+                        <label htmlFor="variants-configured-filter">Configuration status</label>
+                        <select id="variants-configured-filter" name="configured" defaultValue={filterConfigured} style={filterControlStyle}><option value="">All</option><option value="yes">Configured</option><option value="no">Not configured</option></select>
+                      </TableColumnFilter>
+                    </div>
+                  </s-table-header>
                   <s-table-header>Actions</s-table-header>
                 </s-table-header-row>
 
@@ -1270,7 +1237,7 @@ export default function VariantsPage() {
             <s-button variant="secondary" onClick={closeAssignDialog}>Cancel</s-button>
             <s-button
               variant="primary"
-              disabled={isSubmitting || templates.length === 0 || selectedVariantIds.length === 0}
+              disabled={isSubmitting || templates.length === 0 || selectedVariantIds.length === 0 || !selectedTemplateId}
               onClick={handleBulkAssign}
             >
               Assign

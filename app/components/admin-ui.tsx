@@ -1,4 +1,6 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+
+import type { TextMatchMode } from "../utils/text-filter";
 
 export const adminFieldStyle = {
   width: "100%",
@@ -166,6 +168,159 @@ export function ResourceTableHeader({
       </div>
       {action ? <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>{action}</div> : null}
     </div>
+  );
+}
+
+export function TableColumnFilter({
+  title,
+  active,
+  children,
+  onApply,
+  onClear,
+}: {
+  title: string;
+  active: boolean;
+  children: ReactNode;
+  onApply: (form: HTMLFormElement) => void;
+  onClear: () => void;
+}) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  function close(): void {
+    dialogRef.current?.close();
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`${active ? "Change" : "Filter"} ${title}`}
+        title={`${active ? "Change" : "Filter"} ${title}`}
+        onClick={() => dialogRef.current?.showModal()}
+        style={{
+          width: "1.65rem",
+          height: "1.65rem",
+          display: "inline-grid",
+          placeItems: "center",
+          padding: 0,
+          border: "1px solid var(--p-color-border, #d2d5d8)",
+          borderRadius: "0.4rem",
+          background: active ? "var(--p-color-bg-fill-brand, #005bd3)" : "var(--p-color-bg-surface, #fff)",
+          color: active ? "#fff" : "var(--p-color-text-subdued, #6d7175)",
+          cursor: "pointer",
+          font: "inherit",
+          lineHeight: 1,
+        }}
+      >
+        <span aria-hidden="true">▼</span>
+      </button>
+      <dialog
+        ref={dialogRef}
+        aria-labelledby={`column-filter-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}
+        style={{
+          border: "none",
+          borderRadius: "0.75rem",
+          padding: 0,
+          width: "min(24rem, calc(100% - 2rem))",
+          boxShadow: "0 24px 64px rgba(0, 0, 0, 0.22)",
+        }}
+      >
+        <form
+          method="get"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onApply(event.currentTarget);
+            close();
+          }}
+          style={{ display: "grid", gap: "1rem", padding: "1.25rem" }}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center" }}>
+            <strong id={`column-filter-${title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`}>Filter {title}</strong>
+            <button type="button" onClick={close} aria-label={`Close ${title} filter`} style={{ border: 0, background: "transparent", cursor: "pointer", fontSize: "1.25rem" }}>×</button>
+          </div>
+          {children}
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => {
+                onClear();
+                close();
+              }}
+              style={{ border: 0, background: "transparent", color: "var(--p-color-text-critical, #8e1f1f)", cursor: "pointer", font: "inherit" }}
+            >
+              Clear filter
+            </button>
+            <div style={{ display: "flex", gap: "0.75rem" }}>
+              <s-button type="button" variant="secondary" onClick={close}>Cancel</s-button>
+              <s-button type="submit" variant="primary">Apply</s-button>
+            </div>
+          </div>
+        </form>
+      </dialog>
+    </>
+  );
+}
+
+export function TableTextFilterFields({
+  id,
+  name,
+  label,
+  value,
+  matchId,
+  matchName,
+  matchValue,
+  allowEmpty = false,
+  fieldStyle = adminFieldStyle,
+}: {
+  id: string;
+  name: string;
+  label: string;
+  value: string;
+  matchId: string;
+  matchName: string;
+  matchValue: TextMatchMode;
+  allowEmpty?: boolean;
+  fieldStyle?: CSSProperties;
+}) {
+  const [match, setMatch] = useState<TextMatchMode>(matchValue);
+  const [query, setQuery] = useState(value);
+
+  useEffect(() => setMatch(matchValue), [matchValue]);
+  useEffect(() => setQuery(value), [value]);
+
+  return (
+    <>
+      <label htmlFor={matchId}>Match</label>
+      <select
+        id={matchId}
+        name={matchName}
+        value={match}
+        onChange={(event) => setMatch(event.currentTarget.value as TextMatchMode)}
+        style={fieldStyle}
+      >
+        <option value="contains">Contains</option>
+        <option value="startsWith">Starts with</option>
+        <option value="endsWith">Ends with</option>
+        <option value="equals">Is exactly</option>
+        {allowEmpty ? <option value="empty">Has no value</option> : null}
+      </select>
+      {match === "empty" ? (
+        <input type="hidden" name={name} value="" />
+      ) : (
+        <>
+          <label htmlFor={id}>{label}</label>
+          <input
+            id={id}
+            name={name}
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+            placeholder={`Filter by ${label.toLowerCase()}`}
+            style={fieldStyle}
+          />
+        </>
+      )}
+    </>
   );
 }
 

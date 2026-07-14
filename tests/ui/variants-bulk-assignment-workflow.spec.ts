@@ -1,6 +1,20 @@
 /* eslint-disable testing-library/prefer-screen-queries */
 import { expect, test } from "@playwright/test";
 
+async function chooseTemplate(
+  page: import("@playwright/test").Page,
+  assignDialog: import("@playwright/test").Locator,
+  templateName: string,
+): Promise<void> {
+  await assignDialog.getByRole("button", { name: "Choose template" }).click();
+  const templatePicker = page.getByRole("dialog", { name: "Choose template" });
+  await expect(templatePicker.getByRole("radio", { checked: true })).toHaveCount(0);
+  await expect(templatePicker).toContainText("0 selected");
+  await templatePicker.getByLabel(templateName).check();
+  await expect(templatePicker).toContainText("1 selected");
+  await templatePicker.getByRole("button", { name: "Add selected" }).click();
+}
+
 test("variants bulk template assignment works on the real route", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/variants-bulk-assign-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();
@@ -19,7 +33,10 @@ test("variants bulk template assignment works on the real route", async ({ page,
   const assignDialog = page.getByRole("dialog").filter({ hasText: "Assign template" });
   await expect(assignDialog).toBeVisible();
 
-  await expect(assignDialog).toContainText(bootstrap.newTemplateName);
+  await expect(assignDialog).toContainText("No template selected");
+  await expect(assignDialog.getByRole("button", { name: "Assign", exact: true })).toBeDisabled();
+  await chooseTemplate(page, assignDialog, bootstrap.newTemplateName);
+  await expect(assignDialog.getByRole("button", { name: "Assign", exact: true })).toBeEnabled();
   await assignDialog.getByRole("button", { name: "Assign", exact: true }).click();
 
   const confirmDialog = page.getByRole("dialog").filter({ hasText: "Overwrite existing configurations?" });
@@ -50,7 +67,7 @@ test("bulk assignment removes yield-aware production and shipping duplicates", a
   await page.getByLabel("Select Configured Variant").check();
   await page.getByRole("button", { name: "Assign template" }).click();
   const assignDialog = page.getByRole("dialog").filter({ hasText: "Assign template" });
-  await expect(assignDialog).toContainText(bootstrap.newTemplateName);
+  await chooseTemplate(page, assignDialog, bootstrap.newTemplateName);
   await assignDialog.getByLabel("Remove exact duplicate variant lines already included in this template.").check();
   await assignDialog.getByRole("button", { name: "Assign", exact: true }).click();
 

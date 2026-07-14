@@ -89,11 +89,16 @@ export function AssignmentPicker({
 
   function togglePending(optionId: string) {
     setPendingIds((current) => {
-      if (!multi) return current.includes(optionId) ? [] : [optionId];
+      if (!multi) return [optionId];
       return current.includes(optionId)
         ? current.filter((idValue) => idValue !== optionId)
         : [...current, optionId];
     });
+  }
+
+  function openPicker() {
+    setPendingIds(multi ? [] : [...selectedIds].slice(0, 1));
+    setOpen(true);
   }
 
   function closePicker() {
@@ -114,7 +119,7 @@ export function AssignmentPicker({
 
   return (
     <>
-      <button type="button" onClick={() => setOpen(true)} disabled={disabled} style={secondaryButtonStyle}>
+      <button type="button" onClick={openPicker} disabled={disabled} style={secondaryButtonStyle}>
         {triggerLabel}
       </button>
       {open ? (
@@ -168,7 +173,7 @@ export function AssignmentPicker({
                 <div style={{ padding: "1rem", color: "var(--p-color-text-subdued, #6d7175)" }}>{emptyText}</div>
               ) : (
                 visibleOptions.map((option) => {
-                  const checked = pendingIds.includes(option.id) || (pendingIds.length === 0 && selectedIds.has(option.id));
+                  const checked = pendingIds.includes(option.id);
                   return (
                     <label
                       key={option.id}
