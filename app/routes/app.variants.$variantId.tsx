@@ -3809,10 +3809,6 @@ export default function VariantDetailPage() {
                         <BlockStack gap="100">
                           <InlineStack gap="200" blockAlign="center">
                             <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                            <Badge tone="info">Template</Badge>
-                            <Badge tone={line.materialType === "shipping" ? "info" : "success"}>
-                              {line.materialType === "shipping" ? "Shipping" : "Production"}
-                            </Badge>
                             {line.hasOverride ? <Badge tone="attention">Override active</Badge> : null}
                           </InlineStack>
                           <Text as="p" variant="bodyMd" tone="subdued">
@@ -3867,8 +3863,6 @@ export default function VariantDetailPage() {
                         <BlockStack gap="100">
                           <InlineStack gap="200" blockAlign="center">
                             <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                            <Badge tone="info">Shipping template</Badge>
-                            <Badge tone="info">Shipping</Badge>
                             {line.hasOverride ? <Badge tone="attention">Override active</Badge> : null}
                           </InlineStack>
                           <Text as="p" variant="bodyMd" tone="subdued">
@@ -3930,10 +3924,6 @@ export default function VariantDetailPage() {
                           <BlockStack gap="100">
                             <InlineStack gap="200" blockAlign="center">
                               <Text as="p" variant="bodyMd" fontWeight="semibold">{line.materialName}</Text>
-                              <Badge tone="attention">Variant-specific</Badge>
-                              <Badge tone={line.materialType === "shipping" ? "info" : "success"}>
-                                {line.materialType === "shipping" ? "Shipping" : "Production"}
-                              </Badge>
                               {alsoInTemplate ? <Badge tone="warning">Also in template</Badge> : null}
                             </InlineStack>
                             <Text as="p" variant="bodyMd" tone="subdued">{describeMaterialLine(line)}</Text>
@@ -3990,7 +3980,6 @@ export default function VariantDetailPage() {
                         <BlockStack gap="100">
                           <InlineStack gap="200" blockAlign="center">
                             <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
-                            <Badge tone="info">Template</Badge>
                             {line.hasOverride ? <Badge tone="attention">Override active</Badge> : null}
                           </InlineStack>
                           <Text as="p" variant="bodyMd" tone="subdued">
@@ -4049,7 +4038,6 @@ export default function VariantDetailPage() {
                         <BlockStack gap="100">
                           <InlineStack gap="200" blockAlign="center">
                             <Text as="p" variant="bodyMd" fontWeight="semibold">{line.equipmentName}</Text>
-                            <Badge tone="attention">Variant-specific</Badge>
                             {productionTemplateEquipmentIds.has(line.equipmentId) ? (
                               <Badge tone="warning">Also in template</Badge>
                             ) : null}
