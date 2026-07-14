@@ -47,8 +47,10 @@ test("variants page filters by product category for bulk selection", async ({ pa
   const bootstrap = await bootstrapResponse.json();
   await page.goto(bootstrap.variantsUrl);
 
+  await page.getByRole("button", { name: "Filter Product" }).click();
+  const productFilter = page.getByRole("dialog", { name: "Filter Product" });
   await page.locator("#variants-category-filter").selectOption({ label: "Earrings" });
-  await page.getByRole("button", { name: "Apply filters" }).click();
+  await productFilter.getByRole("button", { name: "Apply" }).click();
 
   await expect(page.getByLabel("Select Small")).toBeVisible();
   await expect(page.getByLabel("Select Large")).toBeVisible();
@@ -63,15 +65,36 @@ test("product and variant text-column filters narrow search results", async ({ p
   const bootstrap = await bootstrapResponse.json();
 
   await page.goto(bootstrap.productsUrl);
+  await page.getByRole("button", { name: "Filter Product" }).click();
+  await page.locator("#products-product-match-filter").selectOption("equals");
   await page.locator("#products-product-filter").fill("configured-product");
-  await page.getByRole("button", { name: "Apply filters" }).click();
+  await page.getByRole("dialog", { name: "Filter Product" }).getByRole("button", { name: "Apply" }).click();
   await expect(page.getByText("Configured Product", { exact: true })).toBeVisible();
   await expect(page.getByText("Partial Product", { exact: true })).toHaveCount(0);
 
   await page.goto(bootstrap.variantsUrl);
-  await page.locator("#variants-variant-title-filter").fill("large");
-  await page.getByRole("button", { name: "Apply filters" }).click();
+  await page.getByRole("button", { name: "Filter Variant" }).click();
+  await page.locator("#variants-variant-title-match-filter").selectOption("startsWith");
+  await page.locator("#variants-variant-title-filter").fill("Lar");
+  await page.getByRole("dialog", { name: "Filter Variant" }).getByRole("button", { name: "Apply" }).click();
   await expect(page.getByLabel("Select Large")).toBeVisible();
   await expect(page.getByLabel("Select Small")).toHaveCount(0);
   await expect(page.getByLabel("Select Default")).toHaveCount(0);
+});
+
+test("variant filters can find rows with no template value", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/products-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+  const bootstrap = await bootstrapResponse.json();
+
+  await page.goto(bootstrap.variantsUrl);
+  await page.getByRole("button", { name: "Filter Template" }).click();
+  await page.locator("#variants-template-match-filter").selectOption("empty");
+  await expect(page.locator("#variants-template-filter")).toHaveCount(0);
+  await page.getByRole("dialog", { name: "Filter Template" }).getByRole("button", { name: "Apply" }).click();
+
+  await expect(page.getByLabel("Select Large")).toBeVisible();
+  await expect(page.getByLabel("Select Small")).toHaveCount(0);
+  await expect(page.getByLabel("Select Default")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Change Template" })).toBeVisible();
 });

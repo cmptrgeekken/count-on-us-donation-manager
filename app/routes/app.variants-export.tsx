@@ -2,6 +2,7 @@ import type { LoaderFunctionArgs } from "@remix-run/node";
 import { prisma } from "../db.server";
 import { buildVariantEstimatePayload, type VariantEstimatePayload } from "../services/variantEstimate.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
+import { buildTextFilter, parseTextMatchMode } from "../utils/text-filter";
 
 function csvCell(value: string | number | boolean | null | undefined) {
   const text = value === null || value === undefined ? "" : String(value);
@@ -41,6 +42,11 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterSku = url.searchParams.get("sku")?.trim() ?? "";
   const filterTemplate = url.searchParams.get("template")?.trim() ?? "";
   const filterPodProvider = url.searchParams.get("podProvider")?.trim() ?? "";
+  const filterProductTitleMatch = parseTextMatchMode(url.searchParams.get("productTitleMatch"));
+  const filterVariantTitleMatch = parseTextMatchMode(url.searchParams.get("variantTitleMatch"));
+  const filterSkuMatch = parseTextMatchMode(url.searchParams.get("skuMatch"), true);
+  const filterTemplateMatch = parseTextMatchMode(url.searchParams.get("templateMatch"), true);
+  const filterPodProviderMatch = parseTextMatchMode(url.searchParams.get("podProviderMatch"), true);
 
   const [variants, shop, taxOffsetCache] = await Promise.all([
     prisma.variant.findMany({
@@ -51,23 +57,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           ? {
               product: {
                 ...(filterCategory ? { productCategoryPath: filterCategory } : {}),
-                ...(filterProductTitle ? { title: { contains: filterProductTitle, mode: "insensitive" } } : {}),
+                ...(filterProductTitle ? { title: buildTextFilter(filterProductTitle, filterProductTitleMatch) } : {}),
               },
             }
           : {}),
-        ...(filterVariantTitle ? { title: { contains: filterVariantTitle, mode: "insensitive" } } : {}),
-        ...(filterSku ? { sku: { contains: filterSku, mode: "insensitive" } } : {}),
-        ...(filterPodProvider
-          ? { providerMappings: { some: { status: "mapped", provider: { contains: filterPodProvider, mode: "insensitive" } } } }
+        ...(filterVariantTitle ? { title: buildTextFilter(filterVariantTitle, filterVariantTitleMatch) } : {}),
+        ...(filterSkuMatch !== "empty" && filterSku ? { sku: buildTextFilter(filterSku, filterSkuMatch) } : {}),
+        ...(filterPodProviderMatch !== "empty" && filterPodProvider
+          ? { providerMappings: { some: { status: "mapped", provider: buildTextFilter(filterPodProvider, filterPodProviderMatch) } } }
           : {}),
-        ...(filterTemplate || filterConfigured
+        ...(filterPodProviderMatch === "empty" ? { providerMappings: { none: { status: "mapped" } } } : {}),
+        ...((filterTemplateMatch !== "empty" && filterTemplate) ||
+          filterConfigured ||
+          filterSkuMatch === "empty" ||
+          filterTemplateMatch === "empty"
           ? {
               AND: [
-                ...(filterTemplate
-                  ? [{ costConfig: { productionTemplate: { name: { contains: filterTemplate, mode: "insensitive" as const } } } }]
+                ...(filterTemplateMatch !== "empty" && filterTemplate
+                  ? [{ costConfig: { productionTemplate: { name: buildTextFilter(filterTemplate, filterTemplateMatch) } } }]
                   : []),
                 ...(filterConfigured === "yes" ? [{ costConfig: { isNot: null } }] : []),
                 ...(filterConfigured === "no" ? [{ costConfig: { is: null } }] : []),
+                ...(filterSkuMatch === "empty" ? [{ OR: [{ sku: null }, { sku: "" }] }] : []),
+                ...(filterTemplateMatch === "empty"
+                  ? [{ OR: [{ costConfig: { is: null } }, { costConfig: { is: { productionTemplate: { is: null } } } }] }]
+                  : []),
               ],
             }
           : {}),

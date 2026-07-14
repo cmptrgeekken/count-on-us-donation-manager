@@ -5,7 +5,7 @@ import { Link, useFetcher, useLoaderData, useLocation, useNavigate, useRouteErro
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { AssignmentPicker } from "../components/AssignmentControls";
-import { ResourceTableHeader } from "../components/admin-ui";
+import { ResourceTableHeader, TableColumnFilter, TableTextFilterFields } from "../components/admin-ui";
 import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
 import {
@@ -18,6 +18,7 @@ import { syncProductDescriptionDonationSummary } from "../services/productDescri
 import { canWriteShopifyProducts } from "../services/productPublicMetafieldService.server";
 import { authenticateAdminRequest, isPlaywrightBypassRequest } from "../utils/admin-auth.server";
 import { isVariantCostConfigured } from "../utils/variant-cost-readiness";
+import { buildTextFilter, parseTextMatchMode } from "../utils/text-filter";
 
 const bulkAssignmentSchema = z.object({
   productIds: z.array(z.string().min(1)).min(1, "Select at least one product."),
@@ -51,6 +52,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const filterProduct = url.searchParams.get("productQuery")?.trim() ?? "";
   const filterPodProvider = url.searchParams.get("podProvider")?.trim() ?? "";
   const filterStatus = url.searchParams.get("status")?.trim() ?? "";
+  const filterProductMatch = parseTextMatchMode(url.searchParams.get("productQueryMatch"));
+  const filterPodProviderMatch = parseTextMatchMode(url.searchParams.get("podProviderMatch"), true);
 
   const [shop, latestCatalogSync, products, causes, artists] = await Promise.all([
     prisma.shop.findUnique({
@@ -74,25 +77,28 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         ...(filterProduct
           ? {
               OR: [
-                { title: { contains: filterProduct, mode: "insensitive" } },
-                { handle: { contains: filterProduct, mode: "insensitive" } },
+                { title: buildTextFilter(filterProduct, filterProductMatch) },
+                { handle: buildTextFilter(filterProduct, filterProductMatch) },
               ],
             }
           : {}),
         ...(filterStatus ? { status: filterStatus } : {}),
-        ...(filterPodProvider
+        ...(filterPodProviderMatch !== "empty" && filterPodProvider
           ? {
               variants: {
                 some: {
                   providerMappings: {
                     some: {
                       status: "mapped",
-                      provider: { contains: filterPodProvider, mode: "insensitive" },
+                      provider: buildTextFilter(filterPodProvider, filterPodProviderMatch),
                     },
                   },
                 },
               },
             }
+          : {}),
+        ...(filterPodProviderMatch === "empty"
+          ? { variants: { none: { providerMappings: { some: { status: "mapped" } } } } }
           : {}),
       },
       orderBy: { title: "asc" },
@@ -167,6 +173,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     filterProduct,
     filterPodProvider,
     filterStatus,
+    filterPodProviderMatch,
+    filterProductMatch,
   });
 };
 
@@ -698,6 +706,8 @@ export default function ProductsPage() {
     filterProduct,
     filterPodProvider,
     filterStatus,
+    filterPodProviderMatch,
+    filterProductMatch,
   } = useLoaderData<typeof loader>();
   const syncFetcher = useFetcher<SyncActionData>();
   const bulkFetcher = useFetcher<BulkActionData>();
@@ -712,7 +722,7 @@ export default function ProductsPage() {
   const allSelected = products.length > 0 && selectedProductIds.length === products.length;
   const isBulkSubmitting = bulkFetcher.state !== "idle";
   const selectedArtist = artists.find((artist: ArtistOption) => artist.id === selectedArtistId) ?? null;
-  const hasProductFilters = Boolean(filterProduct || filterPodProvider || filterStatus);
+  const hasProductFilters = Boolean(filterProduct || filterPodProvider || filterStatus || filterPodProviderMatch === "empty");
 
   useEffect(() => {
     setSelectedProductIds((current) => current.filter((id) => products.some((product: ProductRow) => product.id === id)));
@@ -784,15 +794,24 @@ export default function ProductsPage() {
   function applyProductFilters(form: HTMLFormElement) {
     const formData = new FormData(form);
     const params = new URLSearchParams(searchParams);
-    const values = {
-      productQuery: formData.get("productQuery")?.toString().trim() ?? "",
-      podProvider: formData.get("podProvider")?.toString().trim() ?? "",
-      status: formData.get("status")?.toString().trim() ?? "",
-    };
-    for (const [name, value] of Object.entries(values)) {
+    for (const name of ["productQuery", "podProvider", "status"]) {
+      if (!formData.has(name)) continue;
+      const value = formData.get(name)?.toString().trim() ?? "";
       if (value) params.set(name, value);
       else params.delete(name);
     }
+    for (const name of ["productQueryMatch", "podProviderMatch"]) {
+      if (!formData.has(name)) continue;
+      const value = formData.get(name)?.toString() ?? "contains";
+      if (value !== "contains") params.set(name, value);
+      else params.delete(name);
+    }
+    navigate(`?${params.toString()}`);
+  }
+
+  function clearProductFilterNames(names: string[]): void {
+    const params = new URLSearchParams(searchParams);
+    for (const name of names) params.delete(name);
     navigate(`?${params.toString()}`);
   }
 
@@ -801,6 +820,8 @@ export default function ProductsPage() {
     params.delete("productQuery");
     params.delete("podProvider");
     params.delete("status");
+    params.delete("podProviderMatch");
+    params.delete("productQueryMatch");
     navigate(`?${params.toString()}`);
   }
 
@@ -854,46 +875,14 @@ export default function ProductsPage() {
           </div>
         </s-section>
 
-        <s-section heading="Filter products">
-          <form
-            method="get"
-            onSubmit={(event) => {
-              event.preventDefault();
-              applyProductFilters(event.currentTarget);
-            }}
-            style={{ display: "grid", gap: "1rem" }}
-          >
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(13rem, 1fr))", gap: "1rem", alignItems: "end" }}>
-              <div style={{ display: "grid", gap: "0.35rem" }}>
-                <label htmlFor="products-product-filter">Product title or handle</label>
-                <input id="products-product-filter" name="productQuery" type="search" defaultValue={filterProduct} placeholder="Filter by product" style={fieldStyle} />
-              </div>
-              <div style={{ display: "grid", gap: "0.35rem" }}>
-                <label htmlFor="products-pod-provider-filter">POD provider</label>
-                <input id="products-pod-provider-filter" name="podProvider" type="search" defaultValue={filterPodProvider} placeholder="Filter by POD provider" style={fieldStyle} />
-              </div>
-              <div style={{ display: "grid", gap: "0.35rem" }}>
-                <label htmlFor="products-status-filter">Status</label>
-                <select id="products-status-filter" name="status" defaultValue={filterStatus} style={fieldStyle}>
-                  <option value="">All statuses</option>
-                  <option value="active">Active</option>
-                  <option value="draft">Draft</option>
-                  <option value="archived">Archived</option>
-                </select>
-              </div>
-              <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <s-button type="submit" variant="primary">Apply filters</s-button>
-                <s-button variant="secondary" onClick={clearProductFilters}>Clear</s-button>
-              </div>
-            </div>
-          </form>
-        </s-section>
-
         {products.length === 0 ? (
           <s-section heading={hasProductFilters ? "No products match these filters" : "No synced products"}>
             <div style={{ display: "grid", gap: "0.75rem" }}>
               {hasProductFilters ? (
-                <s-text>Try a different product, POD provider, or status filter.</s-text>
+                <div style={{ display: "grid", gap: "0.75rem", justifyItems: "start" }}>
+                  <s-text>Try a different product, POD provider, or status filter.</s-text>
+                  <s-button variant="secondary" onClick={clearProductFilters}>Clear filters</s-button>
+                </div>
               ) : (
                 <>
                   <s-text>Catalog sync must complete before product-level Cause assignments can be configured.</s-text>
@@ -1048,25 +1037,50 @@ export default function ProductsPage() {
                 title="Product Donations"
                 description="Assign Causes and Artists at the product level."
                 action={
-                  <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                    <input
-                      type="checkbox"
-                      checked={allSelected}
-                      onChange={(event) => toggleSelectAll(event.currentTarget.checked)}
-                    />
-                    <span>Select all visible</span>
-                  </label>
+                  <>
+                    {hasProductFilters ? <s-button variant="secondary" onClick={clearProductFilters}>Clear filters</s-button> : null}
+                    <label style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        onChange={(event) => toggleSelectAll(event.currentTarget.checked)}
+                      />
+                      <span>Select all visible</span>
+                    </label>
+                  </>
                 }
               />
 
               <s-table-header-row>
                 <s-table-header>Select</s-table-header>
-                <s-table-header listSlot="primary">Product</s-table-header>
+                <s-table-header listSlot="primary">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <span>Product</span>
+                    <TableColumnFilter title="Product" active={Boolean(filterProduct)} onApply={applyProductFilters} onClear={() => clearProductFilterNames(["productQuery", "productQueryMatch"])}>
+                      <TableTextFilterFields id="products-product-filter" name="productQuery" label="Product title or handle" value={filterProduct} matchId="products-product-match-filter" matchName="productQueryMatch" matchValue={filterProductMatch} fieldStyle={fieldStyle} />
+                    </TableColumnFilter>
+                  </div>
+                </s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Variant costs</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Artists</s-table-header>
                 <s-table-header listSlot="secondary" format="numeric">Cause assignments</s-table-header>
-                <s-table-header listSlot="secondary">POD coverage</s-table-header>
-                <s-table-header listSlot="inline">Status</s-table-header>
+                <s-table-header listSlot="secondary">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <span>POD coverage</span>
+                    <TableColumnFilter title="POD coverage" active={Boolean(filterPodProvider || filterPodProviderMatch === "empty")} onApply={applyProductFilters} onClear={() => clearProductFilterNames(["podProvider", "podProviderMatch"])}>
+                      <TableTextFilterFields id="products-pod-provider-filter" name="podProvider" label="POD provider" value={filterPodProvider} matchId="products-pod-provider-match-filter" matchName="podProviderMatch" matchValue={filterPodProviderMatch} allowEmpty fieldStyle={fieldStyle} />
+                    </TableColumnFilter>
+                  </div>
+                </s-table-header>
+                <s-table-header listSlot="inline">
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
+                    <span>Status</span>
+                    <TableColumnFilter title="Status" active={Boolean(filterStatus)} onApply={applyProductFilters} onClear={() => clearProductFilterNames(["status"])}>
+                      <label htmlFor="products-status-filter">Status</label>
+                      <select id="products-status-filter" name="status" defaultValue={filterStatus} style={fieldStyle}><option value="">All statuses</option><option value="active">Active</option><option value="draft">Draft</option><option value="archived">Archived</option></select>
+                    </TableColumnFilter>
+                  </div>
+                </s-table-header>
                 <s-table-header>Actions</s-table-header>
               </s-table-header-row>
 
