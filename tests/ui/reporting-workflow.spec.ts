@@ -2,6 +2,57 @@
 import { Buffer } from "node:buffer";
 import { expect, test } from "@playwright/test";
 
+test("historical import submits the apply intent from the Import button", async ({ page }) => {
+  await page.goto("/app/reporting-imports?__playwrightShop=playwright-import-intent.myshopify.com");
+
+  await page.getByLabel("JSON or CSV fallback").first().fill(JSON.stringify([{
+    shopifyPayoutId: "playwright-import-intent",
+    startDate: "2025-01-01",
+    endDate: "2025-01-15",
+  }]));
+
+  const submittedIntentPromise = page.evaluate(() => new Promise<string>((resolve) => {
+    const originalSet = FormData.prototype.set;
+    FormData.prototype.set = function set(name: string, value: string | Blob, fileName?: string) {
+      if (name === "intent") resolve(value.toString());
+      const args = fileName === undefined ? [name, value] : [name, value, fileName];
+      Reflect.apply(originalSet, this, args);
+    };
+  }));
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+  await expect(submittedIntentPromise).resolves.toBe("apply-import");
+});
+
+test("snapshot replacement preflight lets merchants resolve unmapped lines", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/reporting-imports-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.reportingImportsUrl);
+
+  await page.getByLabel("JSON or CSV fallback").last().fill(JSON.stringify([{
+    admin_graphql_api_id: bootstrap.snapshotOrderId,
+    financial_status: "paid",
+    line_items: [{
+      id: "replacement-custom-line",
+      title: "Replacement custom item",
+      variant_title: "Default Title",
+      quantity: 1,
+      price: "25.00",
+    }],
+  }]));
+  await page.getByLabel("Replacement reason").fill("Repair historical mapping");
+  await page.getByRole("button", { name: "Dry run replacement" }).click();
+
+  await expect(page.getByText(/Resolve these line mappings before replacing snapshots/)).toBeVisible();
+  await page.getByRole("button", { name: "Choose line handling" }).click();
+  await page.getByRole("radio").nth(1).check();
+  await page.getByRole("button", { name: "Add selected" }).click();
+  await page.getByRole("button", { name: "Dry run with mappings" }).click();
+
+  await expect(page.locator("s-banner").getByText("Snapshot replacement dry run complete.")).toBeVisible();
+  await expect(page.getByText(/"status": "would_replace"/)).toBeVisible();
+});
+
 test("reporting dashboard shows track summaries and charges", async ({ page, request }) => {
   const bootstrapResponse = await request.get("/ui-fixtures/reporting-bootstrap");
   expect(bootstrapResponse.ok()).toBeTruthy();

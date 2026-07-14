@@ -253,6 +253,7 @@ export async function buildPublicTransparencyPage(
           db.orderSnapshotLine.findMany({
             where: {
               shopId,
+              lineKind: { not: "tip" },
               snapshot: {
                 currentForOrderRecord: { isNot: null },
                 orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },

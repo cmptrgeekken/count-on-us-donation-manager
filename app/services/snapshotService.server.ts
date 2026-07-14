@@ -22,6 +22,7 @@ type SnapshotLineItemPayload = {
   variant_title?: string | null;
   sku?: string | null;
   importMappingKey?: string | null;
+  importLineKind?: "product" | "tip" | "custom" | null;
   quantity?: number | string | null;
   price?: string | number | null;
   total_discount?: string | number | null;
@@ -198,6 +199,12 @@ function getDiscountedUnitPrice(lineItem: SnapshotLineItemPayload, quantity: num
   return getDiscountedLineSubtotal(lineItem, quantity).div(quantity);
 }
 
+function getLineKind(lineItem: SnapshotLineItemPayload): "product" | "tip" | "custom" {
+  return lineItem.importLineKind === "tip" || lineItem.importLineKind === "custom"
+    ? lineItem.importLineKind
+    : "product";
+}
+
 function getOrderDiscount(order: ShopifyOrderPayload) {
   return toDecimal(
     order.current_total_discounts ??
@@ -288,24 +295,37 @@ function getCustomerDisplayName(order: ShopifyOrderPayload) {
   return shippingName || null;
 }
 
-function allocateOrderLevelDiscounts<T extends { subtotal: Prisma.Decimal; quantity: number; salePrice: Prisma.Decimal }>(
+function allocateOrderLevelDiscounts<T extends { subtotal: Prisma.Decimal; quantity: number; salePrice: Prisma.Decimal; discountEligible: boolean }>(
   lines: T[],
   orderDiscountedSubtotal: Prisma.Decimal | null,
 ): T[] {
   if (!orderDiscountedSubtotal || lines.length === 0) return lines;
 
-  const currentSubtotal = lines.reduce((sum, line) => sum.add(line.subtotal), ZERO);
-  if (currentSubtotal.lessThanOrEqualTo(ZERO) || orderDiscountedSubtotal.greaterThanOrEqualTo(currentSubtotal)) {
+  const eligibleSubtotal = lines.reduce(
+    (sum, line) => line.discountEligible ? sum.add(line.subtotal) : sum,
+    ZERO,
+  );
+  const excludedSubtotal = lines.reduce(
+    (sum, line) => line.discountEligible ? sum : sum.add(line.subtotal),
+    ZERO,
+  );
+  const targetEligibleSubtotal = Prisma.Decimal.max(orderDiscountedSubtotal.sub(excludedSubtotal), ZERO);
+  if (eligibleSubtotal.lessThanOrEqualTo(ZERO) || targetEligibleSubtotal.greaterThanOrEqualTo(eligibleSubtotal)) {
     return lines;
   }
 
-  const ratio = orderDiscountedSubtotal.div(currentSubtotal);
+  const ratio = targetEligibleSubtotal.div(eligibleSubtotal);
   let allocatedSubtotal = ZERO;
+  const lastEligibleIndex = lines.reduce(
+    (lastIndex, line, index) => line.discountEligible ? index : lastIndex,
+    -1,
+  );
 
   return lines.map((line, index) => {
+    if (!line.discountEligible) return line;
     const subtotal =
-      index === lines.length - 1
-        ? Prisma.Decimal.max(orderDiscountedSubtotal.sub(allocatedSubtotal), ZERO)
+      index === lastEligibleIndex
+        ? Prisma.Decimal.max(targetEligibleSubtotal.sub(allocatedSubtotal), ZERO)
         : line.subtotal.mul(ratio).toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
     allocatedSubtotal = allocatedSubtotal.add(subtotal);
     return {
@@ -360,6 +380,7 @@ function toProductGid(lineItem: SnapshotLineItemPayload) {
 }
 
 type SnapshotResolution = {
+  lineKind: "product" | "tip" | "custom";
   variantId: string | null;
   productGid: string | null;
   lineItemId: string;
@@ -575,6 +596,16 @@ export async function createSnapshot(
     replaceExistingSnapshotId?: string | null;
     replacementReason?: string | null;
     replacementSource?: string | null;
+    fallbackSnapshot?: {
+      customerDisplayName: string | null;
+      shopifyCustomerId: string | null;
+      normalizedCustomerEmailHash: string | null;
+      subtotalAmount: Prisma.Decimal;
+      discountAmount: Prisma.Decimal;
+      shippingAmount: Prisma.Decimal;
+      totalAmount: Prisma.Decimal;
+      salesTaxCollected: Prisma.Decimal;
+    };
   } = {},
 ): Promise<{ created: boolean; snapshotId?: string }> {
   const shopifyOrderId = order.admin_graphql_api_id ?? null;
@@ -693,8 +724,9 @@ export async function createSnapshot(
   );
   const initialVariantIds = variants.map((variant: { id: string }) => variant.id);
   const podOverrides = await fetchSnapshotPodOverrides(shopId, initialVariantIds, db, fetchImpl);
-  const shopifyCustomerId = toCustomerGid(order);
-  const normalizedCustomerEmailHash = getCustomerEmailHash(order);
+  const shopifyCustomerId = toCustomerGid(order) ?? metadata.fallbackSnapshot?.shopifyCustomerId ?? null;
+  const normalizedCustomerEmailHash = getCustomerEmailHash(order) ?? metadata.fallbackSnapshot?.normalizedCustomerEmailHash ?? null;
+  const customerDisplayName = getCustomerDisplayName(order) ?? metadata.fallbackSnapshot?.customerDisplayName ?? null;
   const customerArtistAssociation =
     db.customerArtistAssociation?.findFirst && (shopifyCustomerId || normalizedCustomerEmailHash)
       ? await db.customerArtistAssociation.findFirst({
@@ -708,17 +740,26 @@ export async function createSnapshot(
           select: { artistId: true },
       })
       : null;
-  const orderDiscountedSubtotal = getOrderDiscountedSubtotal(order);
-  const adjustedLinePricing = allocateOrderLevelDiscounts(
-    lineItems.map((lineItem) => {
+  const unadjustedLinePricing = lineItems.map((lineItem) => {
       const quantity = Math.max(0, Number(lineItem.quantity ?? 0));
       const subtotal = getDiscountedLineSubtotal(lineItem, quantity);
+      const lineKind = getLineKind(lineItem);
       return {
         quantity,
         subtotal,
         salePrice: quantity > 0 ? subtotal.div(quantity) : ZERO,
+        discountEligible: lineKind !== "tip",
       };
-    }),
+    });
+  const unadjustedLineSubtotal = unadjustedLinePricing.reduce((sum, line) => sum.add(line.subtotal), ZERO);
+  const suppliedOrderDiscountedSubtotal = getOrderDiscountedSubtotal(order);
+  const orderDiscountedSubtotal = suppliedOrderDiscountedSubtotal?.equals(ZERO) &&
+    unadjustedLineSubtotal.gt(ZERO) &&
+    getOrderDiscount(order).equals(ZERO)
+    ? null
+    : suppliedOrderDiscountedSubtotal;
+  const adjustedLinePricing = allocateOrderLevelDiscounts(
+    unadjustedLinePricing,
     orderDiscountedSubtotal,
   );
 
@@ -726,10 +767,12 @@ export async function createSnapshot(
     lineItems.map(async (lineItem, index): Promise<SnapshotResolution> => {
       const variantGid = toVariantGid(lineItem);
       const productGid = toProductGid(lineItem);
+      const lineKind = getLineKind(lineItem);
       const pricing = adjustedLinePricing[index] ?? {
         quantity: Math.max(0, Number(lineItem.quantity ?? 0)),
         salePrice: getDiscountedUnitPrice(lineItem, Math.max(0, Number(lineItem.quantity ?? 0))),
         subtotal: getDiscountedLineSubtotal(lineItem, Math.max(0, Number(lineItem.quantity ?? 0))),
+        discountEligible: lineKind !== "tip",
       };
       const quantity = pricing.quantity;
       const salePrice = pricing.salePrice;
@@ -763,10 +806,11 @@ export async function createSnapshot(
             totalCost: ZERO,
             materialLines: [],
             equipmentLines: [],
-            netContribution: salePrice,
+            netContribution: lineKind === "tip" ? ZERO : salePrice,
           };
 
       return {
+        lineKind,
         variantId: variant?.id ?? null,
         productGid,
         lineItemId: lineItem.admin_graphql_api_id ?? lineItem.id?.toString() ?? crypto.randomUUID(),
@@ -785,7 +829,11 @@ export async function createSnapshot(
     }),
   );
 
-  const orderSubtotal = firstPassResolutions.reduce((sum, line) => sum.add(line.subtotal), ZERO);
+  const snapshotLineSubtotal = firstPassResolutions.reduce((sum, line) => sum.add(line.subtotal), ZERO);
+  const packagingEligibleSubtotal = firstPassResolutions.reduce(
+    (sum, line) => line.lineKind === "tip" ? sum : sum.add(line.subtotal),
+    ZERO,
+  );
   const packagingCost = firstPassResolutions.reduce(
     (max, line) => (line.firstPass.packagingCost.gt(max) ? line.firstPass.packagingCost : max),
     ZERO,
@@ -794,7 +842,9 @@ export async function createSnapshot(
   const withFinalCosts = await Promise.all(
     firstPassResolutions.map(async (line) => {
       const packagingAllocated =
-        orderSubtotal.gt(ZERO) ? packagingCost.mul(line.subtotal).div(orderSubtotal) : ZERO;
+        line.lineKind !== "tip" && packagingEligibleSubtotal.gt(ZERO)
+          ? packagingCost.mul(line.subtotal).div(packagingEligibleSubtotal)
+          : ZERO;
       const packagingAllocatedPerUnit =
         line.quantity > 0 ? packagingAllocated.div(line.quantity) : ZERO;
 
@@ -813,14 +863,16 @@ export async function createSnapshot(
               ...line.firstPass,
               packagingCost: packagingAllocatedPerUnit,
               totalCost: line.firstPass.totalCost.add(packagingAllocatedPerUnit).sub(line.firstPass.packagingCost),
-              netContribution: line.salePrice.sub(
-                line.firstPass.totalCost.add(packagingAllocatedPerUnit).sub(line.firstPass.packagingCost),
-              ),
+              netContribution: line.lineKind === "tip"
+                ? ZERO
+                : line.salePrice.sub(
+                    line.firstPass.totalCost.add(packagingAllocatedPerUnit).sub(line.firstPass.packagingCost),
+                  ),
             };
 
       let allocations: SnapshotResolution["allocations"] = [];
       const artistAllocations: SnapshotResolution["artistAllocations"] = [];
-      if (line.productGid) {
+      if (line.lineKind === "product" && line.productGid) {
         const product = productByGid.get(line.productGid);
         const productId = product?.id ?? "__missing_product__";
         const productArtistAssignments = db.productArtistAssignment?.findMany
@@ -965,6 +1017,29 @@ export async function createSnapshot(
       }
       const revision = isReplacing ? Number(existing?.revision ?? 1) + 1 : 1;
 
+      const computedSnapshotSubtotal = orderDiscountedSubtotal ?? snapshotLineSubtotal;
+      const snapshotSubtotal = computedSnapshotSubtotal.equals(ZERO) && snapshotLineSubtotal.equals(ZERO)
+        ? metadata.fallbackSnapshot?.subtotalAmount ?? computedSnapshotSubtotal
+        : computedSnapshotSubtotal;
+      const hasShipping = order.total_shipping_price_set?.shop_money?.amount !== undefined || (order.shipping_lines?.length ?? 0) > 0;
+      const shippingAmount = hasShipping
+        ? getOrderShipping(order)
+        : metadata.fallbackSnapshot?.shippingAmount ?? ZERO;
+      const hasSalesTax = order.current_total_tax !== undefined || order.current_total_tax_set?.shop_money?.amount !== undefined || order.total_tax !== undefined || order.total_tax_set?.shop_money?.amount !== undefined;
+      const salesTaxCollected = hasSalesTax
+        ? getOrderSalesTax(order)
+        : metadata.fallbackSnapshot?.salesTaxCollected ?? ZERO;
+      const hasDiscount = order.current_total_discounts !== undefined || order.current_total_discounts_set?.shop_money?.amount !== undefined || order.total_discounts !== undefined || order.total_discounts_set?.shop_money?.amount !== undefined;
+      const discountAmount = hasDiscount
+        ? getOrderDiscount(order)
+        : metadata.fallbackSnapshot?.discountAmount ?? ZERO;
+      const derivedOrderTotal = snapshotSubtotal.add(shippingAmount).add(salesTaxCollected);
+      const suppliedOrderTotal = getOrderTotal(order);
+      const snapshotTotal = suppliedOrderTotal.equals(ZERO)
+        ? derivedOrderTotal.gt(ZERO)
+          ? derivedOrderTotal
+          : metadata.fallbackSnapshot?.totalAmount ?? ZERO
+        : suppliedOrderTotal;
       const snapshot = await tx.orderSnapshot.create({
         data: {
           shopId,
@@ -978,16 +1053,16 @@ export async function createSnapshot(
               }
             : {}),
           orderNumber: order.name ?? order.order_number?.toString() ?? null,
-          customerDisplayName: getCustomerDisplayName(order),
+          customerDisplayName,
           origin,
           periodId: metadata.periodId ?? null,
           importBatchId: metadata.importBatchId ?? null,
           importedAt: metadata.importedAt ?? null,
-          subtotalAmount: orderDiscountedSubtotal ?? orderSubtotal,
-          discountAmount: getOrderDiscount(order),
-          shippingAmount: getOrderShipping(order),
-          totalAmount: getOrderTotal(order),
-          salesTaxCollected: getOrderSalesTax(order),
+          subtotalAmount: snapshotSubtotal,
+          discountAmount,
+          shippingAmount,
+          totalAmount: snapshotTotal,
+          salesTaxCollected,
           shopifyCustomerId,
           normalizedCustomerEmailHash,
           createdAt: getOrderCreatedAt(order),
@@ -1019,6 +1094,7 @@ export async function createSnapshot(
             shopifyLineItemId: line.lineItemId,
             shopifyProductId: line.productGid,
             shopifyVariantId: line.variantGid ?? "unknown",
+            lineKind: line.lineKind,
             variantTitle: line.variantTitle,
             productTitle: line.productTitle,
             quantity: line.quantity,

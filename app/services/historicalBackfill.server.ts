@@ -10,6 +10,10 @@ type DbClient = typeof prisma;
 
 type ImportKind = "payouts" | "charges" | "orders";
 type CsvRow = Record<string, string>;
+type ImportLineKind = "product" | "tip" | "custom";
+
+const TIP_MAPPING_VALUE = "__TIP__";
+const CUSTOM_MAPPING_VALUE = "__CUSTOM__";
 
 type PayoutImportRow = {
   id?: string | number | null;
@@ -287,7 +291,7 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
 
   for (const row of rows) {
     const orderName = getCsvValue(row, "Name");
-    const explicitOrderId = getCsvValue(row, "Id");
+    const explicitOrderId = getCsvValue(row, "Id", "Order ID", "Order Id");
     const orderKey = explicitOrderId || (orderName ? orderKeyByName.get(orderName) : "") || orderName;
     if (!orderKey) continue;
     if (orderName) orderKeyByName.set(orderName, orderKey);
@@ -296,35 +300,6 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
     const order = existing ?? {
       admin_graphql_api_id: toOrderGid(explicitOrderId || orderKey),
       name: orderName,
-      created_at: getCsvValue(row, "Created at"),
-      updated_at: getCsvValue(row, "Updated at") || null,
-      cancelled_at: getCsvValue(row, "Cancelled at", "Canceled at") || null,
-      financial_status: getCsvValue(row, "Financial Status") || null,
-      fulfillment_status: getCsvValue(row, "Fulfillment Status") || null,
-      subtotal_price: getCsvValue(row, "Subtotal") || undefined,
-      current_subtotal_price: getCsvValue(row, "Subtotal") || undefined,
-      total_discounts: getCsvValue(row, "Discount Amount", "Discount") || undefined,
-      current_total_discounts: getCsvValue(row, "Discount Amount", "Discount") || undefined,
-      total_price: getCsvValue(row, "Total") || undefined,
-      current_total_price: getCsvValue(row, "Total") || undefined,
-      total_shipping_price_set: {
-        shop_money: {
-          amount: getCsvValue(row, "Shipping") || "0",
-        },
-      },
-      total_tax: getCsvValue(row, "Taxes") || "0",
-      current_total_tax: getCsvValue(row, "Taxes") || "0",
-      email: getCsvValue(row, "Email") || null,
-      billing_address: {
-        name: getCsvValue(row, "Billing Name") || null,
-        first_name: getCsvValue(row, "Billing First Name") || null,
-        last_name: getCsvValue(row, "Billing Last Name") || null,
-      },
-      shipping_address: {
-        name: getCsvValue(row, "Shipping Name") || null,
-        first_name: getCsvValue(row, "Shipping First Name") || null,
-        last_name: getCsvValue(row, "Shipping Last Name") || null,
-      },
       line_items: [],
     };
     if (!existing) {
@@ -332,7 +307,74 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
       lineIndexes.set(orderKey, 0);
     }
 
-    const lineName = getCsvValue(row, "Lineitem name");
+    const createdAt = getCsvValue(row, "Created at", "Created At");
+    const updatedAt = getCsvValue(row, "Updated at", "Updated At");
+    const cancelledAt = getCsvValue(row, "Cancelled at", "Canceled at", "Cancelled At", "Canceled At");
+    const financialStatus = getCsvValue(row, "Financial Status", "Payment Status", "Order Financial Status");
+    const fulfillmentStatus = getCsvValue(row, "Fulfillment Status", "Order Fulfillment Status");
+    const subtotal = getCsvValue(row, "Subtotal", "Subtotal Price", "Current Subtotal Price");
+    const discounts = getCsvValue(row, "Discount Amount", "Discount", "Discounts", "Total Discounts");
+    const total = getCsvValue(row, "Total", "Total Price", "Current Total Price");
+    const shipping = getCsvValue(row, "Shipping", "Shipping Price", "Total Shipping");
+    const taxes = getCsvValue(row, "Taxes", "Tax", "Total Tax");
+    const email = getCsvValue(row, "Email", "Contact Email", "Customer Email");
+    const customerId = getCsvValue(row, "Customer ID", "Customer Id");
+    const customerName = getCsvValue(row, "Customer", "Customer Name");
+    const billingName = getCsvValue(row, "Billing Name") || customerName;
+    const billingFirstName = getCsvValue(row, "Billing First Name", "Customer First Name");
+    const billingLastName = getCsvValue(row, "Billing Last Name", "Customer Last Name");
+    const shippingName = getCsvValue(row, "Shipping Name");
+    const shippingFirstName = getCsvValue(row, "Shipping First Name");
+    const shippingLastName = getCsvValue(row, "Shipping Last Name");
+
+    if (orderName) order.name = orderName;
+    if (createdAt) order.created_at = createdAt;
+    if (updatedAt) order.updated_at = updatedAt;
+    if (cancelledAt) order.cancelled_at = cancelledAt;
+    if (financialStatus) order.financial_status = financialStatus;
+    if (fulfillmentStatus) order.fulfillment_status = fulfillmentStatus;
+    if (subtotal) {
+      order.subtotal_price = subtotal;
+      order.current_subtotal_price = subtotal;
+    }
+    if (discounts) {
+      order.total_discounts = discounts;
+      order.current_total_discounts = discounts;
+    }
+    if (total) {
+      order.total_price = total;
+      order.current_total_price = total;
+    }
+    if (shipping) order.total_shipping_price_set = { shop_money: { amount: shipping } };
+    if (taxes) {
+      order.total_tax = taxes;
+      order.current_total_tax = taxes;
+    }
+    if (email) order.email = email;
+    if (customerId || email || billingFirstName || billingLastName) {
+      order.customer = {
+        id: customerId || order.customer?.id,
+        email: email || order.customer?.email,
+        first_name: billingFirstName || order.customer?.first_name,
+        last_name: billingLastName || order.customer?.last_name,
+      };
+    }
+    if (billingName || billingFirstName || billingLastName) {
+      order.billing_address = {
+        name: billingName || order.billing_address?.name,
+        first_name: billingFirstName || order.billing_address?.first_name,
+        last_name: billingLastName || order.billing_address?.last_name,
+      };
+    }
+    if (shippingName || shippingFirstName || shippingLastName) {
+      order.shipping_address = {
+        name: shippingName || order.shipping_address?.name,
+        first_name: shippingFirstName || order.shipping_address?.first_name,
+        last_name: shippingLastName || order.shipping_address?.last_name,
+      };
+    }
+
+    const lineName = getCsvValue(row, "Lineitem name", "Line item name");
     if (!lineName) continue;
 
     const lineIndex = (lineIndexes.get(orderKey) ?? 0) + 1;
@@ -343,11 +385,11 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
       id: `${orderKey}:${lineIndex}`,
       title: productTitle,
       variant_title: variantTitle,
-      sku: getCsvValue(row, "Lineitem sku") || null,
-      importMappingKey: lineMappingKey({ title: productTitle, variantTitle, sku: getCsvValue(row, "Lineitem sku") || null }),
-      quantity: getCsvValue(row, "Lineitem quantity") || "0",
-      price: getCsvValue(row, "Lineitem price") || "0",
-      total_discount: getCsvValue(row, "Lineitem discount") || "0",
+      sku: getCsvValue(row, "Lineitem sku", "Line item sku") || null,
+      importMappingKey: lineMappingKey({ title: productTitle, variantTitle, sku: getCsvValue(row, "Lineitem sku", "Line item sku") || null }),
+      quantity: getCsvValue(row, "Lineitem quantity", "Line item quantity") || "0",
+      price: getCsvValue(row, "Lineitem price", "Line item price") || "0",
+      total_discount: getCsvValue(row, "Lineitem discount", "Line item discount") || "0",
     });
   }
 
@@ -614,6 +656,12 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
   }
 
   for (const line of lineItems) {
+    if (line.importLineKind === "tip") continue;
+    if (line.importLineKind === "custom") {
+      warnings.push(`Custom line ${line.title ?? "Untitled"} will import with zero recorded production cost and no product-specific routing.`);
+      continue;
+    }
+
     const variantId = normalizeId(line.admin_graphql_api_id?.includes("ProductVariant") ? line.admin_graphql_api_id : line.variant_id);
     if (!variantId) {
       warnings.push(`Line ${line.title ?? "Untitled"} is missing variant id.`);
@@ -654,6 +702,7 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
 
 async function resolveCsvLineVariant(input: {
   shopId: string;
+  mappingKey?: string | null;
   title?: string | null;
   variantTitle?: string | null;
   sku?: string | null;
@@ -661,8 +710,18 @@ async function resolveCsvLineVariant(input: {
   db: DbClient;
 }): Promise<
   | { status: "matched"; variant: ResolvedImportVariant; reason: string }
+  | { status: "classified"; lineKind: Exclude<ImportLineKind, "product">; reason: string }
   | { status: "unresolved" | "ambiguous"; candidates: VariantMappingCandidate[] }
 > {
+  const mappingKey = input.mappingKey ?? lineMappingKey(input);
+  const overrideVariantId = input.mappingOverrides?.[mappingKey]?.trim();
+  if (overrideVariantId === TIP_MAPPING_VALUE) {
+    return { status: "classified", lineKind: "tip", reason: "merchant-selected tip handling" };
+  }
+  if (overrideVariantId === CUSTOM_MAPPING_VALUE) {
+    return { status: "classified", lineKind: "custom", reason: "merchant-selected custom merchandise handling" };
+  }
+
   const sku = input.sku?.trim();
   if (sku) {
     const skuMatch = await input.db.variant.findFirst({
@@ -672,8 +731,6 @@ async function resolveCsvLineVariant(input: {
     if (skuMatch) return { status: "matched", variant: skuMatch, reason: "SKU match" };
   }
 
-  const mappingKey = lineMappingKey(input);
-  const overrideVariantId = input.mappingOverrides?.[mappingKey]?.trim();
   if (overrideVariantId) {
     const override = await input.db.variant.findFirst({
       where: { shopId: input.shopId, shopifyId: overrideVariantId },
@@ -686,12 +743,16 @@ async function resolveCsvLineVariant(input: {
     ? await input.db.historicalLineItemMapping.findUnique({
         where: { shopId_mappingKey: { shopId: input.shopId, mappingKey } },
         select: {
+          lineKind: true,
           variant: {
             select: { id: true, shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
           },
         },
       })
     : null;
+  if (savedMapping?.lineKind === "tip" || savedMapping?.lineKind === "custom") {
+    return { status: "classified", lineKind: savedMapping.lineKind, reason: "saved import handling" };
+  }
   if (savedMapping?.variant) {
     return { status: "matched", variant: savedMapping.variant, reason: "saved import mapping" };
   }
@@ -777,13 +838,36 @@ async function enrichHistoricalOrderRows(
 ) {
   const warnings: string[] = [];
   const lineMappingRequests: LineMappingRequest[] = [];
+  const suppliedVariantGids = Array.from(new Set(
+    (order.line_items ?? [])
+      .map((lineItem) => normalizeId(
+        lineItem.admin_graphql_api_id?.includes("ProductVariant")
+          ? lineItem.admin_graphql_api_id
+          : lineItem.variant_id,
+      ))
+      .filter(Boolean)
+      .map((variantId) => variantId.startsWith("gid://") ? variantId : `gid://shopify/ProductVariant/${variantId}`),
+  ));
+  const syncedSuppliedVariants = suppliedVariantGids.length > 0
+    ? await db.variant.findMany({
+        where: { shopId, shopifyId: { in: suppliedVariantGids } },
+        select: { shopifyId: true },
+      })
+    : [];
+  const syncedVariantGids = new Set(syncedSuppliedVariants.map((variant) => variant.shopifyId));
 
   for (const lineItem of order.line_items ?? []) {
     const existingVariantId = normalizeId(lineItem.admin_graphql_api_id?.includes("ProductVariant") ? lineItem.admin_graphql_api_id : lineItem.variant_id);
-    if (existingVariantId) continue;
+    const existingVariantGid = existingVariantId
+      ? existingVariantId.startsWith("gid://")
+        ? existingVariantId
+        : `gid://shopify/ProductVariant/${existingVariantId}`
+      : null;
+    if (existingVariantGid && syncedVariantGids.has(existingVariantGid)) continue;
 
     const resolution = await resolveCsvLineVariant({
       shopId,
+      mappingKey: lineItem.importMappingKey,
       title: lineItem.title,
       variantTitle: lineItem.variant_title,
       sku: lineItem.sku,
@@ -791,8 +875,17 @@ async function enrichHistoricalOrderRows(
       db,
     });
 
+    if (resolution.status === "classified") {
+      lineItem.importLineKind = resolution.lineKind;
+      continue;
+    }
+
     if (resolution.status !== "matched") {
-      const key = lineItem.importMappingKey ?? lineMappingKey(lineItem);
+      const key = lineItem.importMappingKey ?? lineMappingKey({
+        title: lineItem.title,
+        variantTitle: lineItem.variant_title,
+        sku: lineItem.sku,
+      });
       lineMappingRequests.push({
         key,
         title: lineItem.title ?? "Untitled",
@@ -811,6 +904,7 @@ async function enrichHistoricalOrderRows(
 
     lineItem.variant_id = resolution.variant.shopifyId;
     lineItem.product_id = resolution.variant.product.shopifyId;
+    lineItem.importLineKind = "product";
   }
 
   return { warnings, lineMappingRequests };
@@ -828,15 +922,26 @@ export async function persistHistoricalLineItemMappings(input: {
 
   for (const order of input.orders) {
     for (const lineItem of order.line_items ?? []) {
-      const mappingKey = lineItem.importMappingKey ?? lineMappingKey(lineItem);
+      const mappingKey = lineItem.importMappingKey ?? lineMappingKey({
+        title: lineItem.title,
+        variantTitle: lineItem.variant_title,
+        sku: lineItem.sku,
+      });
       const overrideVariantId = input.mappingOverrides[mappingKey]?.trim();
       if (!overrideVariantId || persisted.has(mappingKey)) continue;
 
-      const variant = await db.variant.findFirst({
-        where: { shopId: input.shopId, shopifyId: overrideVariantId },
-        select: { id: true },
-      });
-      if (!variant) continue;
+      const lineKind: ImportLineKind = overrideVariantId === TIP_MAPPING_VALUE
+        ? "tip"
+        : overrideVariantId === CUSTOM_MAPPING_VALUE
+          ? "custom"
+          : "product";
+      const variant = lineKind === "product"
+        ? await db.variant.findFirst({
+            where: { shopId: input.shopId, shopifyId: overrideVariantId },
+            select: { id: true },
+          })
+        : null;
+      if (lineKind === "product" && !variant) continue;
 
       await db.historicalLineItemMapping.upsert({
         where: { shopId_mappingKey: { shopId: input.shopId, mappingKey } },
@@ -848,7 +953,8 @@ export async function persistHistoricalLineItemMappings(input: {
           variantTitle: lineItem.variant_title ?? null,
           normalizedVariantTitle: normalizeText(lineItem.variant_title),
           sku: lineItem.sku ?? null,
-          variantId: variant.id,
+          lineKind,
+          variantId: variant?.id ?? null,
           firstImportBatchId: input.importBatchId ?? null,
           lastImportBatchId: input.importBatchId ?? null,
           useCount: 1,
@@ -859,7 +965,8 @@ export async function persistHistoricalLineItemMappings(input: {
           variantTitle: lineItem.variant_title ?? null,
           normalizedVariantTitle: normalizeText(lineItem.variant_title),
           sku: lineItem.sku ?? null,
-          variantId: variant.id,
+          lineKind,
+          variantId: variant?.id ?? null,
           lastImportBatchId: input.importBatchId ?? null,
           useCount: { increment: 1 },
         },
@@ -1008,6 +1115,14 @@ export async function replaceOrderSnapshots(input: {
                   orderNumber: true,
                   origin: true,
                   periodId: true,
+                  customerDisplayName: true,
+                  shopifyCustomerId: true,
+                  normalizedCustomerEmailHash: true,
+                  subtotalAmount: true,
+                  discountAmount: true,
+                  shippingAmount: true,
+                  totalAmount: true,
+                  salesTaxCollected: true,
                   period: { select: { status: true } },
                   lines: { select: { totalCost: true, netContribution: true } },
                 },
@@ -1021,6 +1136,14 @@ export async function replaceOrderSnapshots(input: {
               orderNumber: true,
               origin: true,
               periodId: true,
+              customerDisplayName: true,
+              shopifyCustomerId: true,
+              normalizedCustomerEmailHash: true,
+              subtotalAmount: true,
+              discountAmount: true,
+              shippingAmount: true,
+              totalAmount: true,
+              salesTaxCollected: true,
               period: { select: { status: true } },
               lines: { select: { totalCost: true, netContribution: true } },
             },
@@ -1099,6 +1222,16 @@ export async function replaceOrderSnapshots(input: {
           replaceExistingSnapshotId: existing.id,
           replacementReason,
           replacementSource: input.sourceName ?? "uploaded_order_payload",
+          fallbackSnapshot: {
+            customerDisplayName: existing.customerDisplayName,
+            shopifyCustomerId: existing.shopifyCustomerId,
+            normalizedCustomerEmailHash: existing.normalizedCustomerEmailHash,
+            subtotalAmount: existing.subtotalAmount,
+            discountAmount: existing.discountAmount,
+            shippingAmount: existing.shippingAmount,
+            totalAmount: existing.totalAmount,
+            salesTaxCollected: existing.salesTaxCollected,
+          },
         },
       );
 
@@ -1224,6 +1357,25 @@ async function rebuildPaymentSafeReportingPeriod(input: {
   db: DbClient;
 }) {
   const { db, period } = input;
+  const reviewRequiredOrderCount = db.orderRecord?.count
+    ? await db.orderRecord.count({
+        where: {
+          shopId: input.shopId,
+          OR: [
+            { lifecycle: { is: null } },
+            { lifecycle: { is: { state: { in: ["unknown", "review_required"] } } } },
+          ],
+          currentSnapshot: {
+            is: { createdAt: { gte: period.startDate, lt: period.endDate } },
+          },
+        },
+      })
+    : 0;
+  if (reviewRequiredOrderCount > 0) {
+    throw new Error(
+      `Reporting rebuild blocked: ${reviewRequiredOrderCount} order(s) in this period require lifecycle review. Resolve them from Order History before rebuilding so valid donation obligations are not removed.`,
+    );
+  }
   const before = await summarizeRebuildPeriodState(input);
 
   await db.$transaction(async (tx) => {

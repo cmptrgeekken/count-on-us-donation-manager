@@ -171,6 +171,10 @@ Replacement dry run must report, in addition to snapshot cost changes:
 
 Reporting rebuild does not repair missing lifecycle evidence by itself. It consumes the best authoritative state already present and continues to exclude unknown/review-required orders. Lifecycle repair belongs to Shopify reconciliation, import correction, or an explicit merchant review workflow.
 
+The merchant review workflow is exposed from the Production Usage exclusion warning through a filtered Order History view. An order detail permits an audited confirmation of active, fully refunded, or canceled state after the merchant reviews Shopify. Order History also permits a shop-scoped bulk confirmation for selected unknown/review-required orders that share one of those states; the selection is bounded to the current page and each affected order receives audit evidence. Partially refunded state is not manually selectable because it requires stable line-level refund quantities; those orders must be repaired through Shopify reconciliation or snapshot replacement. A reporting rebuild must stop before changing derived obligations when any order in the period remains unknown/review-required, and its error must direct the merchant to this review workflow.
+
+Shopify order CSV imports normalize lifecycle headers and values, including payment/financial status, fulfillment status, and canceled timestamps. Order-level lifecycle evidence may appear on a continuation row and must be merged into the order payload before the shared snapshot lifecycle service runs.
+
 ### Required refactoring
 
 The current snapshot replacement path deletes the existing `OrderSnapshot` and its cascading children inside `createSnapshot()`, then writes the replacement audit record from the caller after that transaction completes. That structure cannot satisfy the lifecycle-preservation and atomicity requirements above. The implementation must be refactored around a stable order aggregate and immutable snapshot revisions.

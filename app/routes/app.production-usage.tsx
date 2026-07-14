@@ -135,8 +135,9 @@ export default function ProductionUsagePage() {
         {report.summary.reviewRequiredOrderCount > 0 ? (
           <s-banner tone="warning">
             <s-text>
-              {report.summary.reviewRequiredOrderCount} order(s) were excluded because lifecycle evidence requires review.
+              {report.summary.reviewRequiredOrderCount} order(s) were excluded because Count On Us cannot determine whether they are active, canceled, or refunded from the imported data. Review those orders and confirm their lifecycle status before relying on this report.
             </s-text>
+            <Link to="/app/order-history?review=required">Review excluded orders</Link>
           </s-banner>
         ) : null}
 

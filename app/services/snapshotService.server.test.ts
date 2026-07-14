@@ -168,6 +168,81 @@ describe("createSnapshot", () => {
     expect(resolveCosts).not.toHaveBeenCalled();
   });
 
+  it("keeps tips out of discounts, packaging, costs, and donation contribution", async () => {
+    const db = createDb({ variant: null });
+
+    await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/1",
+        subtotal_price: "23.00",
+        line_items: [
+          {
+            id: "custom-line",
+            title: "Custom engraving",
+            variant_title: "Default Title",
+            importLineKind: "custom",
+            quantity: 1,
+            price: "20.00",
+          },
+          {
+            id: "tip-line",
+            title: "Tip",
+            variant_title: "Default Title",
+            importLineKind: "tip",
+            quantity: 1,
+            price: "5.00",
+          },
+        ],
+      },
+      db,
+    );
+
+    expect(resolveCosts).not.toHaveBeenCalled();
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenNthCalledWith(1, {
+      data: expect.objectContaining({
+        lineKind: "custom",
+        subtotal: decimal("18"),
+        totalCost: decimal("0"),
+        packagingCost: decimal("0"),
+        netContribution: decimal("18"),
+      }),
+    });
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({
+        lineKind: "tip",
+        subtotal: decimal("5"),
+        totalCost: decimal("0"),
+        packagingCost: decimal("0"),
+        netContribution: decimal("0"),
+      }),
+    });
+  });
+
+  it("derives snapshot totals from positive line evidence when imported order totals are unreliable zeros", async () => {
+    const db = createDb({ variant: null });
+
+    await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/2",
+        subtotal_price: "0",
+        total_price: "0",
+        billing_address: { name: "Jane Merchant" },
+        line_items: [{ id: "line-1", title: "Custom", quantity: 1, price: "25.00", importLineKind: "custom" }],
+      },
+      db,
+    );
+
+    expect(db.__spies.orderSnapshotCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        customerDisplayName: "Jane Merchant",
+        subtotalAmount: decimal("25"),
+        totalAmount: decimal("25"),
+      }),
+    });
+  });
+
   it("reconciles lifecycle evidence when reconciliation finds an existing snapshot", async () => {
     const db = createDb();
     Object.assign(db, {

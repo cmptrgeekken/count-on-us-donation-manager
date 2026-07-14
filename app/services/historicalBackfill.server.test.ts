@@ -103,6 +103,48 @@ describe("historical backfill imports", () => {
     ]);
   });
 
+  it("retains Shopify totals, lifecycle evidence, and customer identity from continuation CSV rows", () => {
+    const rows = parseHistoricalImportRows(
+      [
+        "Name,Id,Created at,Financial Status,Subtotal,Discount Amount,Shipping,Taxes,Total,Customer,Customer ID,Email,Lineitem quantity,Lineitem name,Lineitem price",
+        "#1300,7001,2026-07-01 10:00:00 -0500,,,,,,,,,,1,Product A - Blue,25.00",
+        "#1300,,,Paid,25.00,2.00,4.00,1.50,30.50,Jane Merchant,9001,jane@example.com,1,Tip - Default Title,5.00",
+      ].join("\n"),
+      "orders",
+    );
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        financial_status: "Paid",
+        subtotal_price: "25.00",
+        total_discounts: "2.00",
+        total_price: "30.50",
+        total_tax: "1.50",
+        email: "jane@example.com",
+        customer: expect.objectContaining({ id: "9001", email: "jane@example.com" }),
+        billing_address: expect.objectContaining({ name: "Jane Merchant" }),
+      }),
+    ]);
+  });
+
+  it("reads Shopify lifecycle aliases from an order CSV", () => {
+    const rows = parseHistoricalImportRows(
+      [
+        "Name,Order ID,Payment Status,Order Fulfillment Status,Canceled At,Line item quantity,Line item name,Line item price",
+        "#1301,7002,Partially Refunded,Partially Fulfilled,,1,Product A - Blue,25.00",
+      ].join("\n"),
+      "orders",
+    );
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        admin_graphql_api_id: "gid://shopify/Order/7002",
+        financial_status: "Partially Refunded",
+        fulfillment_status: "Partially Fulfilled",
+      }),
+    ]);
+  });
+
   it("requires Shopify GraphQL order ids for imported order snapshots", async () => {
     const db = {
       orderSnapshot: {
@@ -224,7 +266,7 @@ describe("historical backfill imports", () => {
     ]);
   });
 
-  it("uses merchant-selected CSV line mappings before import", async () => {
+  it("uses merchant-selected line mappings when JSON does not provide an import mapping key", async () => {
     const variant = {
       id: "variant-1",
       shopifyId: "gid://shopify/ProductVariant/1",
@@ -258,7 +300,6 @@ describe("historical backfill imports", () => {
         line_items: [{
           title: "Old Sticker",
           variant_title: "Default Title",
-          importMappingKey: "old sticker|default title|",
           quantity: "1",
           price: "10.00",
         }],
@@ -326,6 +367,7 @@ describe("historical backfill imports", () => {
     expect(db.historicalLineItemMapping.findUnique).toHaveBeenCalledWith({
       where: { shopId_mappingKey: { shopId: "shop-1", mappingKey: "old sticker|default title|" } },
       select: {
+        lineKind: true,
         variant: {
           select: { id: true, shopifyId: true, title: true, product: { select: { shopifyId: true, title: true } } },
         },
@@ -366,15 +408,172 @@ describe("historical backfill imports", () => {
         shopId: "shop-1",
         mappingKey: "old sticker|default title|",
         variantId: "variant-1",
+        lineKind: "product",
         firstImportBatchId: "batch-1",
         lastImportBatchId: "batch-1",
       }),
       update: expect.objectContaining({
         variantId: "variant-1",
+        lineKind: "product",
         lastImportBatchId: "batch-1",
         useCount: { increment: 1 },
       }),
     });
+  });
+
+  it("accepts explicit tip and custom-line handling without product mappings", async () => {
+    const db = {
+      orderSnapshot: { findFirst: vi.fn().mockResolvedValue(null) },
+      reportingPeriod: { findFirst: vi.fn().mockResolvedValue({ id: "period-1" }) },
+    };
+
+    const summary = await importHistoricalOrders({
+      shopId: "shop-1",
+      rows: [{
+        admin_graphql_api_id: "gid://shopify/Order/1",
+        created_at: "2026-01-02T00:00:00.000Z",
+        financial_status: "paid",
+        line_items: [
+          { title: "Tip", variant_title: "Default Title", importMappingKey: "tip|default title|", quantity: "1", price: "5.00" },
+          { title: "Custom engraving", variant_title: "Default Title", importMappingKey: "custom engraving|default title|", quantity: "1", price: "20.00" },
+        ],
+      }],
+      dryRun: true,
+      mappingOverrides: {
+        "tip|default title|": "__TIP__",
+        "custom engraving|default title|": "__CUSTOM__",
+      },
+      db: db as any,
+    });
+
+    expect(summary.created).toBe(1);
+    expect(summary.lineMappingRequests).toBeUndefined();
+    expect(summary.errors).toEqual([]);
+    expect(summary.warnings).toEqual([
+      expect.objectContaining({
+        message: "Custom line Custom engraving will import with zero recorded production cost and no product-specific routing.",
+      }),
+    ]);
+  });
+
+  it("persists non-product handling choices without a variant relation", async () => {
+    const db = {
+      variant: { findFirst: vi.fn() },
+      historicalLineItemMapping: { upsert: vi.fn() },
+    };
+
+    const result = await persistHistoricalLineItemMappings({
+      shopId: "shop-1",
+      orders: [{
+        admin_graphql_api_id: "gid://shopify/Order/1",
+        line_items: [{
+          title: "Tip",
+          variant_title: "Default Title",
+          importMappingKey: "tip|default title|",
+        }],
+      }],
+      mappingOverrides: { "tip|default title|": "__TIP__" },
+      importBatchId: "batch-1",
+      db: db as any,
+    });
+
+    expect(result).toEqual({ persisted: 1 });
+    expect(db.variant.findFirst).not.toHaveBeenCalled();
+    expect(db.historicalLineItemMapping.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ lineKind: "tip", variantId: null }),
+      update: expect.objectContaining({ lineKind: "tip", variantId: null }),
+    }));
+  });
+
+  it("reuses saved tip handling on later imports", async () => {
+    const db = {
+      orderSnapshot: { findFirst: vi.fn().mockResolvedValue(null) },
+      historicalLineItemMapping: {
+        findUnique: vi.fn().mockResolvedValue({ lineKind: "tip", variant: null }),
+      },
+      reportingPeriod: { findFirst: vi.fn().mockResolvedValue({ id: "period-1" }) },
+    };
+
+    const summary = await importHistoricalOrders({
+      shopId: "shop-1",
+      rows: [{
+        admin_graphql_api_id: "gid://shopify/Order/2",
+        created_at: "2026-01-03T00:00:00.000Z",
+        financial_status: "paid",
+        line_items: [{
+          title: "Tip",
+          variant_title: "Default Title",
+          importMappingKey: "tip|default title|",
+          quantity: "1",
+          price: "5.00",
+        }],
+      }],
+      dryRun: true,
+      db: db as any,
+    });
+
+    expect(summary.created).toBe(1);
+    expect(summary.lineMappingRequests).toBeUndefined();
+    expect(summary.warnings).toEqual([]);
+  });
+
+  it("reconciles a stale replacement variant id through the saved historical mapping", async () => {
+    const mappedVariant = {
+      id: "variant-current",
+      shopifyId: "gid://shopify/ProductVariant/200",
+      title: "Default Title",
+      costConfig: { id: "cost-1" },
+      product: {
+        shopifyId: "gid://shopify/Product/200",
+        title: "Current Product",
+        causeAssignments: [{ id: "cause-assignment-1" }],
+        artistAssignments: [],
+      },
+    };
+    const db = {
+      orderRecord: {
+        findUnique: vi.fn().mockResolvedValue({
+          currentSnapshot: {
+            id: "snapshot-1",
+            orderNumber: "#1300",
+            origin: "historical_import",
+            periodId: "period-1",
+            period: { status: "OPEN" },
+            lines: [{ totalCost: decimal(2), netContribution: decimal(8) }],
+          },
+        }),
+      },
+      variant: {
+        findMany: vi.fn().mockResolvedValue([]),
+        findUnique: vi.fn().mockResolvedValue(mappedVariant),
+      },
+      historicalLineItemMapping: {
+        findUnique: vi.fn().mockResolvedValue({ lineKind: "product", variant: mappedVariant }),
+      },
+    };
+
+    const summary = await replaceOrderSnapshots({
+      shopId: "shop-1",
+      rows: [{
+        admin_graphql_api_id: "gid://shopify/Order/1300",
+        financial_status: "paid",
+        line_items: [{
+          variant_id: "100",
+          title: "Old Product",
+          variant_title: "Default Title",
+          importMappingKey: "old product|default title|",
+          quantity: 1,
+          price: "10.00",
+        }],
+      }],
+      dryRun: true,
+      replacementReason: "Repair stale variant mapping",
+      db: db as any,
+    });
+
+    expect(summary.updated).toBe(1);
+    expect(summary.errors).toEqual([]);
+    expect(summary.lineMappingRequests).toBeUndefined();
   });
 
   it("blocks snapshot replacement for closed periods unless force replacement is enabled", async () => {
@@ -399,7 +598,10 @@ describe("historical backfill imports", () => {
     };
     const db = {
       orderSnapshot: { findFirst: vi.fn().mockResolvedValue(existingSnapshot) },
-      variant: { findUnique: vi.fn().mockResolvedValue(variant) },
+      variant: {
+        findMany: vi.fn().mockResolvedValue([{ shopifyId: "gid://shopify/ProductVariant/1" }]),
+        findUnique: vi.fn().mockResolvedValue(variant),
+      },
     };
     const rows = [{
       admin_graphql_api_id: "gid://shopify/Order/1001",
@@ -500,6 +702,9 @@ describe("historical backfill rebuild", () => {
     };
 
     const db = {
+      orderRecord: {
+        count: vi.fn().mockResolvedValue(0),
+      },
       reportingPeriod: {
         findFirst: vi.fn().mockResolvedValue(periods[0]),
         findMany: vi.fn().mockResolvedValue(periods),
@@ -674,6 +879,23 @@ describe("historical backfill rebuild", () => {
       },
       data: { periodId: null },
     });
+  });
+
+  it("blocks rebuild before derived obligations can be removed when lifecycle review is pending", async () => {
+    const { db, tx } = createRebuildDb();
+    db.orderRecord.count.mockResolvedValue(2);
+
+    await expect(rebuildReportingPeriod({
+      shopId: "shop-1",
+      periodId: "period-1",
+      db: db as any,
+    })).rejects.toThrow(
+      "Reporting rebuild blocked: 2 order(s) in this period require lifecycle review.",
+    );
+
+    expect(tx.orderSnapshot.updateMany).not.toHaveBeenCalled();
+    expect(db.causeAllocation.updateMany).not.toHaveBeenCalled();
+    expect(db.artistAllocation.updateMany).not.toHaveBeenCalled();
   });
 
   it("rebuilds all periods without requiring payment applications to be dropped first", async () => {

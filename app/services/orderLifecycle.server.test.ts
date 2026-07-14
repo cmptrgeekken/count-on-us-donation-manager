@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Prisma } from "@prisma/client";
 import {
+  bulkReviewOrderLifecycles,
   deriveLifecycleState,
   mergeOrderLifecycle,
   reconcileLifecycleAdjustmentsForSnapshot,
@@ -14,6 +15,53 @@ describe("order lifecycle eligibility", () => {
     expect(deriveLifecycleState({ financial_status: "refunded" })).toBe("fully_refunded");
     expect(deriveLifecycleState({ financial_status: "paid", cancelled_at: "2026-07-14T00:00:00Z" })).toBe("canceled");
     expect(deriveLifecycleState({})).toBe("unknown");
+    expect(deriveLifecycleState({ financial_status: "Partially Refunded" })).toBe("partially_refunded");
+  });
+
+  it("bulk-confirms selected unresolved lifecycles in one shop-scoped transaction", async () => {
+    const tx = {
+      orderLifecycle: {
+        createMany: vi.fn().mockResolvedValue({ count: 2 }),
+        updateMany: vi.fn().mockResolvedValue({ count: 2 }),
+      },
+      auditLog: { createMany: vi.fn().mockResolvedValue({ count: 2 }) },
+    };
+    const db = {
+      orderSnapshot: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: "snapshot-1", orderRecordId: "order-1" },
+          { id: "snapshot-2", orderRecordId: "order-2" },
+        ]),
+      },
+      $transaction: vi.fn(async (callback: (client: typeof tx) => Promise<void>) => callback(tx)),
+    };
+
+    const result = await bulkReviewOrderLifecycles({
+      shopId: "shop-1",
+      snapshotIds: ["snapshot-1", "snapshot-2", "snapshot-2", "foreign-snapshot"],
+      state: "active",
+      db: db as never,
+    });
+
+    expect(result).toEqual({ reviewed: 2, skipped: 1 });
+    expect(db.orderSnapshot.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        shopId: "shop-1",
+        id: { in: ["snapshot-1", "snapshot-2", "foreign-snapshot"] },
+        currentForOrderRecord: { isNot: null },
+      }),
+    }));
+    expect(tx.orderLifecycle.createMany).toHaveBeenCalledOnce();
+    expect(tx.orderLifecycle.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { shopId: "shop-1", orderRecordId: { in: ["order-1", "order-2"] } },
+      data: expect.objectContaining({ state: "active", financialStatus: "paid", source: "merchant_review" }),
+    }));
+    expect(tx.auditLog.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([
+        expect.objectContaining({ shopId: "shop-1", entityId: "order-1", action: "LIFECYCLE_MERCHANT_CONFIRMED" }),
+        expect.objectContaining({ shopId: "shop-1", entityId: "order-2", action: "LIFECYCLE_MERCHANT_CONFIRMED" }),
+      ]),
+    });
   });
 
   it("keeps only unrefunded merchandise quantity", () => {
