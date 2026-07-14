@@ -174,11 +174,32 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       where: { shopId: { not: "" } },
       select: { shopId: true },
     });
+    const oldestUnknownSnapshots = shops.length > 0
+      ? await prisma.orderSnapshot.findMany({
+          where: {
+            shopId: { in: shops.map((shop) => shop.shopId) },
+            currentForOrderRecord: {
+              lifecycle: { is: { state: { in: ["unknown", "review_required"] } } },
+            },
+          },
+          distinct: ["shopId"],
+          orderBy: [{ shopId: "asc" }, { createdAt: "asc" }],
+          select: { shopId: true, createdAt: true },
+        })
+      : [];
+    const reconciliationSinceByShop = new Map(
+      oldestUnknownSnapshots.map((snapshot) => [snapshot.shopId, snapshot.createdAt.toISOString()]),
+    );
 
     for (const shop of shops) {
       await boss.send(
         "reconciliation.shop",
-        { shopId: shop.shopId },
+        {
+          shopId: shop.shopId,
+          ...(reconciliationSinceByShop.get(shop.shopId)
+            ? { since: reconciliationSinceByShop.get(shop.shopId) }
+            : {}),
+        },
         {
           singletonKey: shop.shopId,
           singletonSeconds: 6 * 60 * 60,

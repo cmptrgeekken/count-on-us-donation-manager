@@ -60,6 +60,7 @@ function createDb({
       auditLogCreate,
       auditLogFindFirst,
       executeRaw,
+      tx,
     },
   };
 }
@@ -182,6 +183,50 @@ describe("processRefund", () => {
 
     expect(result).toEqual({ created: 0, skipped: 0 });
     expect(db.__spies.adjustmentCreate).not.toHaveBeenCalled();
+  });
+
+  it("preserves refund evidence that arrives before the first snapshot", async () => {
+    const db = createDb({});
+    const refundEventCreate = vi.fn().mockResolvedValue({ id: "refund-event-1" });
+    const lifecycleUpsert = vi.fn().mockResolvedValue({ id: "lifecycle-1" });
+    Object.assign(db.__spies.tx, {
+      orderRecord: {
+        upsert: vi.fn().mockResolvedValue({ id: "order-record-1", currentSnapshotId: null }),
+        findUnique: vi.fn().mockResolvedValue({ id: "order-record-1", currentSnapshot: null }),
+      },
+      orderRefundEvent: { create: refundEventCreate },
+      orderLifecycle: { upsert: lifecycleUpsert },
+    });
+
+    const result = await processRefund(
+      "shop-1",
+      {
+        id: 80,
+        order_id: 99,
+        refund_line_items: [{ line_item_id: 11, quantity: 1, subtotal: "5.00" }],
+      },
+      db as never,
+    );
+
+    expect(result).toEqual({ created: 0, skipped: 0 });
+    expect(refundEventCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        orderRecordId: "order-record-1",
+        shopifyRefundId: "80",
+        lines: {
+          create: [expect.objectContaining({
+            shopifyLineItemId: "gid://shopify/LineItem/11",
+            quantity: decimal("1"),
+          })],
+        },
+      }),
+    });
+    expect(db.__spies.auditLogCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: "REFUND_PROCESSED",
+        payload: expect.objectContaining({ deferredUntilSnapshot: true }),
+      }),
+    });
   });
 });
 
@@ -436,6 +481,40 @@ describe("processOrderUpdate", () => {
 
     expect(result).toEqual({ created: 0, skipped: 0 });
     expect(db.__spies.adjustmentCreate).not.toHaveBeenCalled();
+  });
+
+  it("records cancellation lifecycle evidence before a snapshot exists", async () => {
+    const db = createDb({});
+    const lifecycleUpsert = vi.fn().mockResolvedValue({ state: "canceled" });
+    Object.assign(db.__spies.tx, {
+      orderRecord: {
+        upsert: vi.fn().mockResolvedValue({ id: "order-record-1", currentSnapshotId: null }),
+        findUnique: vi.fn().mockResolvedValue({ id: "order-record-1", currentSnapshot: null }),
+      },
+      orderLifecycle: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        upsert: lifecycleUpsert,
+      },
+    });
+
+    const result = await processOrderUpdate(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/123",
+        financial_status: "voided",
+        cancelled_at: "2026-07-14T12:00:00.000Z",
+        updated_at: "2026-07-14T12:00:01.000Z",
+        line_items: [],
+      },
+      db as never,
+    );
+
+    expect(result).toEqual({ created: 0, skipped: 1 });
+    expect(lifecycleUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ state: "canceled" }),
+      }),
+    );
   });
 });
 

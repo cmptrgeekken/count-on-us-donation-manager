@@ -4,6 +4,7 @@ import { registerAllProcessors } from "./processors.server";
 const mocks = vi.hoisted(() => ({
   prisma: {
     shop: { findMany: vi.fn() },
+    orderSnapshot: { findMany: vi.fn() },
     auditLog: { create: vi.fn() },
   },
   runReconciliation: vi.fn(),
@@ -105,6 +106,7 @@ function createBoss() {
 describe("registerAllProcessors", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.prisma.orderSnapshot.findMany.mockResolvedValue([]);
   });
 
   it("fans daily reconciliation out into singleton per-shop jobs", async () => {
@@ -135,6 +137,24 @@ describe("registerAllProcessors", () => {
         singletonKey: "shop-2",
         singletonSeconds: 6 * 60 * 60,
       }),
+    );
+  });
+
+  it("widens daily reconciliation to the oldest unresolved lifecycle snapshot", async () => {
+    const boss = createBoss();
+    mocks.prisma.shop.findMany.mockResolvedValue([{ shopId: "shop-1" }]);
+    mocks.prisma.orderSnapshot.findMany.mockResolvedValue([{
+      shopId: "shop-1",
+      createdAt: new Date("2025-01-02T00:00:00.000Z"),
+    }]);
+
+    await registerAllProcessors(boss as any);
+    await boss.workers.get("reconciliation.daily")!([]);
+
+    expect(boss.send).toHaveBeenCalledWith(
+      "reconciliation.shop",
+      { shopId: "shop-1", since: "2025-01-02T00:00:00.000Z" },
+      expect.any(Object),
     );
   });
 

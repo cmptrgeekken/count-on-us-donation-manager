@@ -13,7 +13,7 @@ const closedSnapshotLineItemId = "gid://shopify/LineItem/900000000202";
 const closedSnapshotVariantId = "gid://shopify/ProductVariant/900000000202";
 const chargeTransactionId = "gid://shopify/BalanceTransaction/900000000201";
 
-export const loader = async ({ request }: LoaderFunctionArgs) => {
+export const loader = async ({ request }: LoaderFunctionArgs): Promise<Response> => {
   const url = new URL(request.url);
   const baseUrl = `${url.protocol}//${url.host}`;
 
@@ -38,6 +38,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   await prisma.lineCauseAllocation.deleteMany({ where: { shopId } });
   await prisma.orderSnapshotLine.deleteMany({ where: { shopId } });
   await prisma.orderSnapshot.deleteMany({ where: { shopId } });
+  await prisma.orderRecord.deleteMany({ where: { shopId } });
   await prisma.causeAllocation.deleteMany({ where: { shopId } });
   await prisma.artistPaymentApplication.deleteMany({ where: { shopId } });
   await prisma.artistPayment.deleteMany({ where: { shopId } });
@@ -91,6 +92,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     data: {
       shopId,
       shopifyOrderId: snapshotOrderId,
+      orderRecord: { create: { shopId, shopifyOrderId: snapshotOrderId } },
       orderNumber: "1001",
       origin: "webhook",
       createdAt: new Date("2026-03-05T12:00:00.000Z"),
@@ -115,6 +117,64 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       mistakeBufferAmount: new Prisma.Decimal("0.00"),
       totalCost: new Prisma.Decimal("20.00"),
       netContribution: new Prisma.Decimal("100.00"),
+    },
+  });
+
+  await prisma.orderSnapshotMaterialLine.create({
+    data: {
+      snapshotLineId: snapshotLine.id,
+      materialId: null,
+      materialName: "Fixture Paper",
+      materialType: "production",
+      costingModel: "counted",
+      purchasePrice: new Prisma.Decimal("20.00"),
+      purchaseQty: new Prisma.Decimal("10.00"),
+      perUnitCost: new Prisma.Decimal("2.00"),
+      quantity: new Prisma.Decimal("5.00"),
+      lineCost: new Prisma.Decimal("10.00"),
+    },
+  });
+
+  await prisma.orderSnapshotEquipmentLine.create({
+    data: {
+      snapshotLineId: snapshotLine.id,
+      equipmentId: null,
+      equipmentName: "Fixture Press",
+      usageMode: "direct",
+      minutes: new Prisma.Decimal("60.00"),
+      uses: new Prisma.Decimal("1.00"),
+      consumablesCost: new Prisma.Decimal("0.50"),
+      electricityCost: new Prisma.Decimal("0.25"),
+      depreciationCost: new Prisma.Decimal("0.50"),
+      maintenanceCost: new Prisma.Decimal("0.25"),
+      manualOverrideCost: new Prisma.Decimal("0.50"),
+      lineCost: new Prisma.Decimal("2.00"),
+      consumableLines: {
+        create: {
+          consumableName: "Fixture Blade",
+          lifespanUnit: "uses",
+          lineCost: new Prisma.Decimal("0.50"),
+        },
+      },
+    },
+  });
+
+  await prisma.orderPackageAllocation.create({
+    data: {
+      shopId,
+      snapshotId: snapshot.id,
+      packageName: "Fixture Mailer",
+      quantity: 1,
+      materialCost: new Prisma.Decimal("3.00"),
+      allocationSignature: "production-usage-fixture-mailer",
+    },
+  });
+
+  await prisma.orderRecord.update({
+    where: { shopId_shopifyOrderId: { shopId, shopifyOrderId: snapshotOrderId } },
+    data: {
+      currentSnapshotId: snapshot.id,
+      lifecycle: { create: { shopId, state: "active", source: "webhook" } },
     },
   });
 
@@ -206,6 +266,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     data: {
       shopId,
       shopifyOrderId: closedSnapshotOrderId,
+      orderRecord: { create: { shopId, shopifyOrderId: closedSnapshotOrderId } },
       orderNumber: "1000",
       origin: "webhook",
       createdAt: new Date("2026-02-05T12:00:00.000Z"),
@@ -230,6 +291,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       mistakeBufferAmount: new Prisma.Decimal("0.00"),
       totalCost: new Prisma.Decimal("10.00"),
       netContribution: new Prisma.Decimal("40.00"),
+    },
+  });
+
+  await prisma.orderRecord.update({
+    where: { shopId_shopifyOrderId: { shopId, shopifyOrderId: closedSnapshotOrderId } },
+    data: {
+      currentSnapshotId: closedSnapshot.id,
+      lifecycle: { create: { shopId, state: "active", source: "webhook" } },
     },
   });
 
@@ -268,5 +337,6 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     closedPeriodId: closedPeriod.id,
     reportingUrl: `${baseUrl}/app/reporting?__playwrightShop=${encodeURIComponent(shopId)}&periodId=${encodeURIComponent(period.id)}`,
     closedReportingUrl: `${baseUrl}/app/reporting?__playwrightShop=${encodeURIComponent(shopId)}&periodId=${encodeURIComponent(closedPeriod.id)}`,
+    productionUsageUrl: `${baseUrl}/app/production-usage?__playwrightShop=${encodeURIComponent(shopId)}&range=all`,
   });
 };

@@ -19,6 +19,8 @@ describe("buildConfirmedOrderDonationSummary", () => {
         findFirst: vi.fn().mockResolvedValue({
           lines: [
             {
+              netContribution: decimal("20.00"),
+              adjustments: [],
               causeAllocations: [
                 {
                   causeId: "cause-1",
@@ -35,6 +37,8 @@ describe("buildConfirmedOrderDonationSummary", () => {
               ],
             },
             {
+              netContribution: decimal("10.00"),
+              adjustments: [],
               causeAllocations: [
                 {
                   causeId: "cause-1",
@@ -77,6 +81,35 @@ describe("buildConfirmedOrderDonationSummary", () => {
         },
       ],
     });
+  });
+
+  it("scales confirmed cause amounts after a partial refund adjustment", async () => {
+    const db = {
+      shop: { findUnique: vi.fn().mockResolvedValue({ currency: "USD" }) },
+      orderSnapshot: {
+        findFirst: vi.fn().mockResolvedValue({
+          lines: [{
+            netContribution: decimal("20.00"),
+            adjustments: [{ netContribAdj: decimal("-10.00") }],
+            causeAllocations: [{
+              causeId: "cause-1",
+              causeName: "Neighborhood Arts",
+              amount: decimal("8.00"),
+              cause: { iconUrl: null, donationLink: null },
+            }],
+          }],
+        }),
+      },
+    };
+
+    const result = await buildConfirmedOrderDonationSummary(
+      "gid://shopify/Order/1",
+      "fixture.myshopify.com",
+      db as never,
+    );
+
+    expect(result?.totalDonated).toBe("4.00");
+    expect(result?.causes[0]?.amount).toBe("4.00");
   });
 });
 

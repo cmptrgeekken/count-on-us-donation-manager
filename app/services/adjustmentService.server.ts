@@ -1,7 +1,12 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.server";
 import { recomputeTaxOffsetCache } from "./taxOffsetCache.server";
+import {
+  ensureOrderRecord,
+  mergeOrderLifecycle,
+  reconcileLifecycleAdjustmentsForSnapshot,
+} from "./orderLifecycle.server";
 
 type SnapshotLineWithAdjustments = {
   id: string;
@@ -25,6 +30,7 @@ type SnapshotLineWithAdjustments = {
 type RefundLineItemPayload = {
   line_item_id?: string | number | null;
   quantity?: string | number | null;
+  subtotal?: string | number | null;
   line_item?: {
     admin_graphql_api_id?: string | null;
     id?: string | number | null;
@@ -36,6 +42,7 @@ type ShopifyRefundPayload = {
   id?: string | number | null;
   order_id?: string | number | null;
   note?: string | null;
+  created_at?: string | null;
   refund_line_items?: RefundLineItemPayload[];
 };
 
@@ -64,6 +71,11 @@ type OrderLineItemPayload = {
 type ShopifyOrderPayload = {
   admin_graphql_api_id?: string | null;
   subtotal_price?: string | number | null;
+  financial_status?: string | null;
+  fulfillment_status?: string | null;
+  cancelled_at?: string | null;
+  canceled_at?: string | null;
+  updated_at?: string | null;
   line_items?: OrderLineItemPayload[];
 };
 
@@ -200,18 +212,44 @@ export async function createManualAdjustment(
       where: {
         id: input.snapshotLineId,
         shopId,
+        snapshot: { currentForOrderRecord: { isNot: null } },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        shopifyLineItemId: true,
+        snapshot: { select: { orderRecordId: true } },
+      },
     });
 
     if (!snapshotLine) {
       throw new Error("Snapshot line not found.");
     }
 
+    const event = tx.orderAdjustmentEvent?.create
+      ? await tx.orderAdjustmentEvent.create({
+          data: {
+            shopId,
+            orderRecordId: snapshotLine.snapshot.orderRecordId,
+            shopifyLineItemId: snapshotLine.shopifyLineItemId,
+            sourceType: "manual",
+            sourceKey: `manual:${randomUUID()}`,
+            replacementPolicy: "reapply",
+            actor: "merchant",
+            reason: input.reason?.trim() || "Manual adjustment",
+            laborAdj,
+            materialAdj,
+            packagingAdj,
+            equipmentAdj,
+            netContribAdj,
+          },
+          select: { id: true },
+        })
+      : null;
     const created = await tx.adjustment.create({
       data: {
         shopId,
         snapshotLineId: input.snapshotLineId,
+        adjustmentEventId: event?.id ?? null,
         type: "manual",
         reason: input.reason?.trim() || "Manual adjustment",
         actor: "merchant",
@@ -262,6 +300,33 @@ export function buildOrderUpdateSignature(order: ShopifyOrderPayload) {
 }
 
 async function findSnapshotWithLines(db: any, shopId: string, shopifyOrderId: string) {
+  if (db.orderRecord?.findUnique) {
+    const record = await db.orderRecord.findUnique({
+      where: { shopId_shopifyOrderId: { shopId, shopifyOrderId } },
+      include: {
+        currentSnapshot: {
+          include: {
+            lines: {
+              include: {
+                adjustments: {
+                  select: {
+                    laborAdj: true,
+                    materialAdj: true,
+                    packagingAdj: true,
+                    equipmentAdj: true,
+                    netContribAdj: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    return record?.currentSnapshot
+      ? { ...record.currentSnapshot, orderRecordId: record.id }
+      : null;
+  }
   return db.orderSnapshot.findFirst({
     where: { shopId, shopifyOrderId },
     include: {
@@ -336,19 +401,70 @@ export async function processRefund(
       return { created: 0, skipped: 0 };
     }
 
+    const logicalOrder = tx.orderRecord?.upsert
+      ? await ensureOrderRecord(shopId, shopifyOrderId, tx)
+      : null;
+
     const snapshot = await findSnapshotWithLines(tx, shopId, shopifyOrderId);
     if (!snapshot) {
+      if (logicalOrder && tx.orderRefundEvent?.create) {
+        const sourceLines = (refundPayload.refund_line_items ?? []).flatMap((refundLine) => {
+          const rawLineId = normaliseStringId(
+            refundLine.line_item?.admin_graphql_api_id ??
+              refundLine.line_item?.id ??
+              refundLine.line_item_id,
+          );
+          const quantity = Math.max(0, Number(refundLine.quantity ?? 0));
+          if (!rawLineId || quantity <= 0) return [];
+          return [{
+            shopId,
+            shopifyLineItemId: /^gid:\/\//.test(rawLineId)
+              ? rawLineId
+              : `gid://shopify/LineItem/${rawLineId}`,
+            quantity: new Prisma.Decimal(quantity),
+            refundedSubtotalAmount:
+              refundLine.subtotal === null || refundLine.subtotal === undefined
+                ? null
+                : toDecimal(refundLine.subtotal),
+          }];
+        });
+        await tx.orderRefundEvent.create({
+          data: {
+            shopId,
+            orderRecordId: logicalOrder.id,
+            shopifyRefundId: refundId,
+            refundedAt: refundPayload.created_at ? new Date(refundPayload.created_at) : null,
+            source: "webhook",
+            lines: { create: sourceLines },
+          },
+        });
+        await tx.orderLifecycle.upsert({
+          where: { orderRecordId: logicalOrder.id, shopId },
+          create: {
+            shopId,
+            orderRecordId: logicalOrder.id,
+            state: "partially_refunded",
+            source: "webhook",
+            reviewReason: "Refund received before the first snapshot; final state will be reconciled on activation.",
+          },
+          update: {
+            state: "partially_refunded",
+            source: "webhook",
+            reviewReason: "Refund received before the first snapshot; final state will be reconciled on activation.",
+          },
+        });
+      }
       await tx.auditLog.create({
         data: {
           shopId,
           entity: "Adjustment",
           entityId: refundId,
-          action: "REFUND_SKIPPED_NO_SNAPSHOT",
+          action: logicalOrder ? "REFUND_PROCESSED" : "REFUND_SKIPPED_NO_SNAPSHOT",
           actor: "webhook",
-          payload: { shopifyOrderId },
+          payload: { shopifyOrderId, deferredUntilSnapshot: Boolean(logicalOrder) },
         },
       });
-      return { created: 0, skipped: 1 };
+      return { created: 0, skipped: logicalOrder ? 0 : 1 };
     }
 
     const lineMap = new Map<string, SnapshotLineWithAdjustments>();
@@ -359,7 +475,12 @@ export async function processRefund(
     }
 
     const refundLines = refundPayload.refund_line_items ?? [];
-    const adjustmentsToCreate: Array<{ snapshotLineId: string } & AdjustmentBreakdown> = [];
+    const adjustmentsToCreate: Array<{
+      snapshotLineId: string;
+      shopifyLineItemId: string;
+      refundedQuantity: number;
+      refundedSubtotalAmount: Prisma.Decimal | null;
+    } & AdjustmentBreakdown> = [];
     let skipped = 0;
 
     for (const refundLine of refundLines) {
@@ -396,11 +517,90 @@ export async function processRefund(
 
       adjustmentsToCreate.push({
         snapshotLineId: snapshotLine.id,
+        shopifyLineItemId: snapshotLine.shopifyLineItemId,
+        refundedQuantity,
+        refundedSubtotalAmount:
+          refundLine.subtotal === null || refundLine.subtotal === undefined
+            ? null
+            : toDecimal(refundLine.subtotal),
         ...adjustment,
       });
     }
 
+    let refundEventId: string | null = null;
+    if (tx.orderRefundEvent?.create && snapshot.orderRecordId) {
+      const refundEvent = await tx.orderRefundEvent.create({
+        data: {
+          shopId,
+          orderRecordId: snapshot.orderRecordId,
+          shopifyRefundId: refundId,
+          refundedAt: refundPayload.created_at ? new Date(refundPayload.created_at) : null,
+          source: "webhook",
+          lines: {
+            create: adjustmentsToCreate.map((adjustment) => ({
+              shopId,
+              shopifyLineItemId: adjustment.shopifyLineItemId,
+              quantity: new Prisma.Decimal(adjustment.refundedQuantity),
+              refundedSubtotalAmount: adjustment.refundedSubtotalAmount,
+            })),
+          },
+        },
+        select: { id: true },
+      });
+      refundEventId = refundEvent.id;
+
+      const refundedByLine = await tx.orderRefundLine.groupBy({
+        by: ["shopifyLineItemId"],
+        where: { shopId, refundEvent: { orderRecordId: snapshot.orderRecordId } },
+        _sum: { quantity: true },
+      });
+      const refundedMap = new Map<string, Prisma.Decimal>(
+        refundedByLine.map((line: { shopifyLineItemId: string; _sum: { quantity: Prisma.Decimal | null } }) => [
+          line.shopifyLineItemId,
+          line._sum.quantity ?? ZERO,
+        ]),
+      );
+      const fullyRefunded = (snapshot.lines as SnapshotLineWithAdjustments[]).every((line) =>
+        (refundedMap.get(line.shopifyLineItemId) ?? ZERO).gte(line.quantity),
+      );
+      const existingLifecycle = await tx.orderLifecycle.findUnique({
+        where: { orderRecordId: snapshot.orderRecordId, shopId },
+        select: { state: true },
+      });
+      if (existingLifecycle?.state !== "canceled") {
+        await tx.orderLifecycle.upsert({
+          where: { orderRecordId: snapshot.orderRecordId, shopId },
+          create: {
+            shopId,
+            orderRecordId: snapshot.orderRecordId,
+            state: fullyRefunded ? "fully_refunded" : "partially_refunded",
+            source: "webhook",
+          },
+          update: {
+            state: fullyRefunded ? "fully_refunded" : "partially_refunded",
+            source: "webhook",
+            reviewReason: null,
+          },
+        });
+      }
+    }
+
     if (adjustmentsToCreate.length === 0) {
+      if (
+        snapshot.orderRecordId &&
+        tx.orderAdjustmentEvent?.upsert &&
+        tx.orderLifecycle?.findUnique &&
+        tx.orderRefundLine?.groupBy
+      ) {
+        await reconcileLifecycleAdjustmentsForSnapshot({
+          shopId,
+          orderRecordId: snapshot.orderRecordId,
+          snapshotId: snapshot.id,
+          db: tx,
+        });
+        await recomputeTaxOffsetCache(shopId, tx);
+      }
+
       await tx.auditLog.create({
         data: {
           shopId,
@@ -419,10 +619,33 @@ export async function processRefund(
     }
 
     for (const adjustment of adjustmentsToCreate) {
+      const adjustmentEvent = snapshot.orderRecordId && tx.orderAdjustmentEvent?.upsert
+        ? await tx.orderAdjustmentEvent.upsert({
+            where: {
+              shopId_sourceKey: {
+                shopId,
+                sourceKey: `refund:${refundId}:${adjustment.shopifyLineItemId}`,
+              },
+            },
+            create: {
+              shopId,
+              orderRecordId: snapshot.orderRecordId,
+              shopifyLineItemId: adjustment.shopifyLineItemId,
+              sourceType: "refund",
+              sourceKey: `refund:${refundId}:${adjustment.shopifyLineItemId}`,
+              replacementPolicy: "regenerate",
+              actor: "webhook",
+              reason: "Refund lifecycle evidence",
+            },
+            update: {},
+            select: { id: true },
+          })
+        : null;
       await tx.adjustment.create({
         data: {
           shopId,
           snapshotLineId: adjustment.snapshotLineId,
+          adjustmentEventId: adjustmentEvent?.id ?? null,
           type: "refund",
           reason: refundPayload.note?.slice(0, 500) ?? "refunds/create webhook",
           actor: "webhook",
@@ -432,6 +655,20 @@ export async function processRefund(
           equipmentAdj: adjustment.equipmentAdj,
           netContribAdj: adjustment.netContribAdj,
         },
+      });
+    }
+
+    if (
+      snapshot.orderRecordId &&
+      tx.orderAdjustmentEvent?.upsert &&
+      tx.orderLifecycle?.findUnique &&
+      tx.orderRefundLine?.groupBy
+    ) {
+      await reconcileLifecycleAdjustmentsForSnapshot({
+        shopId,
+        orderRecordId: snapshot.orderRecordId,
+        snapshotId: snapshot.id,
+        db: tx,
       });
     }
 
@@ -446,6 +683,7 @@ export async function processRefund(
         actor: "webhook",
         payload: {
           shopifyOrderId,
+          refundEventId,
           created: adjustmentsToCreate.length,
           skipped,
         },
@@ -481,6 +719,19 @@ export async function processOrderUpdate(
 
     if (alreadyProcessed) {
       return { created: 0, skipped: 0 };
+    }
+
+    const logicalOrder = tx.orderRecord?.upsert
+      ? await ensureOrderRecord(shopId, shopifyOrderId, tx)
+      : null;
+    if (logicalOrder && tx.orderLifecycle?.upsert) {
+      await mergeOrderLifecycle({
+        shopId,
+        orderRecordId: logicalOrder.id,
+        payload: orderPayload,
+        source: "webhook",
+        db: tx,
+      });
     }
 
     const snapshot = await findSnapshotWithLines(tx, shopId, shopifyOrderId);
@@ -557,6 +808,21 @@ export async function processOrderUpdate(
     }).length;
 
     if (adjustmentsToCreate.length === 0) {
+      if (
+        snapshot.orderRecordId &&
+        tx.orderAdjustmentEvent?.upsert &&
+        tx.orderLifecycle?.findUnique &&
+        tx.orderRefundLine?.groupBy
+      ) {
+        await reconcileLifecycleAdjustmentsForSnapshot({
+          shopId,
+          orderRecordId: snapshot.orderRecordId,
+          snapshotId: snapshot.id,
+          db: tx,
+        });
+        await recomputeTaxOffsetCache(shopId, tx);
+      }
+
       await tx.auditLog.create({
         data: {
           shopId,
@@ -607,10 +873,41 @@ export async function processOrderUpdate(
     }
 
     for (const adjustment of adjustmentsToCreate) {
+      const sourceLine = (snapshot.lines as SnapshotLineWithAdjustments[]).find(
+        (line) => line.id === adjustment.snapshotLineId,
+      );
+      const adjustmentEvent = sourceLine && snapshot.orderRecordId && tx.orderAdjustmentEvent?.upsert
+        ? await tx.orderAdjustmentEvent.upsert({
+            where: {
+              shopId_sourceKey: {
+                shopId,
+                sourceKey: `order-update:${signature}:${sourceLine.shopifyLineItemId}`,
+              },
+            },
+            create: {
+              shopId,
+              orderRecordId: snapshot.orderRecordId,
+              shopifyLineItemId: sourceLine.shopifyLineItemId,
+              sourceType: "order_update",
+              sourceKey: `order-update:${signature}:${sourceLine.shopifyLineItemId}`,
+              replacementPolicy: "order_update_delta",
+              actor: "webhook",
+              reason: "orders/updated webhook",
+              laborAdj: adjustment.laborAdj,
+              materialAdj: adjustment.materialAdj,
+              packagingAdj: adjustment.packagingAdj,
+              equipmentAdj: adjustment.equipmentAdj,
+              netContribAdj: adjustment.netContribAdj,
+            },
+            update: {},
+            select: { id: true },
+          })
+        : null;
       await tx.adjustment.create({
         data: {
           shopId,
           snapshotLineId: adjustment.snapshotLineId,
+          adjustmentEventId: adjustmentEvent?.id ?? null,
           type: "manual",
           reason: "orders/updated webhook",
           actor: "webhook",
@@ -620,6 +917,20 @@ export async function processOrderUpdate(
           equipmentAdj: adjustment.equipmentAdj,
           netContribAdj: adjustment.netContribAdj,
         },
+      });
+    }
+
+    if (
+      snapshot.orderRecordId &&
+      tx.orderAdjustmentEvent?.upsert &&
+      tx.orderLifecycle?.findUnique &&
+      tx.orderRefundLine?.groupBy
+    ) {
+      await reconcileLifecycleAdjustmentsForSnapshot({
+        shopId,
+        orderRecordId: snapshot.orderRecordId,
+        snapshotId: snapshot.id,
+        db: tx,
       });
     }
 

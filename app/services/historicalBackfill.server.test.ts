@@ -82,9 +82,9 @@ describe("historical backfill imports", () => {
   it("parses Shopify orders CSVs into grouped order payloads", () => {
     const rows = parseHistoricalImportRows(
       [
-        "Name,Id,Created at,Taxes,Lineitem quantity,Lineitem name,Lineitem price,Lineitem sku,Lineitem discount",
-        "#1271,6599142604869,2026-04-28 13:34:05 -0500,4.46,1,Product A - Blue,25.00,SKU-BLUE,0.00",
-        "#1271,,2026-04-28 13:34:05 -0500,,2,Sticker,4.00,,0.50",
+        "Name,Id,Created at,Updated at,Financial Status,Cancelled at,Taxes,Lineitem quantity,Lineitem name,Lineitem price,Lineitem sku,Lineitem discount",
+        "#1271,6599142604869,2026-04-28 13:34:05 -0500,2026-04-29 10:00:00 -0500,refunded,2026-04-29 09:00:00 -0500,4.46,1,Product A - Blue,25.00,SKU-BLUE,0.00",
+        "#1271,,2026-04-28 13:34:05 -0500,,,,,2,Sticker,4.00,,0.50",
       ].join("\n"),
       "orders",
     );
@@ -93,6 +93,8 @@ describe("historical backfill imports", () => {
       expect.objectContaining({
         admin_graphql_api_id: "gid://shopify/Order/6599142604869",
         name: "#1271",
+        financial_status: "refunded",
+        cancelled_at: "2026-04-29 09:00:00 -0500",
         line_items: [
           expect.objectContaining({ title: "Product A", variant_title: "Blue", sku: "SKU-BLUE" }),
           expect.objectContaining({ title: "Sticker", variant_title: "Default Title", quantity: "2" }),
@@ -104,7 +106,7 @@ describe("historical backfill imports", () => {
   it("requires Shopify GraphQL order ids for imported order snapshots", async () => {
     const db = {
       orderSnapshot: {
-        findUnique: vi.fn(),
+        findFirst: vi.fn(),
       },
     };
 
@@ -117,7 +119,7 @@ describe("historical backfill imports", () => {
 
     expect(summary.created).toBe(0);
     expect(summary.errors).toEqual([{ row: 1, message: "Order admin_graphql_api_id is required." }]);
-    expect(db.orderSnapshot.findUnique).not.toHaveBeenCalled();
+    expect(db.orderSnapshot.findFirst).not.toHaveBeenCalled();
   });
 
   it("matches renamed CSV order products by normalized product and variant titles", async () => {
@@ -134,7 +136,7 @@ describe("historical backfill imports", () => {
       },
     };
     const db = {
-      orderSnapshot: { findUnique: vi.fn().mockResolvedValue(null) },
+      orderSnapshot: { findFirst: vi.fn().mockResolvedValue(null) },
       variant: {
         findMany: vi.fn()
           .mockResolvedValueOnce([])
@@ -183,7 +185,7 @@ describe("historical backfill imports", () => {
       },
     ];
     const db = {
-      orderSnapshot: { findUnique: vi.fn().mockResolvedValue(null) },
+      orderSnapshot: { findFirst: vi.fn().mockResolvedValue(null) },
       variant: {
         findMany: vi.fn()
           .mockResolvedValueOnce([])
@@ -236,7 +238,7 @@ describe("historical backfill imports", () => {
       },
     };
     const db = {
-      orderSnapshot: { findUnique: vi.fn().mockResolvedValue(null) },
+      orderSnapshot: { findFirst: vi.fn().mockResolvedValue(null) },
       variant: {
         findFirst: vi.fn().mockResolvedValue({
           shopifyId: variant.shopifyId,
@@ -285,7 +287,7 @@ describe("historical backfill imports", () => {
       },
     };
     const db = {
-      orderSnapshot: { findUnique: vi.fn().mockResolvedValue(null) },
+      orderSnapshot: { findFirst: vi.fn().mockResolvedValue(null) },
       historicalLineItemMapping: {
         findUnique: vi.fn().mockResolvedValue({
           variant: {
@@ -396,7 +398,7 @@ describe("historical backfill imports", () => {
       },
     };
     const db = {
-      orderSnapshot: { findUnique: vi.fn().mockResolvedValue(existingSnapshot) },
+      orderSnapshot: { findFirst: vi.fn().mockResolvedValue(existingSnapshot) },
       variant: { findUnique: vi.fn().mockResolvedValue(variant) },
     };
     const rows = [{
@@ -501,6 +503,7 @@ describe("historical backfill rebuild", () => {
       reportingPeriod: {
         findFirst: vi.fn().mockResolvedValue(periods[0]),
         findMany: vi.fn().mockResolvedValue(periods),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       },
       orderSnapshotLine: {
         findMany: vi.fn().mockResolvedValue([
@@ -559,6 +562,11 @@ describe("historical backfill rebuild", () => {
             artistName: "Artist One",
             creditName: "A. One",
             payoutAmount: decimal("15"),
+            snapshotLine: {
+              netContribution: decimal("100"),
+              adjustments: [],
+              snapshot: { artistAttribution: null },
+            },
           },
         ]),
       },
@@ -640,6 +648,10 @@ describe("historical backfill rebuild", () => {
       where: {
         shopId: "shop-1",
         snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: {
+            lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } },
+          },
           createdAt: {
             gte: new Date("2026-01-01T00:00:00.000Z"),
             lt: new Date("2026-01-15T00:00:00.000Z"),
@@ -653,6 +665,7 @@ describe("historical backfill rebuild", () => {
         shopId: "shop-1",
         periodId: "period-1",
         snapshot: {
+          currentForOrderRecord: { isNot: null },
           OR: [
             { createdAt: { lt: new Date("2026-01-01T00:00:00.000Z") } },
             { createdAt: { gte: new Date("2026-01-15T00:00:00.000Z") } },

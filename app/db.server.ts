@@ -12,6 +12,7 @@ const TENANT_SCOPED_MODELS = [
   "Cause", "ProductCauseAssignment", "Artist",
   "ArtistSubmission", "ArtistSubmissionFile",
   "ArtistCauseAssignment", "ProductArtistAssignment",
+  "OrderRecord", "OrderLifecycle", "OrderRefundEvent", "OrderRefundLine", "OrderAdjustmentEvent",
   "OrderSnapshot", "OrderSnapshotLine",
   "LineCauseAllocation", "LineArtistAllocation", "Adjustment",
   "ReportingPeriod", "CauseAllocation", "ArtistAllocation", "Disbursement",

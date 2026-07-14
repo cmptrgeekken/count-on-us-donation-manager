@@ -8,6 +8,10 @@ import { decryptProviderCredential } from "./providerCredentials.server";
 import { listPrintifyProducts } from "./printify.server";
 import { recomputeTaxOffsetCache } from "./taxOffsetCache.server";
 import { hashNormalizedCustomerEmail } from "../utils/customer-identity.server";
+import {
+  mergeOrderLifecycle,
+  reconcileLifecycleAdjustmentsForSnapshot,
+} from "./orderLifecycle.server";
 
 type SnapshotLineItemPayload = {
   admin_graphql_api_id?: string;
@@ -43,6 +47,10 @@ export type ShopifyOrderPayload = {
   order_number?: string | number | null;
   created_at?: string | null;
   createdAt?: string | null;
+  updated_at?: string | null;
+  updatedAt?: string | null;
+  cancelled_at?: string | null;
+  canceled_at?: string | null;
   source_name?: string | null;
   landing_site?: string | null;
   referring_site?: string | null;
@@ -566,6 +574,7 @@ export async function createSnapshot(
     periodId?: string | null;
     replaceExistingSnapshotId?: string | null;
     replacementReason?: string | null;
+    replacementSource?: string | null;
   } = {},
 ): Promise<{ created: boolean; snapshotId?: string }> {
   const shopifyOrderId = order.admin_graphql_api_id ?? null;
@@ -573,24 +582,65 @@ export async function createSnapshot(
     throw new Error("Shopify order GID is required to create a snapshot.");
   }
 
-  const existing = await db.orderSnapshot.findFirst({
+  const logicalOrder = db.orderRecord?.findUnique
+    ? await db.orderRecord.findUnique({
+        where: { shopId_shopifyOrderId: { shopId, shopifyOrderId } },
+        select: {
+          id: true,
+          currentSnapshotId: true,
+          currentSnapshot: {
+            select: {
+              id: true,
+              revision: true,
+              orderRecordId: true,
+              periodId: true,
+              salesTaxCollected: true,
+            },
+          },
+        },
+      })
+    : null;
+  const existing = logicalOrder?.currentSnapshot ?? await db.orderSnapshot.findFirst({
     where: { shopId, shopifyOrderId },
-    select: { id: true, salesTaxCollected: true },
+    select: { id: true, salesTaxCollected: true, revision: true, orderRecordId: true, periodId: true },
   });
 
   const replacementSnapshotId = metadata.replaceExistingSnapshotId ?? null;
   const isReplacing = Boolean(replacementSnapshotId && existing?.id === replacementSnapshotId);
 
   if (existing && !isReplacing) {
-    const salesTaxCollected = getOrderSalesTax(order);
-    if (
-      salesTaxCollected.greaterThan(ZERO) &&
-      new Prisma.Decimal(existing.salesTaxCollected ?? ZERO).equals(ZERO) &&
-      typeof db.orderSnapshot.update === "function"
-    ) {
-      await db.orderSnapshot.update({
-        where: { id: existing.id },
-        data: { salesTaxCollected },
+    if (logicalOrder && db.orderLifecycle?.upsert) {
+      await db.$transaction(async (tx: typeof prisma) => {
+        const lifecycleResult = await mergeOrderLifecycle({
+          shopId,
+          orderRecordId: logicalOrder.id,
+          payload: order,
+          source: origin,
+          db: tx,
+        });
+        const adjustmentResult = await reconcileLifecycleAdjustmentsForSnapshot({
+          shopId,
+          orderRecordId: logicalOrder.id,
+          snapshotId: existing.id,
+          db: tx,
+        });
+        await recomputeTaxOffsetCache(shopId, tx);
+        await tx.auditLog.create({
+          data: {
+            shopId,
+            entity: "OrderLifecycle",
+            entityId: logicalOrder.id,
+            action: "ORDER_LIFECYCLE_RECONCILED",
+            actor: "system",
+            payload: {
+              state: lifecycleResult.state,
+              lifecycleUpdated: lifecycleResult.updated,
+              adjustmentCount: adjustmentResult.created,
+              unresolvedCount: adjustmentResult.unresolved.length,
+              origin,
+            },
+          },
+        });
       });
     }
     return { created: false, snapshotId: existing.id };
@@ -899,16 +949,34 @@ export async function createSnapshot(
 
   try {
     const result = await db.$transaction(async (tx: any) => {
-      if (isReplacing && replacementSnapshotId) {
-        await tx.orderSnapshot.delete({
-          where: { id: replacementSnapshotId },
-        });
+      const record = tx.orderRecord?.upsert
+        ? await tx.orderRecord.upsert({
+            where: { shopId_shopifyOrderId: { shopId, shopifyOrderId } },
+            create: { shopId, shopifyOrderId },
+            update: {},
+            select: { id: true, currentSnapshotId: true },
+          })
+        : null;
+      if (isReplacing && record?.currentSnapshotId !== replacementSnapshotId) {
+        throw new Error("Snapshot replacement target is no longer the current revision.");
       }
+      if (!isReplacing && record?.currentSnapshotId) {
+        return { id: record.currentSnapshotId, created: false };
+      }
+      const revision = isReplacing ? Number(existing?.revision ?? 1) + 1 : 1;
 
       const snapshot = await tx.orderSnapshot.create({
         data: {
           shopId,
           shopifyOrderId,
+          ...(record
+            ? {
+                orderRecordId: record.id,
+                revision,
+                replacementSource: isReplacing ? metadata.replacementSource ?? origin : null,
+                replacementReason: isReplacing ? metadata.replacementReason ?? null : null,
+              }
+            : {}),
           orderNumber: order.name ?? order.order_number?.toString() ?? null,
           customerDisplayName: getCustomerDisplayName(order),
           origin,
@@ -1105,6 +1173,43 @@ export async function createSnapshot(
         await reconcileSnapshotPackaging(shopId, snapshot.id, packagingLines, tx);
       }
 
+      if (record && tx.orderLifecycle?.upsert) {
+        const lifecycleResult = await mergeOrderLifecycle({
+          shopId,
+          orderRecordId: record.id,
+          payload: order,
+          source: origin,
+          db: tx,
+        });
+        if (
+          isReplacing &&
+          (lifecycleResult.state === "unknown" || lifecycleResult.state === "review_required")
+        ) {
+          throw new Error("Snapshot replacement requires resolved order lifecycle evidence.");
+        }
+        const adjustmentResult = await reconcileLifecycleAdjustmentsForSnapshot({
+          shopId,
+          orderRecordId: record.id,
+          snapshotId: snapshot.id,
+          db: tx,
+        });
+        if (isReplacing && adjustmentResult.unresolved.length > 0) {
+          throw new Error(
+            `Snapshot replacement could not map adjustment events: ${adjustmentResult.unresolved.join(", ")}`,
+          );
+        }
+        await tx.orderRecord.update({
+          where: { id: record.id, shopId },
+          data: { currentSnapshotId: snapshot.id },
+        });
+        if (isReplacing && existing?.periodId) {
+          await tx.reportingPeriod.updateMany({
+            where: { id: existing.periodId, shopId },
+            data: { rebuildRequired: true, rebuildRequestedAt: new Date() },
+          });
+        }
+      }
+
       await recomputeTaxOffsetCache(shopId, tx);
 
       if (typeof tx.orderSettlement?.upsert === "function") {
@@ -1122,35 +1227,44 @@ export async function createSnapshot(
           shopId,
           entity: "OrderSnapshot",
           entityId: snapshot.id,
-          action: "ORDER_SNAPSHOT_CREATED",
-          actor: "system",
+          action: isReplacing ? "ORDER_SNAPSHOT_REPLACED" : "ORDER_SNAPSHOT_CREATED",
+          actor: isReplacing ? "merchant" : "system",
           payload: {
             shopifyOrderId,
             lineCount: withFinalCosts.length,
             origin,
+            revision,
             replacedSnapshotId: replacementSnapshotId,
             replacementReason: metadata.replacementReason ?? null,
           },
         },
       });
 
-      return snapshot;
+      return { ...snapshot, created: true };
     });
 
     for (const productGid of missingProductGids) {
       await jobQueue.send("catalog.sync.incremental", { shopId, productGid });
     }
 
-    return { created: true, snapshotId: result.id };
+    return { created: result.created, snapshotId: result.id };
   } catch (error) {
     if (!isUniqueConstraintError(error)) {
       throw error;
     }
 
-    const existingSnapshot = await db.orderSnapshot.findFirst({
-      where: { shopId, shopifyOrderId },
-      select: { id: true },
-    });
+    const existingRecord = db.orderRecord?.findUnique
+      ? await db.orderRecord.findUnique({
+          where: { shopId_shopifyOrderId: { shopId, shopifyOrderId } },
+          select: { currentSnapshotId: true },
+        })
+      : null;
+    const existingSnapshot = existingRecord?.currentSnapshotId
+      ? { id: existingRecord.currentSnapshotId }
+      : await db.orderSnapshot.findFirst({
+          where: { shopId, shopifyOrderId },
+          select: { id: true },
+        });
 
     return {
       created: false,

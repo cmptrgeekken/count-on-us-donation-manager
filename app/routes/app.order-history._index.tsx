@@ -60,6 +60,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 
   const where = {
     shopId,
+    currentForOrderRecord: { isNot: null },
     ...(origin === "all" ? {} : { origin }),
     ...((startDate || endDate)
       ? {

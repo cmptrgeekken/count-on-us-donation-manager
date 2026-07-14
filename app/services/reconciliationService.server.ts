@@ -9,6 +9,10 @@ type ReconciliationOrderNode = {
   id: string;
   name: string | null;
   createdAt?: string | null;
+  updatedAt?: string | null;
+  cancelledAt?: string | null;
+  displayFinancialStatus?: string | null;
+  displayFulfillmentStatus?: string | null;
   currentTotalTaxSet?: {
     shopMoney?: { amount?: string | null } | null;
   } | null;
@@ -42,6 +46,10 @@ const RECONCILIATION_ORDERS_QUERY = `#graphql
           id
           name
           createdAt
+          updatedAt
+          cancelledAt
+          displayFinancialStatus
+          displayFulfillmentStatus
           currentTotalTaxSet {
             shopMoney {
               amount
@@ -239,6 +247,10 @@ export async function runReconciliation(
           admin_graphql_api_id: order.id,
           name: order.name,
           created_at: order.createdAt ?? null,
+          updated_at: order.updatedAt ?? null,
+          cancelled_at: order.cancelledAt ?? null,
+          financial_status: order.displayFinancialStatus?.toLowerCase() ?? null,
+          fulfillment_status: order.displayFulfillmentStatus?.toLowerCase() ?? null,
           current_total_tax_set: {
             shop_money: {
               amount: order.currentTotalTaxSet?.shopMoney?.amount ?? "0",

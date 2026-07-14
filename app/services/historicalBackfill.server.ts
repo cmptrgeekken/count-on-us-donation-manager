@@ -297,6 +297,10 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
       admin_graphql_api_id: toOrderGid(explicitOrderId || orderKey),
       name: orderName,
       created_at: getCsvValue(row, "Created at"),
+      updated_at: getCsvValue(row, "Updated at") || null,
+      cancelled_at: getCsvValue(row, "Cancelled at", "Canceled at") || null,
+      financial_status: getCsvValue(row, "Financial Status") || null,
+      fulfillment_status: getCsvValue(row, "Fulfillment Status") || null,
       subtotal_price: getCsvValue(row, "Subtotal") || undefined,
       current_subtotal_price: getCsvValue(row, "Subtotal") || undefined,
       total_discounts: getCsvValue(row, "Discount Amount", "Discount") || undefined,
@@ -600,6 +604,14 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
   if (lineItems.length === 0) {
     warnings.push("Order has no line items.");
   }
+  if (
+    order.financial_status === undefined &&
+    order.fulfillment_status === undefined &&
+    order.cancelled_at === undefined &&
+    order.canceled_at === undefined
+  ) {
+    warnings.push("Order is missing lifecycle evidence and will be excluded from finalized reporting until reconciled.");
+  }
 
   for (const line of lineItems) {
     const variantId = normalizeId(line.admin_graphql_api_id?.includes("ProductVariant") ? line.admin_graphql_api_id : line.variant_id);
@@ -881,10 +893,15 @@ export async function importHistoricalOrders(input: {
         throw new Error("Order admin_graphql_api_id is required.");
       }
 
-      const existing = await db.orderSnapshot.findUnique({
-        where: { shopId_shopifyOrderId: { shopId: input.shopId, shopifyOrderId } },
-        select: { id: true },
-      });
+      const existing = db.orderRecord?.findUnique
+        ? (await db.orderRecord.findUnique({
+            where: { shopId_shopifyOrderId: { shopId: input.shopId, shopifyOrderId } },
+            select: { currentSnapshot: { select: { id: true } } },
+          }))?.currentSnapshot ?? null
+        : await db.orderSnapshot.findFirst({
+            where: { shopId: input.shopId, shopifyOrderId },
+            select: { id: true },
+          });
 
       if (existing) {
         summary.skipped += 1;
@@ -981,17 +998,33 @@ export async function replaceOrderSnapshots(input: {
         throw new Error("Order admin_graphql_api_id is required.");
       }
 
-      const existing = await db.orderSnapshot.findUnique({
-        where: { shopId_shopifyOrderId: { shopId: input.shopId, shopifyOrderId } },
-        select: {
-          id: true,
-          orderNumber: true,
-          origin: true,
-          periodId: true,
-          period: { select: { status: true } },
-          lines: { select: { totalCost: true, netContribution: true } },
-        },
-      });
+      const existing = db.orderRecord?.findUnique
+        ? (await db.orderRecord.findUnique({
+            where: { shopId_shopifyOrderId: { shopId: input.shopId, shopifyOrderId } },
+            select: {
+              currentSnapshot: {
+                select: {
+                  id: true,
+                  orderNumber: true,
+                  origin: true,
+                  periodId: true,
+                  period: { select: { status: true } },
+                  lines: { select: { totalCost: true, netContribution: true } },
+                },
+              },
+            },
+          }))?.currentSnapshot ?? null
+        : await db.orderSnapshot.findFirst({
+            where: { shopId: input.shopId, shopifyOrderId },
+            select: {
+              id: true,
+              orderNumber: true,
+              origin: true,
+              periodId: true,
+              period: { select: { status: true } },
+              lines: { select: { totalCost: true, netContribution: true } },
+            },
+          });
 
       if (!existing) {
         summary.skipped += 1;
@@ -1026,8 +1059,8 @@ export async function replaceOrderSnapshots(input: {
       }
 
       const requiresForce = existing.period?.status === "CLOSED";
-      const totalCost = sumDecimals(existing.lines.map((line) => line.totalCost));
-      const netContribution = sumDecimals(existing.lines.map((line) => line.netContribution));
+      const totalCost = sumDecimals(existing.lines.map((line: { totalCost: Prisma.Decimal }) => line.totalCost));
+      const netContribution = sumDecimals(existing.lines.map((line: { netContribution: Prisma.Decimal }) => line.netContribution));
       const baseResult = {
         row: rowNumber,
         shopifyOrderId,
@@ -1065,31 +1098,9 @@ export async function replaceOrderSnapshots(input: {
           periodId: existing.periodId,
           replaceExistingSnapshotId: existing.id,
           replacementReason,
+          replacementSource: input.sourceName ?? "uploaded_order_payload",
         },
       );
-
-      await db.auditLog.create({
-        data: {
-          shopId: input.shopId,
-          entity: "OrderSnapshot",
-          entityId: replacement.snapshotId ?? existing.id,
-          action: "ORDER_SNAPSHOT_REPLACED",
-          actor: "merchant",
-          payload: {
-            oldSnapshotId: existing.id,
-            newSnapshotId: replacement.snapshotId ?? null,
-            shopifyOrderId,
-            forceClosed,
-            periodId: existing.periodId,
-            periodStatus: existing.period?.status ?? null,
-            reason: replacementReason,
-            sourceName: input.sourceName ?? null,
-            oldTotalCost: totalCost.toString(),
-            oldNetContribution: netContribution.toString(),
-            oldLineCount: existing.lines.length,
-          },
-        },
-      });
 
       summary.updated += 1;
       summary.replacementResults.push({
@@ -1135,6 +1146,8 @@ async function summarizeRebuildPeriodState(input: {
       where: {
         shopId: input.shopId,
         snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
           createdAt: {
             gte: period.startDate,
             lt: period.endDate,
@@ -1217,6 +1230,8 @@ async function rebuildPaymentSafeReportingPeriod(input: {
     await tx.orderSnapshot.updateMany({
       where: {
         shopId: input.shopId,
+        currentForOrderRecord: { isNot: null },
+        orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
         createdAt: { gte: period.startDate, lt: period.endDate },
       },
       data: { periodId: period.id },
@@ -1225,6 +1240,7 @@ async function rebuildPaymentSafeReportingPeriod(input: {
       where: {
         shopId: input.shopId,
         periodId: period.id,
+        currentForOrderRecord: { isNot: null },
         OR: [
           { createdAt: { lt: period.startDate } },
           { createdAt: { gte: period.endDate } },
@@ -1243,6 +1259,8 @@ async function rebuildPaymentSafeReportingPeriod(input: {
       where: {
         shopId: input.shopId,
         snapshot: {
+          currentForOrderRecord: { isNot: null },
+          orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
           createdAt: { gte: period.startDate, lt: period.endDate },
         },
       },
@@ -1253,6 +1271,7 @@ async function rebuildPaymentSafeReportingPeriod(input: {
         shopId: input.shopId,
         periodId: period.id,
         snapshot: {
+          currentForOrderRecord: { isNot: null },
           OR: [
             { createdAt: { lt: period.startDate } },
             { createdAt: { gte: period.endDate } },
@@ -1268,6 +1287,10 @@ async function rebuildPaymentSafeReportingPeriod(input: {
     materializeCauseAllocationsForPeriod(input.shopId, period, db),
     materializeArtistAllocationsForPeriod(input.shopId, period, db),
   ]);
+  await db.reportingPeriod.updateMany({
+    where: { id: period.id, shopId: input.shopId },
+    data: { rebuildRequired: false, rebuildRequestedAt: null },
+  });
 
   const after = await summarizeRebuildPeriodState(input);
 
