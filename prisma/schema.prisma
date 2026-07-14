@@ -111,8 +111,9 @@ model HistoricalLineItemMapping {
   variantTitle           String?
   normalizedVariantTitle String?
   sku                    String?
-  variantId              String
-  variant                Variant  @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  lineKind               String   @default("product")
+  variantId              String?
+  variant                Variant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
   firstImportBatchId     String?
   lastImportBatchId      String?
   useCount               Int      @default(0)
@@ -1035,6 +1036,7 @@ model OrderSnapshotLine {
   shopifyLineItemId   String
   shopifyProductId    String?
   shopifyVariantId    String
+  lineKind            String        @default("product")
   variantTitle        String
   productTitle        String
   quantity            Int

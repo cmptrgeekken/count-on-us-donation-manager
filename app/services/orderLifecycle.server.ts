@@ -21,12 +21,19 @@ export type OrderLifecyclePayload = {
   updatedAt?: string | null;
 };
 
+export type MerchantReviewLifecycleState = "active" | "fully_refunded" | "canceled";
+
 type DbClient = typeof prisma;
 
 function optionalDate(value: string | null | undefined): Date | null {
   if (!value) return null;
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function normalizeLifecycleValue(value: string | null | undefined): string | null {
+  const normalized = value?.trim().toLowerCase().replace(/[\s-]+/g, "_") ?? "";
+  return normalized || null;
 }
 
 function sourceAuthority(source: string): number {
@@ -47,7 +54,7 @@ function sourceAuthority(source: string): number {
 export function deriveLifecycleState(payload: OrderLifecyclePayload): OrderLifecycleState {
   if (payload.cancelled_at || payload.canceled_at) return "canceled";
 
-  switch (payload.financial_status?.trim().toLowerCase()) {
+  switch (normalizeLifecycleValue(payload.financial_status)) {
     case "refunded":
     case "voided":
       return "fully_refunded";
@@ -119,8 +126,8 @@ export async function mergeOrderLifecycle(input: {
       shopId: input.shopId,
       orderRecordId: input.orderRecordId,
       state: incomingState,
-      financialStatus: input.payload.financial_status?.trim().toLowerCase() ?? null,
-      fulfillmentStatus: input.payload.fulfillment_status?.trim().toLowerCase() ?? null,
+      financialStatus: normalizeLifecycleValue(input.payload.financial_status),
+      fulfillmentStatus: normalizeLifecycleValue(input.payload.fulfillment_status),
       cancelledAt,
       source: input.source,
       sourceUpdatedAt,
@@ -129,10 +136,10 @@ export async function mergeOrderLifecycle(input: {
     update: {
       state: incomingState,
       ...(input.payload.financial_status !== undefined
-        ? { financialStatus: input.payload.financial_status?.trim().toLowerCase() ?? null }
+        ? { financialStatus: normalizeLifecycleValue(input.payload.financial_status) }
         : {}),
       ...(input.payload.fulfillment_status !== undefined
-        ? { fulfillmentStatus: input.payload.fulfillment_status?.trim().toLowerCase() ?? null }
+        ? { fulfillmentStatus: normalizeLifecycleValue(input.payload.fulfillment_status) }
         : {}),
       ...(input.payload.cancelled_at !== undefined || input.payload.canceled_at !== undefined
         ? { cancelledAt }
@@ -145,6 +152,80 @@ export async function mergeOrderLifecycle(input: {
   });
 
   return { state: lifecycle.state as OrderLifecycleState, updated: true };
+}
+
+export async function bulkReviewOrderLifecycles(input: {
+  shopId: string;
+  snapshotIds: string[];
+  state: MerchantReviewLifecycleState;
+  db?: DbClient;
+}): Promise<{ reviewed: number; skipped: number }> {
+  const db = input.db ?? prisma;
+  const snapshotIds = [...new Set(input.snapshotIds)];
+  const snapshots = await db.orderSnapshot.findMany({
+    where: {
+      shopId: input.shopId,
+      id: { in: snapshotIds },
+      currentForOrderRecord: { isNot: null },
+      orderRecord: {
+        OR: [
+          { lifecycle: { is: null } },
+          { lifecycle: { is: { state: { in: ["unknown", "review_required"] } } } },
+        ],
+      },
+    },
+    select: { id: true, orderRecordId: true },
+  });
+
+  if (snapshots.length === 0) {
+    return { reviewed: 0, skipped: snapshotIds.length };
+  }
+
+  const orderRecordIds = snapshots.map((snapshot) => snapshot.orderRecordId);
+  const financialStatus = input.state === "active"
+    ? "paid"
+    : input.state === "fully_refunded"
+      ? "refunded"
+      : "voided";
+  const cancelledAt = input.state === "canceled" ? new Date() : null;
+
+  await db.$transaction(async (tx) => {
+    await tx.orderLifecycle.createMany({
+      data: orderRecordIds.map((orderRecordId) => ({
+        shopId: input.shopId,
+        orderRecordId,
+        state: input.state,
+        financialStatus,
+        cancelledAt,
+        source: "merchant_review",
+        reviewReason: null,
+      })),
+      skipDuplicates: true,
+    });
+    await tx.orderLifecycle.updateMany({
+      where: { shopId: input.shopId, orderRecordId: { in: orderRecordIds } },
+      data: {
+        state: input.state,
+        financialStatus,
+        cancelledAt,
+        source: "merchant_review",
+        sourceUpdatedAt: null,
+        reviewReason: null,
+      },
+    });
+    await tx.auditLog.createMany({
+      data: snapshots.map((snapshot) => ({
+        shopId: input.shopId,
+        entity: "OrderLifecycle",
+        entityId: snapshot.orderRecordId,
+        action: "LIFECYCLE_MERCHANT_CONFIRMED",
+        actor: "merchant",
+        payload: { state: input.state, snapshotId: snapshot.id },
+      })),
+    });
+  });
+
+  return { reviewed: snapshots.length, skipped: snapshotIds.length - snapshots.length };
 }
 
 export function resolveEligibleQuantity(input: {

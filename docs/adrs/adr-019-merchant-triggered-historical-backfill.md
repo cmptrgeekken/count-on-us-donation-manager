@@ -179,6 +179,14 @@ Replacement should not silently rematerialize period allocations. After replacem
 
 When a historical order references an unknown product or variant, import should not invent hidden cost or donation configuration.
 
+Historical imports may also contain legitimate non-catalog lines. The merchant must classify each unresolved line explicitly; title-based inference alone is not authoritative. The supported treatments are:
+
+- map to a synced product variant and use its current production-cost and donation-routing configuration
+- treat as a tip/non-merchandise line, retaining it in the immutable order record while excluding it from product discounts, packaging allocation, production costs, and the donation pool
+- treat as custom merchandise, retaining its sale amount with zero recorded production cost and no product-specific Cause or Artist routing, with an explicit preflight warning
+
+These decisions are saved per shop and normalized import mapping key so repeated historical lines receive consistent treatment. Snapshot lines retain the selected line kind for auditability.
+
 The dry run should report:
 
 - unknown products

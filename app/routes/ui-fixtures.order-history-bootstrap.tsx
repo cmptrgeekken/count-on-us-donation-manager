@@ -145,7 +145,14 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
       where: { shopId_shopifyOrderId: { shopId, shopifyOrderId: reconciliationOrderId } },
       data: {
         currentSnapshotId: reconciliationSnapshot.id,
-        lifecycle: { create: { shopId, state: "active", source: "reconciliation" } },
+        lifecycle: {
+          create: {
+            shopId,
+            state: "unknown",
+            source: "historical_import",
+            reviewReason: "Lifecycle evidence is incomplete",
+          },
+        },
       },
     }),
   ]);
@@ -154,6 +161,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     shopId,
     historyUrl: `${baseUrl}/app/order-history?__playwrightShop=${encodeURIComponent(shopId)}`,
     detailUrl: `${baseUrl}/app/order-history/${webhookSnapshot.id}?__playwrightShop=${encodeURIComponent(shopId)}`,
+    reviewDetailUrl: `${baseUrl}/app/order-history/${reconciliationSnapshot.id}?__playwrightShop=${encodeURIComponent(shopId)}`,
+    reviewHistoryUrl: `${baseUrl}/app/order-history?review=required&__playwrightShop=${encodeURIComponent(shopId)}`,
     snapshotLineId: webhookSnapshot.lines[0]?.id ?? "",
     webhookOrderNumber: webhookSnapshot.orderNumber,
     reconciliationOrderNumber: reconciliationSnapshot.orderNumber,

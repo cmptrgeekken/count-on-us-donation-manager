@@ -1,7 +1,8 @@
 import { jsonResponse } from "~/utils/json-response.server";
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { Form, useActionData, useLoaderData, useNavigation, useRouteError } from "@remix-run/react";
+import { Form, useActionData, useLoaderData, useNavigation, useRouteError, useSubmit } from "@remix-run/react";
+import { AssignmentPicker } from "../components/AssignmentControls";
 import { prisma } from "../db.server";
 import {
   importHistoricalCharges,
@@ -24,6 +25,8 @@ type ActionData = {
   importKind?: string | null;
   sourceName?: string | null;
   mappingOverrides?: Record<string, string>;
+  replacementReason?: string;
+  forceClosed?: boolean;
 };
 
 type LineMappingRequest = {
@@ -95,6 +98,9 @@ type RebuildPeriodResult = {
   delta: RebuildMetricDelta;
 };
 
+const TIP_MAPPING_VALUE = "__TIP__";
+const CUSTOM_MAPPING_VALUE = "__CUSTOM__";
+
 function actionJson(data: ActionData, init?: ResponseInit) {
   return jsonResponse(data, init);
 }
@@ -142,13 +148,24 @@ function lineMappingRequests(summary: unknown): LineMappingRequest[] {
 function buildMappingOptions(request: LineMappingRequest, variants: VariantOption[]) {
   const candidateIds = new Set(request.candidates.map((candidate) => candidate.shopifyVariantId));
   return [
+    {
+      value: TIP_MAPPING_VALUE,
+      label: "Treat as tip / non-merchandise",
+      description: "Keep in order totals, but exclude from product costs, packaging, discounts, and donation routing.",
+    },
+    {
+      value: CUSTOM_MAPPING_VALUE,
+      label: "Treat as custom merchandise",
+      description: "Import with zero recorded production cost and no product-specific donation routing.",
+    },
     ...request.candidates.map((candidate) => ({
       value: candidate.shopifyVariantId,
       label: `${candidate.label} (${candidate.matchReason})`,
+      description: "Suggested product / variant match",
     })),
     ...variants
       .filter((variant) => !candidateIds.has(variant.shopifyId))
-      .map((variant) => ({ value: variant.shopifyId, label: variant.label })),
+      .map((variant) => ({ value: variant.shopifyId, label: variant.label, description: "Product / variant" })),
   ];
 }
 
@@ -312,7 +329,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Response>
 
       if (!dryRun && confirmation !== "REPLACE") {
         return actionJson(
-          { ok: false, message: "Type REPLACE to confirm snapshot replacement.", actionKind: "replacement", importPayload: payload, importKind: "orders", sourceName, mappingOverrides },
+          { ok: false, message: "Type REPLACE to confirm snapshot replacement.", actionKind: "replacement", importPayload: payload, importKind: "orders", sourceName, mappingOverrides, replacementReason, forceClosed },
           { status: 400 },
         );
       }
@@ -335,6 +352,8 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Response>
         importKind: "orders",
         sourceName,
         mappingOverrides,
+        replacementReason,
+        forceClosed,
       });
     }
 
@@ -351,10 +370,15 @@ export default function ReportingImportsPage() {
   const { periods, batches, variants } = useLoaderData() as LoaderData;
   const actionData = useActionData() as ActionData | undefined;
   const navigation = useNavigation();
+  const submit = useSubmit();
   const { formatMoney, locale } = useAppLocalization();
-  const importIntentRef = useRef<HTMLInputElement>(null);
-  const mappingIntentRef = useRef<HTMLInputElement>(null);
-  const replacementIntentRef = useRef<HTMLInputElement>(null);
+  const importFormRef = useRef<HTMLFormElement>(null);
+  const mappingFormRef = useRef<HTMLFormElement>(null);
+  const replacementFormRef = useRef<HTMLFormElement>(null);
+  const replacementMappingFormRef = useRef<HTMLFormElement>(null);
+  const reviewedReplacementFormRef = useRef<HTMLFormElement>(null);
+  const [pendingMappings, setPendingMappings] = useState<Record<string, string>>({});
+  const [pendingReplacementMappings, setPendingReplacementMappings] = useState<Record<string, string>>({});
   const busy = navigation.state !== "idle";
   const submittingIntent = navigation.formData?.get("intent")?.toString();
   const isRebuildSubmitting = submittingIntent === "rebuild-period" || submittingIntent === "rebuild-all";
@@ -369,12 +393,38 @@ export default function ReportingImportsPage() {
       ? "Snapshot replacement in progress."
       : actionData?.message ?? "";
   const mappingRequests = lineMappingRequests(importActionData?.summary);
+  const replacementMappingRequests = lineMappingRequests(replacementActionData?.summary);
   const mappingOverrides = actionData?.mappingOverrides ?? {};
   const hasReviewedMappings = importActionData?.importKind === "orders" &&
     Boolean(importActionData.importPayload) &&
     Object.keys(mappingOverrides).length > 0 &&
     mappingRequests.length === 0 &&
     importActionData.message.includes("dry run");
+
+  useEffect(() => {
+    setPendingMappings(importActionData?.mappingOverrides ?? {});
+  }, [importActionData]);
+
+  useEffect(() => {
+    setPendingReplacementMappings(replacementActionData?.mappingOverrides ?? {});
+  }, [replacementActionData]);
+
+  const allMappingsSelected = mappingRequests.every((request) => Boolean(pendingMappings[request.key]));
+  const allReplacementMappingsSelected = replacementMappingRequests.every(
+    (request) => Boolean(pendingReplacementMappings[request.key]),
+  );
+  const hasReviewedReplacement = Boolean(
+    replacementActionData?.importPayload &&
+    replacementMappingRequests.length === 0 &&
+    replacementActionData.message.includes("dry run"),
+  );
+
+  const submitWithIntent = (form: HTMLFormElement | null, intent: string) => {
+    if (!form) return;
+    const formData = new FormData(form);
+    formData.set("intent", intent);
+    void submit(formData, { method: "post", encType: "multipart/form-data" });
+  };
 
   return (
     <>
@@ -422,8 +472,7 @@ export default function ReportingImportsPage() {
             <s-text>
               Import Shopify CSV exports or JSON arrays for payouts, Shopify charges, and orders. Historical order snapshots use the current Count On Us configuration at import time.
             </s-text>
-            <Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: "1rem" }}>
-              <input ref={importIntentRef} type="hidden" name="intent" defaultValue="dry-run-import" />
+            <Form ref={importFormRef} method="post" encType="multipart/form-data" style={{ display: "grid", gap: "1rem" }}>
               <div style={{ display: "grid", gap: "0.4rem" }}>
                 <label htmlFor="kind">Import type</label>
                 <select id="kind" name="kind" style={{ maxWidth: "24rem", padding: "0.65rem", font: "inherit" }}>
@@ -460,56 +509,73 @@ export default function ReportingImportsPage() {
               </div>
 
               <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <s-button type="submit" variant="secondary" disabled={busy} onClick={() => {
-                  if (importIntentRef.current) importIntentRef.current.value = "dry-run-import";
-                }}>
+                <s-button type="button" variant="secondary" disabled={busy} onClick={() => submitWithIntent(importFormRef.current, "dry-run-import")}>
                   Dry run
                 </s-button>
-                <s-button type="submit" variant="primary" disabled={busy} onClick={() => {
-                  if (importIntentRef.current) importIntentRef.current.value = "apply-import";
-                }}>
+                <s-button type="button" variant="primary" disabled={busy} onClick={() => submitWithIntent(importFormRef.current, "apply-import")}>
                   Import
                 </s-button>
               </div>
             </Form>
 
             {importActionData?.importKind === "orders" && importActionData.importPayload && mappingRequests.length > 0 ? (
-              <Form method="post" style={{ display: "grid", gap: "1rem" }}>
-                <input ref={mappingIntentRef} type="hidden" name="intent" defaultValue="dry-run-import" />
+              <Form ref={mappingFormRef} method="post" style={{ display: "grid", gap: "1rem" }}>
                 <input type="hidden" name="kind" value="orders" />
                 <input type="hidden" name="sourceName" value={importActionData.sourceName ?? ""} />
                 <textarea name="payload" value={importActionData.importPayload} readOnly hidden />
                 <s-banner tone="warning">
-                  <s-text>Some order lines need a product/variant mapping before import.</s-text>
+                  <s-text>Some order lines need a product/variant mapping or non-product classification before import.</s-text>
                 </s-banner>
                 <div style={{ display: "grid", gap: "0.85rem" }}>
                   {mappingRequests.map((request) => {
                     const options = buildMappingOptions(request, variants);
+                    const selectedVariantId = pendingMappings[request.key] ?? "";
+                    const selectedOption = options.find((option) => option.value === selectedVariantId);
                     return (
-                      <label key={request.key} style={{ display: "grid", gap: "0.35rem" }}>
+                      <div key={request.key} style={{ display: "grid", gap: "0.5rem" }}>
                         <span>
                           {request.title} - {request.variantTitle}
                           {request.sku ? ` (${request.sku})` : ""}
                         </span>
-                        <select name={`variantMapping:${request.key}`} required style={{ padding: "0.65rem", font: "inherit" }} defaultValue="">
-                          <option value="">Choose product / variant</option>
-                          {options.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </select>
-                      </label>
+                        <input
+                          type="hidden"
+                          name={`variantMapping:${request.key}`}
+                          value={selectedVariantId}
+                        />
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                          <s-text color={selectedOption ? undefined : "subdued"}>
+                            {selectedOption?.label ?? "No line handling selected"}
+                          </s-text>
+                          <AssignmentPicker
+                            id={`historical-line-mapping-${request.key.replace(/[^a-z0-9]+/gi, "-")}`}
+                            label={`Choose line handling for ${request.title}`}
+                            triggerLabel={selectedOption ? "Change handling" : "Choose line handling"}
+                            options={options.map((option) => ({
+                              id: option.value,
+                              label: option.label,
+                              description: option.description,
+                            }))}
+                            selectedIds={selectedVariantId ? new Set([selectedVariantId]) : new Set()}
+                            onAdd={(ids) => {
+                              const variantId = ids[0];
+                              if (!variantId) return;
+                              setPendingMappings((current) => ({ ...current, [request.key]: variantId }));
+                            }}
+                            multi={false}
+                            hideSelected={false}
+                            searchPlaceholder="Search products, variants, SKUs, tip, or custom"
+                            emptyText="No matching products or variants found."
+                          />
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
                 <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                  <s-button type="submit" variant="secondary" disabled={busy} onClick={() => {
-                    if (mappingIntentRef.current) mappingIntentRef.current.value = "dry-run-import";
-                  }}>
+                  <s-button type="button" variant="secondary" disabled={busy || !allMappingsSelected} onClick={() => submitWithIntent(mappingFormRef.current, "dry-run-import")}>
                     Dry run with mappings
                   </s-button>
-                  <s-button type="submit" variant="primary" disabled={busy} onClick={() => {
-                    if (mappingIntentRef.current) mappingIntentRef.current.value = "apply-import";
-                  }}>
+                  <s-button type="button" variant="primary" disabled={busy || !allMappingsSelected} onClick={() => submitWithIntent(mappingFormRef.current, "apply-import")}>
                     Import with mappings
                   </s-button>
                 </div>
@@ -517,7 +583,7 @@ export default function ReportingImportsPage() {
             ) : null}
 
             {hasReviewedMappings ? (
-              <Form method="post" style={{ display: "grid", gap: "1rem" }}>
+              <Form ref={reviewedReplacementFormRef} method="post" style={{ display: "grid", gap: "1rem" }}>
                 <input type="hidden" name="intent" value="apply-import" />
                 <input type="hidden" name="kind" value="orders" />
                 <input type="hidden" name="sourceName" value={importActionData?.sourceName ?? ""} />
@@ -574,8 +640,7 @@ export default function ReportingImportsPage() {
                 ) : null}
               </s-banner>
             ) : null}
-            <Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: "1rem" }}>
-              <input ref={replacementIntentRef} type="hidden" name="intent" defaultValue="dry-run-replace-snapshots" />
+            <Form ref={replacementFormRef} method="post" encType="multipart/form-data" style={{ display: "grid", gap: "1rem" }}>
               <s-text>
                 Upload or paste Shopify order exports for snapshots that already exist. Closed-period snapshots require force replacement. Existing payment, receipt, tax, or public disclosure evidence should be reviewed before continuing.
               </s-text>
@@ -616,18 +681,82 @@ export default function ReportingImportsPage() {
                 placeholder="Required only when applying replacement"
               />
               <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
-                <s-button type="submit" variant="secondary" disabled={busy} onClick={() => {
-                  if (replacementIntentRef.current) replacementIntentRef.current.value = "dry-run-replace-snapshots";
-                }}>
+                <s-button type="button" variant="secondary" disabled={busy} onClick={() => submitWithIntent(replacementFormRef.current, "dry-run-replace-snapshots")}>
                   Dry run replacement
                 </s-button>
-                <s-button type="submit" tone="critical" variant="secondary" disabled={busy} onClick={() => {
-                  if (replacementIntentRef.current) replacementIntentRef.current.value = "replace-snapshots";
-                }}>
+                <s-button type="button" tone="critical" variant="secondary" disabled={busy} onClick={() => submitWithIntent(replacementFormRef.current, "replace-snapshots")}>
                   Replace snapshots
                 </s-button>
               </div>
             </Form>
+            {replacementActionData?.importPayload && replacementMappingRequests.length > 0 ? (
+              <Form ref={replacementMappingFormRef} method="post" style={{ display: "grid", gap: "1rem" }}>
+                <input type="hidden" name="sourceName" value={replacementActionData.sourceName ?? ""} />
+                <input type="hidden" name="replacementReason" value={replacementActionData.replacementReason ?? ""} />
+                {replacementActionData.forceClosed ? <input type="hidden" name="forceClosed" value="on" /> : null}
+                <textarea name="payload" value={replacementActionData.importPayload} readOnly hidden />
+                <s-banner tone="warning">
+                  <s-text>Resolve these line mappings before replacing snapshots. Saved historical-import mappings are applied automatically when they still point to a synced variant.</s-text>
+                </s-banner>
+                <div style={{ display: "grid", gap: "0.85rem" }}>
+                  {replacementMappingRequests.map((request) => {
+                    const options = buildMappingOptions(request, variants);
+                    const selectedId = pendingReplacementMappings[request.key] ?? "";
+                    const selectedOption = options.find((option) => option.value === selectedId);
+                    return (
+                      <div key={request.key} style={{ display: "grid", gap: "0.5rem" }}>
+                        <span>{request.title} - {request.variantTitle}{request.sku ? ` (${request.sku})` : ""}</span>
+                        <input type="hidden" name={`variantMapping:${request.key}`} value={selectedId} />
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+                          <s-text color={selectedOption ? undefined : "subdued"}>
+                            {selectedOption?.label ?? "No line handling selected"}
+                          </s-text>
+                          <AssignmentPicker
+                            id={`replacement-line-mapping-${request.key.replace(/[^a-z0-9]+/gi, "-")}`}
+                            label={`Choose replacement line handling for ${request.title}`}
+                            triggerLabel={selectedOption ? "Change handling" : "Choose line handling"}
+                            options={options.map((option) => ({ id: option.value, label: option.label, description: option.description }))}
+                            selectedIds={selectedId ? new Set([selectedId]) : new Set()}
+                            onAdd={(ids) => {
+                              const selected = ids[0];
+                              if (!selected) return;
+                              setPendingReplacementMappings((current) => ({ ...current, [request.key]: selected }));
+                            }}
+                            multi={false}
+                            hideSelected={false}
+                            searchPlaceholder="Search products, variants, SKUs, tip, or custom"
+                            emptyText="No matching products or variants found."
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <s-text-field label="Type REPLACE to apply after review" name="replacementConfirmation" />
+                <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
+                  <s-button type="button" variant="secondary" disabled={busy || !allReplacementMappingsSelected} onClick={() => submitWithIntent(replacementMappingFormRef.current, "dry-run-replace-snapshots")}>Dry run with mappings</s-button>
+                  <s-button type="button" tone="critical" variant="secondary" disabled={busy || !allReplacementMappingsSelected} onClick={() => submitWithIntent(replacementMappingFormRef.current, "replace-snapshots")}>Replace with mappings</s-button>
+                </div>
+              </Form>
+            ) : null}
+            {hasReviewedReplacement ? (
+              <Form method="post" style={{ display: "grid", gap: "1rem" }}>
+                <input type="hidden" name="sourceName" value={replacementActionData?.sourceName ?? ""} />
+                <input type="hidden" name="replacementReason" value={replacementActionData?.replacementReason ?? ""} />
+                {replacementActionData?.forceClosed ? <input type="hidden" name="forceClosed" value="on" /> : null}
+                <textarea name="payload" value={replacementActionData?.importPayload ?? ""} readOnly hidden />
+                {Object.entries(replacementActionData?.mappingOverrides ?? {}).map(([key, value]) => (
+                  <input key={key} type="hidden" name={`variantMapping:${key}`} value={value} />
+                ))}
+                <s-banner tone="success">
+                  <s-text>Replacement preflight is ready. Review the summary above, then confirm to create new immutable snapshot revisions.</s-text>
+                </s-banner>
+                <s-text-field label="Type REPLACE to apply reviewed replacements" name="replacementConfirmation" />
+                <div>
+                  <s-button type="button" tone="critical" variant="secondary" disabled={busy} onClick={() => submitWithIntent(reviewedReplacementFormRef.current, "replace-snapshots")}>Replace reviewed snapshots</s-button>
+                </div>
+              </Form>
+            ) : null}
           </div>
         </s-section>
 

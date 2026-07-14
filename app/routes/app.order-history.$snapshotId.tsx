@@ -9,6 +9,7 @@ import { HelpText } from "../components/HelpText";
 import { prisma } from "../db.server";
 import { createManualAdjustment } from "../services/adjustmentService.server";
 import { saveOrderArtistAttribution } from "../services/orderArtistAttribution.server";
+import { mergeOrderLifecycle } from "../services/orderLifecycle.server";
 import { authenticateAdminRequest } from "../utils/admin-auth.server";
 import { shopifyAdminOrderUrl, shopifyAdminVariantUrl } from "../utils/shopify-admin-url";
 import { useAppLocalization } from "../utils/use-app-localization";
@@ -35,6 +36,11 @@ const artistAttributionSchema = z.object({
   persistCustomerAssociation: z.enum(["on"]).optional(),
 });
 
+const lifecycleReviewSchema = z.object({
+  lifecycleState: z.enum(["active", "fully_refunded", "canceled"]),
+  confirmLifecycle: z.literal("on", { error: "Confirm that you reviewed the order in Shopify." }),
+});
+
 function sumDecimals(values: Array<Prisma.Decimal | null | undefined>, zero: Prisma.Decimal) {
   return values.reduce<Prisma.Decimal>((sum, value) => sum.add(value ?? zero), zero);
 }
@@ -51,17 +57,59 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent")?.toString();
 
-  if (intent !== "create-manual-adjustment" && intent !== "save-artist-attribution") {
+  if (intent !== "create-manual-adjustment" && intent !== "save-artist-attribution" && intent !== "resolve-lifecycle") {
     return jsonResponse({ ok: false, message: "Unknown action." }, { status: 400 });
   }
 
   const snapshot = await prisma.orderSnapshot.findFirst({
     where: { id: snapshotId, shopId },
-    select: { id: true },
+    select: { id: true, orderRecordId: true },
   });
 
   if (!snapshot) {
     return jsonResponse({ ok: false, message: "Snapshot not found." }, { status: 404 });
+  }
+
+  if (intent === "resolve-lifecycle") {
+    const parsed = lifecycleReviewSchema.safeParse({
+      lifecycleState: formData.get("lifecycleState")?.toString(),
+      confirmLifecycle: formData.get("confirmLifecycle")?.toString(),
+    });
+    if (!parsed.success) {
+      return jsonResponse(
+        { ok: false, message: parsed.error.issues[0]?.message ?? "Choose a lifecycle status." },
+        { status: 400 },
+      );
+    }
+
+    const payload = {
+      financial_status: parsed.data.lifecycleState === "active"
+        ? "paid"
+        : parsed.data.lifecycleState === "fully_refunded"
+          ? "refunded"
+          : "voided",
+      cancelled_at: parsed.data.lifecycleState === "canceled" ? new Date().toISOString() : null,
+    };
+    await prisma.$transaction(async (tx) => {
+      await mergeOrderLifecycle({
+        shopId,
+        orderRecordId: snapshot.orderRecordId,
+        payload,
+        source: "merchant_review",
+        db: tx as unknown as typeof prisma,
+      });
+      await tx.auditLog.create({
+        data: {
+          shopId,
+          entity: "OrderLifecycle",
+          entityId: snapshot.orderRecordId,
+          action: "LIFECYCLE_MERCHANT_CONFIRMED",
+          actor: "merchant",
+          payload: { state: parsed.data.lifecycleState, snapshotId },
+        },
+      });
+    });
+    return jsonResponse({ ok: true, message: "Order lifecycle confirmed. Production usage updates immediately; rebuild the affected reporting period to refresh derived Cause and Artist obligations." });
   }
 
   if (intent === "save-artist-attribution") {
@@ -152,6 +200,13 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const snapshot = await prisma.orderSnapshot.findFirst({
     where: { id: snapshotId, shopId },
     include: {
+      orderRecord: {
+        select: {
+          lifecycle: {
+            select: { state: true, financialStatus: true, fulfillmentStatus: true, reviewReason: true, source: true },
+          },
+        },
+      },
       packageAllocations: {
         orderBy: { createdAt: "asc" },
       },
@@ -200,6 +255,13 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
       shippingAmount: snapshot.shippingAmount.toString(),
       salesTaxCollected: snapshot.salesTaxCollected.toString(),
       totalAmount: snapshot.totalAmount.toString(),
+      lifecycle: {
+        state: snapshot.orderRecord.lifecycle?.state ?? "unknown",
+        financialStatus: snapshot.orderRecord.lifecycle?.financialStatus ?? null,
+        fulfillmentStatus: snapshot.orderRecord.lifecycle?.fulfillmentStatus ?? null,
+        reviewReason: snapshot.orderRecord.lifecycle?.reviewReason ?? "Lifecycle evidence is missing.",
+        source: snapshot.orderRecord.lifecycle?.source ?? "unknown",
+      },
       canPersistCustomerAssociation: Boolean(snapshot.shopifyCustomerId || snapshot.normalizedCustomerEmailHash),
       artistAttribution: snapshot.artistAttribution
         ? {
@@ -374,10 +436,14 @@ export default function OrderSnapshotDetailPage() {
   const { artists, snapshot } = useLoaderData<typeof loader>();
   const adjustmentFetcher = useFetcher<{ ok: boolean; message: string }>();
   const attributionFetcher = useFetcher<{ ok: boolean; message: string }>();
+  const lifecycleFetcher = useFetcher<{ ok: boolean; message: string }>();
   const { formatMoney } = useAppLocalization();
   const [selectedAttributionArtistId, setSelectedAttributionArtistId] = useState(snapshot.artistAttribution?.artistId ?? "");
   const selectedAttributionArtist =
     artists.find((artist: (typeof artists)[number]) => artist.id === selectedAttributionArtistId) ?? null;
+  const lifecycleReviewDefault = snapshot.lifecycle.state === "fully_refunded" || snapshot.lifecycle.state === "canceled"
+    ? snapshot.lifecycle.state
+    : "active";
   const effectiveNetContributionTotal = snapshot.lines.reduce(
     (sum: number, line: (typeof snapshot.lines)[number]) => sum + moneyNumber(line.effectiveNetContribution),
     0,
@@ -398,8 +464,13 @@ export default function OrderSnapshotDetailPage() {
             <s-text>{attributionFetcher.data.message}</s-text>
           </s-banner>
         ) : null}
+        {lifecycleFetcher.data ? (
+          <s-banner tone={lifecycleFetcher.data.ok ? "success" : "critical"}>
+            <s-text>{lifecycleFetcher.data.message}</s-text>
+          </s-banner>
+        ) : null}
         <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0, 0, 0, 0)", whiteSpace: "nowrap", border: 0 }}>
-          {adjustmentFetcher.data?.message ?? attributionFetcher.data?.message ?? ""}
+          {adjustmentFetcher.data?.message ?? attributionFetcher.data?.message ?? lifecycleFetcher.data?.message ?? ""}
         </div>
 
         <s-section heading="Snapshot metadata">
@@ -428,6 +499,39 @@ export default function OrderSnapshotDetailPage() {
                 <a href={snapshot.shopifyAdminUrl} target="_blank" rel="noreferrer">Open order in Shopify</a>
               </div>
             ) : null}
+          </div>
+        </s-section>
+
+        <s-section heading="Order lifecycle review">
+          <div style={{ display: "grid", gap: "1rem", maxWidth: "42rem" }}>
+            {snapshot.lifecycle.state === "unknown" || snapshot.lifecycle.state === "review_required" ? (
+              <s-banner tone="warning">
+                <s-text>This order is excluded from finalized reporting and production usage until its lifecycle is confirmed. {snapshot.lifecycle.reviewReason}</s-text>
+              </s-banner>
+            ) : (
+              <s-banner tone="info">
+                <s-text>Current lifecycle: {snapshot.lifecycle.state.replaceAll("_", " ")} ({snapshot.lifecycle.source.replaceAll("_", " ")}).</s-text>
+              </s-banner>
+            )}
+            <HelpText>Review the order in Shopify, then confirm whether its merchandise remains active, was fully refunded, or was canceled. Partially refunded orders require Shopify line-level refund evidence and should be repaired through reconciliation or snapshot replacement. This directly changes reporting eligibility.</HelpText>
+            <lifecycleFetcher.Form method="post" style={{ display: "grid", gap: "0.75rem" }}>
+              <input type="hidden" name="intent" value="resolve-lifecycle" />
+              <label style={{ display: "grid", gap: "0.35rem" }}>
+                <span>Confirmed lifecycle status</span>
+                <select name="lifecycleState" defaultValue={lifecycleReviewDefault}>
+                  <option value="active">Active / paid</option>
+                  <option value="fully_refunded">Fully refunded</option>
+                  <option value="canceled">Canceled / voided</option>
+                </select>
+              </label>
+              <label style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+                <input type="checkbox" name="confirmLifecycle" />
+                <span>I reviewed this order in Shopify and confirm this status.</span>
+              </label>
+              <div>
+                <s-button type="submit" variant="primary" disabled={lifecycleFetcher.state !== "idle"}>Save lifecycle status</s-button>
+              </div>
+            </lifecycleFetcher.Form>
           </div>
         </s-section>
 
