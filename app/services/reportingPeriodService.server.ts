@@ -209,6 +209,7 @@ export async function materializeCauseAllocationsForPeriod(
     },
     select: {
       netContribution: true,
+      shopifyProductId: true,
       adjustments: {
         select: { netContribAdj: true },
       },
@@ -217,7 +218,9 @@ export async function materializeCauseAllocationsForPeriod(
           causeId: true,
           causeName: true,
           is501c3: true,
+          percentage: true,
           amount: true,
+          source: true,
         },
       },
     },
@@ -236,6 +239,32 @@ export async function materializeCauseAllocationsForPeriod(
       })
     : Promise.resolve({ _sum: { amount: null } })]);
 
+  const shopifyProductIds = Array.from(new Set(
+    snapshotLines
+      .map((line) => line.shopifyProductId)
+      .filter((productId): productId is string => Boolean(productId)),
+  ));
+  const currentProductAssignments = shopifyProductIds.length > 0 && db.productCauseAssignment?.findMany
+    ? await db.productCauseAssignment.findMany({
+        where: { shopId, shopifyProductId: { in: shopifyProductIds } },
+        select: {
+          shopifyProductId: true,
+          causeId: true,
+          percentage: true,
+          cause: { select: { name: true, is501c3: true } },
+        },
+      })
+    : [];
+  const currentAssignmentsByProductId = new Map<string, typeof currentProductAssignments>();
+  for (const productId of shopifyProductIds) {
+    currentAssignmentsByProductId.set(productId, []);
+  }
+  for (const assignment of currentProductAssignments) {
+    const assignments = currentAssignmentsByProductId.get(assignment.shopifyProductId) ?? [];
+    assignments.push(assignment);
+    currentAssignmentsByProductId.set(assignment.shopifyProductId, assignments);
+  }
+
   const allocations = new Map<string, AllocationDraft>();
 
   for (const line of snapshotLines) {
@@ -244,7 +273,37 @@ export async function materializeCauseAllocationsForPeriod(
       ZERO,
     );
 
-    for (const allocation of line.causeAllocations) {
+    const currentAssignments = line.shopifyProductId
+      ? currentAssignmentsByProductId.get(line.shopifyProductId)
+      : undefined;
+    const canRefreshProductRouting = Boolean(
+      currentAssignments &&
+      line.causeAllocations.length > 0 &&
+      line.causeAllocations.every((allocation) =>
+        allocation.source === "product" || allocation.source === "product_override",
+      ),
+    );
+    const originalPercentageTotal = line.causeAllocations.reduce(
+      (sum, allocation) => sum.add(allocation.percentage ?? ZERO),
+      ZERO,
+    );
+    const originalAllocationTotal = line.causeAllocations.reduce(
+      (sum, allocation) => sum.add(allocation.amount),
+      ZERO,
+    );
+    const refreshedAllocationBase = originalPercentageTotal.greaterThan(ZERO)
+      ? originalAllocationTotal.mul(100).div(originalPercentageTotal)
+      : ZERO;
+    const routedAllocations = canRefreshProductRouting
+      ? currentAssignments!.map((assignment) => ({
+          causeId: assignment.causeId,
+          causeName: assignment.cause.name,
+          is501c3: assignment.cause.is501c3,
+          amount: refreshedAllocationBase.mul(assignment.percentage).div(100),
+        }))
+      : line.causeAllocations;
+
+    for (const allocation of routedAllocations) {
       addAllocation(allocations, {
         causeId: allocation.causeId,
         causeName: allocation.causeName,
@@ -296,6 +355,7 @@ export async function materializeCauseAllocationsForPeriod(
     select: {
       id: true,
       causeId: true,
+      disbursed: true,
       _count: {
         select: { applications: true },
       },
@@ -313,7 +373,7 @@ export async function materializeCauseAllocationsForPeriod(
         data: {
           causeName: row.causeName,
           is501c3: row.is501c3,
-          allocated: row.allocated,
+          allocated: Prisma.Decimal.max(row.allocated, existing.disbursed ?? ZERO),
           taxReserveDeduction: row.taxReserveDeduction,
         },
       });
@@ -331,6 +391,19 @@ export async function materializeCauseAllocationsForPeriod(
       where: {
         shopId,
         id: { in: staleUnpaidAllocationIds },
+      },
+    });
+  }
+
+  const stalePaidAllocations = existingAllocations.filter(
+    (allocation) => !rowCauseIds.has(allocation.causeId) && allocation._count.applications > 0,
+  );
+  for (const allocation of stalePaidAllocations) {
+    await db.causeAllocation.updateMany({
+      where: { id: allocation.id, shopId },
+      data: {
+        allocated: allocation.disbursed ?? ZERO,
+        taxReserveDeduction: ZERO,
       },
     });
   }

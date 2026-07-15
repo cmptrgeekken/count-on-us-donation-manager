@@ -17,6 +17,7 @@ import {
   disbursementErrorCodes,
   logDisbursement,
   MAX_RECEIPT_BYTES,
+  updateDisbursement,
 } from "../services/disbursementService.server";
 import { closeReportingPeriod } from "../services/reportingPeriodService.server";
 import { buildReportingSummary } from "../services/reportingSummary.server";
@@ -48,6 +49,101 @@ function subtractCurrency(left: string, right: string) {
 
 function sumCurrency(values: string[]) {
   return values.reduce((sum, value) => sum + moneyNumber(value), 0).toFixed(2);
+}
+
+const autocompleteFieldStyle: CSSProperties = {
+  width: "100%",
+  boxSizing: "border-box",
+  padding: "0.68rem 0.75rem",
+  border: "1px solid var(--p-color-border, #d2d5d8)",
+  borderRadius: "0.6rem",
+  background: "var(--p-color-bg-surface, #fff)",
+  color: "var(--p-color-text, #303030)",
+  font: "inherit",
+};
+
+function PaymentMethodAutocomplete({
+  id,
+  methods,
+  defaultValue = "",
+}: {
+  id: string;
+  methods: string[];
+  defaultValue?: string;
+}) {
+  const [value, setValue] = useState(defaultValue);
+  const [open, setOpen] = useState(false);
+  const normalized = value.trim().toLowerCase();
+  const matches = methods.filter((method) =>
+    !normalized || method.toLowerCase().includes(normalized),
+  );
+
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        id={id}
+        name="paymentMethod"
+        role="combobox"
+        aria-autocomplete="list"
+        aria-expanded={open}
+        aria-controls={`${id}-options`}
+        value={value}
+        onFocus={() => setOpen(true)}
+        onChange={(event) => {
+          setValue(event.currentTarget.value);
+          setOpen(true);
+        }}
+        onBlur={() => window.setTimeout(() => setOpen(false), 100)}
+        placeholder="ACH, check, wire..."
+        style={autocompleteFieldStyle}
+      />
+      {open && matches.length > 0 ? (
+        <div
+          id={`${id}-options`}
+          role="listbox"
+          style={{
+            position: "absolute",
+            zIndex: 20,
+            top: "calc(100% + 0.35rem)",
+            left: 0,
+            right: 0,
+            overflow: "hidden",
+            border: "1px solid var(--p-color-border, #d2d5d8)",
+            borderRadius: "0.75rem",
+            background: "var(--p-color-bg-surface, #fff)",
+            boxShadow: "0 12px 24px rgba(0, 0, 0, 0.12)",
+          }}
+        >
+          {matches.map((method) => (
+            <button
+              key={method}
+              type="button"
+              role="option"
+              aria-selected={method === value}
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                setValue(method);
+                setOpen(false);
+              }}
+              style={{
+                width: "100%",
+                padding: "0.7rem 0.85rem",
+                border: 0,
+                borderBottom: "1px solid var(--p-color-border-subdued, #ebebeb)",
+                background: "var(--p-color-bg-surface, #fff)",
+                color: "inherit",
+                textAlign: "left",
+                cursor: "pointer",
+                font: "inherit",
+              }}
+            >
+              {method}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function isGreaterThanZero(value: string | null | undefined) {
@@ -89,7 +185,7 @@ type AllocationRow = {
   disbursed: string;
   remaining: string;
   details: Array<{
-    kind: "order_line" | "true_up";
+    kind: "order_line" | "true_up" | "tax_reserve";
     label: string | null;
     orderSnapshotId?: string;
     shopifyOrderId?: string;
@@ -137,7 +233,7 @@ type DisbursementRow = {
   extraContributionAmount: string;
   feesCoveredAmount: string;
   paidAt: string;
-  paymentMethod: string;
+  paymentMethod: string | null;
   referenceId: string | null;
   receiptUrl: string | null;
   applications: Array<{
@@ -276,10 +372,6 @@ const disbursementSchema = z.object({
     .string()
     .trim()
     .refine((value) => value === "" || (!Number.isNaN(Number(value)) && Number(value) >= 0), "Allocated amount must be 0 or greater."),
-  extraContributionAmount: z
-    .string()
-    .trim()
-    .refine((value) => value === "" || (!Number.isNaN(Number(value)) && Number(value) >= 0), "Extra contribution must be 0 or greater."),
   feesCoveredAmount: z
     .string()
     .trim()
@@ -289,9 +381,12 @@ const disbursementSchema = z.object({
     .trim()
     .min(1, "Paid date is required.")
     .refine((value) => !Number.isNaN(Date.parse(value)), "Paid date must be a valid date."),
-  paymentMethod: z.string().trim().min(1, "Payment method is required."),
+  paymentMethod: z.string().trim().optional(),
   referenceId: z.string().trim().optional(),
   receipt: z.string().trim().optional(),
+});
+const editDisbursementSchema = disbursementSchema.extend({
+  disbursementId: z.string().uuid("Disbursement id is invalid."),
 });
 
 const artistPaymentSchema = z.object({
@@ -357,7 +452,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const url = new URL(request.url);
   const requestedPeriodId = url.searchParams.get("periodId") ?? "";
   const reporting = await buildReportingSummary(shopId, requestedPeriodId);
-  const analyticalRecalculationRun = reporting.selectedPeriodId
+  const [analyticalRecalculationRun, paymentMethodRows] = await Promise.all([reporting.selectedPeriodId
     ? await prisma.analyticalRecalculationRun.findFirst({
         where: {
           shopId,
@@ -374,10 +469,19 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
           summary: true,
         },
       })
-    : null;
+    : null,
+  prisma.disbursement.findMany({
+    where: { shopId, paymentMethod: { not: null } },
+    distinct: ["paymentMethod"],
+    orderBy: { createdAt: "desc" },
+    select: { paymentMethod: true },
+  })]);
 
   return jsonResponse({
     ...reporting,
+    paymentMethods: paymentMethodRows
+      .map((row) => row.paymentMethod?.trim())
+      .filter((method): method is string => Boolean(method)),
     analyticalRecalculationRun: analyticalRecalculationRun
       ? {
           ...analyticalRecalculationRun,
@@ -494,7 +598,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       periodId: formData.get("periodId")?.toString() ?? "",
       causeId: formData.get("causeId")?.toString() ?? "",
       allocatedAmount: formData.get("allocatedAmount")?.toString() ?? "",
-      extraContributionAmount: formData.get("extraContributionAmount")?.toString() ?? "",
       feesCoveredAmount: formData.get("feesCoveredAmount")?.toString() ?? "",
       paidAt: formData.get("paidAt")?.toString() ?? "",
       paymentMethod: formData.get("paymentMethod")?.toString() ?? "",
@@ -544,7 +647,6 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         periodId: parsed.data.periodId,
         causeId: parsed.data.causeId,
         allocatedAmount: parsed.data.allocatedAmount || "0",
-        extraContributionAmount: parsed.data.extraContributionAmount || "0",
         feesCoveredAmount: parsed.data.feesCoveredAmount || "0",
         paidAt: new Date(parsed.data.paidAt),
         paymentMethod: parsed.data.paymentMethod,
@@ -564,17 +666,15 @@ export const action = async ({ request }: ActionFunctionArgs) => {
       const message = error instanceof Error ? error.message : "Unable to log disbursement.";
       const fieldErrors: ReportingActionData["fieldErrors"] =
         error instanceof DisbursementError
-          ? error.code === disbursementErrorCodes.ALLOCATED_EXCEEDS_REMAINING
+          ? error.code === disbursementErrorCodes.ZERO_TOTAL
             ? { allocatedAmount: [message] }
-            : error.code === disbursementErrorCodes.ZERO_TOTAL
-              ? { allocatedAmount: [message] }
-              : error.code === disbursementErrorCodes.RECEIPT_TOO_LARGE || error.code === disbursementErrorCodes.RECEIPT_INVALID_TYPE
-                ? { receipt: [message] }
-                : error.code === disbursementErrorCodes.PERIOD_NOT_CLOSED || error.code === disbursementErrorCodes.PERIOD_NOT_FOUND
-                  ? { periodId: [message] }
+            : error.code === disbursementErrorCodes.RECEIPT_TOO_LARGE || error.code === disbursementErrorCodes.RECEIPT_INVALID_TYPE
+              ? { receipt: [message] }
+              : error.code === disbursementErrorCodes.PERIOD_NOT_CLOSED || error.code === disbursementErrorCodes.PERIOD_NOT_FOUND
+                ? { periodId: [message] }
                 : error.code === disbursementErrorCodes.PAYABLE_NOT_FOUND
-                    ? { causeId: [message] }
-                    : undefined
+                  ? { causeId: [message] }
+                  : undefined
           : undefined;
 
       return jsonResponse(
@@ -585,6 +685,69 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         },
         { status: 400 },
       );
+    }
+  }
+
+  if (intent === "edit-disbursement") {
+    const receiptEntry = formData.get("receipt");
+    const parsed = editDisbursementSchema.safeParse({
+      disbursementId: formData.get("disbursementId")?.toString() ?? "",
+      periodId: formData.get("periodId")?.toString() ?? "",
+      causeId: formData.get("causeId")?.toString() ?? "",
+      allocatedAmount: formData.get("allocatedAmount")?.toString() ?? "",
+      feesCoveredAmount: formData.get("feesCoveredAmount")?.toString() ?? "",
+      paidAt: formData.get("paidAt")?.toString() ?? "",
+      paymentMethod: formData.get("paymentMethod")?.toString() ?? "",
+      referenceId: formData.get("referenceId")?.toString() ?? "",
+      receipt: receiptEntry instanceof File ? receiptEntry.name : "",
+    });
+    if (!parsed.success) {
+      return jsonResponse({
+        ok: false,
+        message: parsed.error.issues[0]?.message ?? "Invalid disbursement.",
+        fieldErrors: parsed.error.flatten().fieldErrors,
+      }, { status: 400 });
+    }
+    if (receiptEntry instanceof File && receiptEntry.size > MAX_RECEIPT_BYTES) {
+      return jsonResponse({
+        ok: false,
+        message: "Receipt file must be 10 MB or smaller.",
+        fieldErrors: { receipt: ["Receipt file must be 10 MB or smaller."] },
+      }, { status: 400 });
+    }
+    if (
+      receiptEntry instanceof File &&
+      receiptEntry.size > 0 &&
+      !ACCEPTED_RECEIPT_CONTENT_TYPES.has(receiptEntry.type || "application/octet-stream")
+    ) {
+      return jsonResponse({
+        ok: false,
+        message: "Receipt must be a PDF, PNG, or JPEG file.",
+        fieldErrors: { receipt: ["Receipt must be a PDF, PNG, or JPEG file."] },
+      }, { status: 400 });
+    }
+
+    try {
+      await updateDisbursement(shopId, {
+        disbursementId: parsed.data.disbursementId,
+        allocatedAmount: parsed.data.allocatedAmount || "0",
+        feesCoveredAmount: parsed.data.feesCoveredAmount || "0",
+        paidAt: new Date(parsed.data.paidAt),
+        paymentMethod: parsed.data.paymentMethod,
+        referenceId: parsed.data.referenceId,
+        receipt:
+          receiptEntry instanceof File && receiptEntry.size > 0
+            ? {
+                filename: receiptEntry.name,
+                contentType: receiptEntry.type || "application/octet-stream",
+                body: new Uint8Array(await receiptEntry.arrayBuffer()),
+              }
+            : null,
+      });
+      return jsonResponse({ ok: true, message: "Disbursement updated." });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to update disbursement.";
+      return jsonResponse({ ok: false, message }, { status: 400 });
     }
   }
 
@@ -752,7 +915,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 };
 
 export default function ReportingPage() {
-  const { periods, selectedPeriodId, summary, analyticalRecalculationRun } = useLoaderData<typeof loader>();
+  const { periods, selectedPeriodId, summary, analyticalRecalculationRun, paymentMethods } = useLoaderData<typeof loader>();
   const closeFetcher = useFetcher<ReportingActionData>();
   const disbursementFetcher = useFetcher<ReportingActionData>();
   const artistPaymentFetcher = useFetcher<ReportingActionData>();
@@ -766,12 +929,15 @@ export default function ReportingPage() {
   const closeDialogRef = useRef<HTMLDialogElement>(null);
   const artistPaymentDialogRef = useRef<HTMLDialogElement>(null);
   const taxTrueUpDialogRef = useRef<HTMLDialogElement>(null);
+  const editDisbursementDialogRef = useRef<HTMLDialogElement>(null);
   const disbursementFormRef = useRef<HTMLFormElement>(null);
   const artistPaymentFormRef = useRef<HTMLFormElement>(null);
   const trueUpFormRef = useRef<HTMLFormElement>(null);
   const [closeDialogOpen, setCloseDialogOpen] = useState(false);
   const [artistPaymentDialogOpen, setArtistPaymentDialogOpen] = useState(false);
   const [taxTrueUpDialogOpen, setTaxTrueUpDialogOpen] = useState(false);
+  const [editDisbursement, setEditDisbursement] = useState<DisbursementRow | null>(null);
+  const editDisbursementFetcher = useFetcher<ReportingActionData>();
   const [exportingFormat, setExportingFormat] = useState<"csv" | "pdf" | null>(null);
   const [exportError, setExportError] = useState("");
 
@@ -804,6 +970,17 @@ export default function ReportingPage() {
       dialog.close();
     }
   }, [taxTrueUpDialogOpen]);
+
+  useEffect(() => {
+    const dialog = editDisbursementDialogRef.current;
+    if (!dialog) return;
+    if (editDisbursement && !dialog.open) dialog.showModal();
+    if (!editDisbursement && dialog.open) dialog.close();
+  }, [editDisbursement]);
+
+  useEffect(() => {
+    if (editDisbursementFetcher.data?.ok) setEditDisbursement(null);
+  }, [editDisbursementFetcher.data]);
 
   useEffect(() => {
     if (disbursementFetcher.data?.ok) {
@@ -1002,7 +1179,6 @@ export default function ReportingPage() {
     disbursementOptions[0] ??
     null;
   const selectedTotalOutstandingAmount = floorCurrency(selectedDisbursementOption?.totalOutstanding ?? "0");
-  const selectedRemainingAmountInputMax = selectedTotalOutstandingAmount;
   const selectedArtistPaymentOption =
     artistPaymentOptions.find((option) => option.artistId === selectedArtistPaymentArtistId) ??
     artistPaymentOptions[0] ??
@@ -1352,18 +1528,17 @@ export default function ReportingPage() {
 
                     <div style={disbursementTwoColumnGridStyle}>
                       <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor="disbursement-allocated-amount">Allocated amount</label>
+                        <label htmlFor="disbursement-allocated-amount">Actual payout amount</label>
                         <input
                           id="disbursement-allocated-amount"
                           name="allocatedAmount"
                           type="number"
                           min="0"
-                          max={selectedRemainingAmountInputMax}
                           step="0.01"
                           style={disbursementFieldStyle}
                         />
                         <s-text color="subdued" style={disbursementHelpTextStyle}>
-                          Auto-applies FIFO against closed outstanding balances through this period. Max {formatMoney(selectedTotalOutstandingAmount)}.
+                          Up to {formatMoney(selectedTotalOutstandingAmount)} auto-applies to outstanding allocations. Any excess is recorded as an extra contribution.
                         </s-text>
                         {disbursementFetcher.data?.fieldErrors?.allocatedAmount?.map((message) => (
                           <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
@@ -1389,23 +1564,6 @@ export default function ReportingPage() {
 
                     <div style={disbursementTwoColumnGridStyle}>
                       <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor="disbursement-extra-contribution">Extra contribution</label>
-                        <input
-                          id="disbursement-extra-contribution"
-                          name="extraContributionAmount"
-                          type="number"
-                          min="0"
-                          step="0.01"
-                          style={disbursementFieldStyle}
-                        />
-                        <s-text color="subdued" style={disbursementHelpTextStyle}>
-                          Additional gift above the allocated amount. Does not reduce future allocations.
-                        </s-text>
-                        {disbursementFetcher.data?.fieldErrors?.extraContributionAmount?.map((message) => (
-                          <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
-                        ))}
-                      </div>
-                      <div style={{ display: "grid", gap: "0.35rem" }}>
                         <label htmlFor="disbursement-fees-covered">Fees covered</label>
                         <input
                           id="disbursement-fees-covered"
@@ -1426,14 +1584,8 @@ export default function ReportingPage() {
 
                     <div style={disbursementTwoColumnGridStyle}>
                       <div style={{ display: "grid", gap: "0.35rem" }}>
-                        <label htmlFor="disbursement-method">Payment method</label>
-                        <input
-                          id="disbursement-method"
-                          name="paymentMethod"
-                          type="text"
-                          placeholder="ACH, check, wire..."
-                          style={disbursementFieldStyle}
-                        />
+                        <label htmlFor="disbursement-method">Payment method (optional)</label>
+                        <PaymentMethodAutocomplete id="disbursement-method" methods={paymentMethods} />
                         {disbursementFetcher.data?.fieldErrors?.paymentMethod?.map((message) => (
                           <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
                         ))}
@@ -1492,11 +1644,13 @@ export default function ReportingPage() {
                     <s-table-header listSlot="secondary">Reference</s-table-header>
                     <s-table-header listSlot="secondary">Receipt</s-table-header>
                     <s-table-header listSlot="labeled" format="currency">Total paid</s-table-header>
+                    <s-table-header listSlot="secondary">Actions</s-table-header>
                   </s-table-header-row>
                   <s-table-body>
                     {disbursements.length === 0 ? (
                       <s-table-row>
                         <s-table-cell>No disbursements logged for this period.</s-table-cell>
+                        <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
@@ -1526,7 +1680,7 @@ export default function ReportingPage() {
                           <s-table-cell>{formatMoney(disbursement.allocatedAmount)}</s-table-cell>
                           <s-table-cell>{formatMoney(disbursement.extraContributionAmount)}</s-table-cell>
                           <s-table-cell>{formatMoney(disbursement.feesCoveredAmount)}</s-table-cell>
-                          <s-table-cell>{disbursement.paymentMethod}</s-table-cell>
+                          <s-table-cell>{disbursement.paymentMethod ?? "—"}</s-table-cell>
                           <s-table-cell>{disbursement.referenceId ?? "—"}</s-table-cell>
                           <s-table-cell>
                             {disbursement.receiptUrl ? (
@@ -1536,6 +1690,9 @@ export default function ReportingPage() {
                             ) : "—"}
                           </s-table-cell>
                           <s-table-cell>{formatMoney(disbursement.amount)}</s-table-cell>
+                          <s-table-cell>
+                            <s-button variant="secondary" onClick={() => setEditDisbursement(disbursement)}>Edit</s-button>
+                          </s-table-cell>
                         </s-table-row>
                       ))
                     )}
@@ -2219,18 +2376,17 @@ export default function ReportingPage() {
 
                       <div style={disbursementTwoColumnGridStyle}>
                         <div style={{ display: "grid", gap: "0.35rem" }}>
-                          <label htmlFor="disbursement-allocated-amount">Allocated amount</label>
+                          <label htmlFor="disbursement-allocated-amount">Actual payout amount</label>
                           <input
                             id="disbursement-allocated-amount"
                             name="allocatedAmount"
                             type="number"
                             min="0"
-                            max={selectedRemainingAmountInputMax}
                             step="0.01"
                             style={disbursementFieldStyle}
                           />
                           <s-text color="subdued" style={disbursementHelpTextStyle}>
-                            Auto-applies FIFO against closed outstanding balances through this period. Max {formatMoney(selectedTotalOutstandingAmount)}.
+                            Up to {formatMoney(selectedTotalOutstandingAmount)} auto-applies to outstanding allocations. Any excess is recorded as an extra contribution.
                           </s-text>
                           {disbursementFetcher.data?.fieldErrors?.allocatedAmount?.map((message) => (
                             <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
@@ -2256,23 +2412,6 @@ export default function ReportingPage() {
 
                       <div style={disbursementTwoColumnGridStyle}>
                         <div style={{ display: "grid", gap: "0.35rem" }}>
-                          <label htmlFor="disbursement-extra-contribution">Extra contribution</label>
-                          <input
-                            id="disbursement-extra-contribution"
-                            name="extraContributionAmount"
-                            type="number"
-                            min="0"
-                            step="0.01"
-                            style={disbursementFieldStyle}
-                          />
-                          <s-text color="subdued" style={disbursementHelpTextStyle}>
-                            Additional gift above the allocated amount. Does not reduce future allocations.
-                          </s-text>
-                          {disbursementFetcher.data?.fieldErrors?.extraContributionAmount?.map((message) => (
-                            <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
-                          ))}
-                        </div>
-                        <div style={{ display: "grid", gap: "0.35rem" }}>
                           <label htmlFor="disbursement-fees-covered">Fees covered</label>
                           <input
                             id="disbursement-fees-covered"
@@ -2293,14 +2432,8 @@ export default function ReportingPage() {
 
                       <div style={disbursementTwoColumnGridStyle}>
                         <div style={{ display: "grid", gap: "0.35rem" }}>
-                          <label htmlFor="disbursement-method">Payment method</label>
-                          <input
-                            id="disbursement-method"
-                            name="paymentMethod"
-                            type="text"
-                            placeholder="ACH, check, wire..."
-                            style={disbursementFieldStyle}
-                          />
+                          <label htmlFor="disbursement-method">Payment method (optional)</label>
+                          <PaymentMethodAutocomplete id="disbursement-method-empty" methods={paymentMethods} />
                           {disbursementFetcher.data?.fieldErrors?.paymentMethod?.map((message) => (
                             <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
                           ))}
@@ -2362,11 +2495,13 @@ export default function ReportingPage() {
                     <s-table-header listSlot="secondary">Reference</s-table-header>
                     <s-table-header listSlot="secondary">Receipt</s-table-header>
                     <s-table-header listSlot="labeled" format="currency">Total paid</s-table-header>
+                    <s-table-header listSlot="secondary">Actions</s-table-header>
                   </s-table-header-row>
                   <s-table-body>
                     {disbursements.length === 0 ? (
                       <s-table-row>
                         <s-table-cell>No disbursements logged for this period.</s-table-cell>
+                        <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
                         <s-table-cell></s-table-cell>
@@ -2396,7 +2531,7 @@ export default function ReportingPage() {
                           <s-table-cell>{formatMoney(disbursement.allocatedAmount)}</s-table-cell>
                           <s-table-cell>{formatMoney(disbursement.extraContributionAmount)}</s-table-cell>
                           <s-table-cell>{formatMoney(disbursement.feesCoveredAmount)}</s-table-cell>
-                          <s-table-cell>{disbursement.paymentMethod}</s-table-cell>
+                          <s-table-cell>{disbursement.paymentMethod ?? "—"}</s-table-cell>
                           <s-table-cell>{disbursement.referenceId ?? "—"}</s-table-cell>
                           <s-table-cell>
                             {disbursement.receiptUrl ? (
@@ -2406,6 +2541,9 @@ export default function ReportingPage() {
                             ) : "—"}
                           </s-table-cell>
                           <s-table-cell>{formatMoney(disbursement.amount)}</s-table-cell>
+                          <s-table-cell>
+                            <s-button variant="secondary" onClick={() => setEditDisbursement(disbursement)}>Edit</s-button>
+                          </s-table-cell>
                         </s-table-row>
                       ))
                     )}
@@ -2950,6 +3088,97 @@ export default function ReportingPage() {
           ) : null}
         </div>
       </s-page>
+
+      {editDisbursement ? (
+        <dialog
+          ref={editDisbursementDialogRef}
+          onClose={() => setEditDisbursement(null)}
+          style={{ border: "none", borderRadius: "1rem", padding: 0, maxWidth: "36rem", width: "calc(100% - 2rem)" }}
+        >
+          <editDisbursementFetcher.Form method="post" encType="multipart/form-data" style={{ display: "grid", gap: "0.9rem" }}>
+            <input type="hidden" name="intent" value="edit-disbursement" />
+            <input type="hidden" name="disbursementId" value={editDisbursement.id} />
+            <input type="hidden" name="periodId" value={selectedPeriod?.id ?? ""} />
+            <input type="hidden" name="causeId" value={editDisbursement.causeId} />
+            <div style={{ padding: "1.5rem", display: "grid", gap: "1rem" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "start" }}>
+                <div style={{ display: "grid", gap: "0.25rem" }}>
+                  <h2 style={{ margin: 0, fontSize: "1rem" }}>Edit disbursement</h2>
+                  <s-text color="subdued">{editDisbursement.causeName}</s-text>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Close edit disbursement dialog"
+                  onClick={() => setEditDisbursement(null)}
+                  style={{ border: "none", background: "transparent", fontSize: "1.5rem", lineHeight: 1, cursor: "pointer" }}
+                >×</button>
+              </div>
+              {editDisbursementFetcher.data && !editDisbursementFetcher.data.ok ? (
+                <s-banner tone="critical"><s-text>{editDisbursementFetcher.data.message}</s-text></s-banner>
+              ) : null}
+              <div style={disbursementTwoColumnGridStyle}>
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="edit-disbursement-amount">Actual payout amount</label>
+                  <input
+                    id="edit-disbursement-amount"
+                    name="allocatedAmount"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    defaultValue={sumCurrency([editDisbursement.allocatedAmount, editDisbursement.extraContributionAmount])}
+                    style={disbursementFieldStyle}
+                  />
+                  <s-text color="subdued">The applied and extra portions will be recalculated automatically.</s-text>
+                </div>
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="edit-disbursement-fees">Fees covered</label>
+                  <input id="edit-disbursement-fees" name="feesCoveredAmount" type="number" min="0" step="0.01" defaultValue={editDisbursement.feesCoveredAmount} style={disbursementFieldStyle} />
+                </div>
+              </div>
+              <div style={disbursementTwoColumnGridStyle}>
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="edit-disbursement-date">Paid date</label>
+                  <input id="edit-disbursement-date" name="paidAt" type="date" defaultValue={editDisbursement.paidAt.slice(0, 10)} style={disbursementFieldStyle} />
+                </div>
+                <div style={{ display: "grid", gap: "0.35rem" }}>
+                  <label htmlFor="edit-disbursement-method">Payment method (optional)</label>
+                  <PaymentMethodAutocomplete
+                    key={editDisbursement.id}
+                    id="edit-disbursement-method"
+                    methods={paymentMethods}
+                    defaultValue={editDisbursement.paymentMethod ?? ""}
+                  />
+                </div>
+              </div>
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor="edit-disbursement-reference">Reference id</label>
+                <input id="edit-disbursement-reference" name="referenceId" defaultValue={editDisbursement.referenceId ?? ""} style={disbursementFieldStyle} />
+              </div>
+              <div style={{ display: "grid", gap: "0.35rem" }}>
+                <label htmlFor="edit-disbursement-receipt">Receipt</label>
+                <input
+                  id="edit-disbursement-receipt"
+                  name="receipt"
+                  type="file"
+                  accept=".pdf,image/*"
+                  style={disbursementFileStyle}
+                />
+                <s-text color="subdued">Optional replacement. PDF or image, up to 10 MB.</s-text>
+                {editDisbursement.receiptUrl ? (
+                  <a href={editDisbursement.receiptUrl} target="_blank" rel="noreferrer">View current receipt</a>
+                ) : null}
+                {editDisbursementFetcher.data?.fieldErrors?.receipt?.map((message) => (
+                  <div key={message} style={{ color: "#8e1f0b", fontSize: "0.9rem" }}>{message}</div>
+                ))}
+              </div>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", flexWrap: "wrap" }}>
+                <s-button variant="secondary" onClick={() => setEditDisbursement(null)}>Cancel</s-button>
+                <s-button variant="primary" type="submit" disabled={editDisbursementFetcher.state !== "idle"}>Save changes</s-button>
+              </div>
+            </div>
+          </editDisbursementFetcher.Form>
+        </dialog>
+      ) : null}
 
       <dialog
         ref={closeDialogRef}

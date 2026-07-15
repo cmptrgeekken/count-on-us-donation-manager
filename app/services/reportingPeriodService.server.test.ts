@@ -268,6 +268,59 @@ describe("materializeCauseAllocationsForPeriod", () => {
     ]);
     expect(create).toHaveBeenCalledTimes(2);
   });
+
+  it("uses current product cause routing when rebuilding materialized allocations", async () => {
+    const db = {
+      orderSnapshotLine: {
+        findMany: vi.fn().mockResolvedValue([{
+          shopifyProductId: "gid://shopify/Product/1",
+          netContribution: decimal("50"),
+          adjustments: [],
+          causeAllocations: [{
+            causeId: "old-cause",
+            causeName: "Old Cause",
+            is501c3: true,
+            percentage: decimal("100"),
+            amount: decimal("50"),
+            source: "product",
+          }],
+        }]),
+      },
+      productCauseAssignment: {
+        findMany: vi.fn().mockResolvedValue([{
+          shopifyProductId: "gid://shopify/Product/1",
+          causeId: "new-cause",
+          percentage: decimal("100"),
+          cause: { name: "New Cause", is501c3: true },
+        }]),
+      },
+      shop: { findUnique: vi.fn().mockResolvedValue(null) },
+      businessExpense: { aggregate: vi.fn().mockResolvedValue({ _sum: { amount: null } }) },
+      causeAllocation: {
+        findMany: vi.fn().mockResolvedValue([]),
+        create: vi.fn().mockResolvedValue(undefined),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        deleteMany: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+
+    const result = await materializeCauseAllocationsForPeriod(
+      "shop-1",
+      {
+        id: "period-1",
+        startDate: new Date("2026-04-01T00:00:00.000Z"),
+        endDate: new Date("2026-04-08T00:00:00.000Z"),
+      },
+      db as any,
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({
+      causeId: "new-cause",
+      causeName: "New Cause",
+      allocated: decimal("50"),
+    }));
+  });
 });
 
 describe("materializeArtistAllocationsForPeriod", () => {
