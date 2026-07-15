@@ -82,6 +82,10 @@ function decimalString(value: Prisma.Decimal): string {
   return value.toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP).toString();
 }
 
+function tenthsString(value: Prisma.Decimal): string {
+  return value.toDecimalPlaces(1, Prisma.Decimal.ROUND_HALF_UP).toFixed(1);
+}
+
 function currencyString(value: Prisma.Decimal): string {
   return value.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).toFixed(2);
 }
@@ -206,6 +210,7 @@ export async function buildProductionUsageReport(
         mistakeBuffer = mistakeBuffer.add(line.mistakeBufferAmount.mul(fraction));
 
         for (const materialLine of line.materialLines) {
+          if (materialLine.materialType === "shipping") continue;
           const key = materialKey(materialLine);
           const existing = materials.get(key) ?? {
             key,
@@ -341,7 +346,7 @@ export async function buildProductionUsageReport(
       name: row.name,
       materialType: row.materialType,
       costingModel: row.costingModels.size === 1 ? [...row.costingModels][0] : row.costingModels.size > 1 ? "mixed" : null,
-      purchaseUnits: decimalString(row.purchaseUnits),
+      purchaseUnits: tenthsString(row.purchaseUnits),
       portionUses: decimalString(row.portionUses),
       rawQuantity: decimalString(row.rawQuantity),
       totalCost: currencyString(row.totalCost),
@@ -359,7 +364,7 @@ export async function buildProductionUsageReport(
       key: row.key,
       equipmentId: row.equipmentId,
       name: row.name,
-      hours: decimalString(row.minutes.div(60)),
+      hours: tenthsString(row.minutes.div(60)),
       uses: decimalString(row.uses),
       totalCost: currencyString(row.totalCost),
       consumablesCost: currencyString(row.consumablesCost),
@@ -413,7 +418,7 @@ export async function buildProductionUsageReport(
       reviewRequiredOrderCount,
       materialCost: currencyString(totalMaterialCost),
       equipmentCost: currencyString(totalEquipmentCost),
-      equipmentHours: decimalString(totalEquipmentMinutes.div(60)),
+      equipmentHours: tenthsString(totalEquipmentMinutes.div(60)),
       consumablesCost: currencyString(totalConsumablesCost),
       mistakeBuffer: currencyString(mistakeBuffer),
       packagingCost: currencyString(totalPackagingCost),

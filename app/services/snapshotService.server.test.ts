@@ -243,6 +243,32 @@ describe("createSnapshot", () => {
     });
   });
 
+  it("uses the webhook current subtotal after refunds without deducting the refund twice", async () => {
+    const db = createDb({ variant: null });
+
+    await createSnapshot("shop-1", {
+      admin_graphql_api_id: "gid://shopify/Order/partially-refunded",
+      financial_status: "partially_refunded",
+      subtotal_price: "25.00",
+      current_subtotal_price: "17.50",
+      refunded_amount: "7.50",
+      line_items: [{
+        id: "line-1",
+        title: "Earrings",
+        quantity: 1,
+        price: "25.00",
+        importLineKind: "custom",
+      }],
+    }, db);
+
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ subtotal: decimal("17.5"), netContribution: decimal("17.5") }),
+    });
+    expect(db.__spies.orderSnapshotCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ subtotalAmount: decimal("17.5") }),
+    });
+  });
+
   it("subtracts not-eligible marketplace fees once from fulfilled-line donation allocations", async () => {
     const costResult = {
       laborCost: decimal("0"),

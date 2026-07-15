@@ -313,6 +313,7 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
     const financialStatus = getCsvValue(row, "Financial Status", "Payment Status", "Order Financial Status");
     const fulfillmentStatus = getCsvValue(row, "Fulfillment Status", "Order Fulfillment Status");
     const subtotal = getCsvValue(row, "Subtotal", "Subtotal Price", "Current Subtotal Price");
+    const refundedAmount = getCsvValue(row, "Refunded Amount", "Refund Amount");
     const discounts = getCsvValue(row, "Discount Amount", "Discount", "Discounts", "Total Discounts");
     const total = getCsvValue(row, "Total", "Total Price", "Current Total Price");
     const shipping = getCsvValue(row, "Shipping", "Shipping Price", "Total Shipping");
@@ -333,9 +334,13 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
     if (cancelledAt) order.cancelled_at = cancelledAt;
     if (financialStatus) order.financial_status = financialStatus;
     if (fulfillmentStatus) order.fulfillment_status = fulfillmentStatus;
-    if (subtotal) {
-      order.subtotal_price = subtotal;
-      order.current_subtotal_price = subtotal;
+    if (subtotal) order.subtotal_price = subtotal;
+    if (refundedAmount) order.refunded_amount = refundedAmount;
+    if (order.subtotal_price) {
+      order.current_subtotal_price = Prisma.Decimal.max(
+        new Prisma.Decimal(order.subtotal_price).sub(new Prisma.Decimal(order.refunded_amount || 0)),
+        new Prisma.Decimal(0),
+      ).toString();
     }
     if (discounts) {
       order.total_discounts = discounts;

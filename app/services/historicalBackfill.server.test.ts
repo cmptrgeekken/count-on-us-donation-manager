@@ -130,6 +130,44 @@ describe("historical backfill imports", () => {
     ]);
   });
 
+  it("subtracts the refunded amount from the current CSV order subtotal", () => {
+    const rows = parseHistoricalImportRows(
+      [
+        "Name,Id,Financial Status,Subtotal,Refunded Amount,Lineitem quantity,Lineitem name,Lineitem price",
+        "#1302,7003,partially_refunded,25.00,7.50,1,Product A - Blue,25.00",
+      ].join("\n"),
+      "orders",
+    );
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        financial_status: "partially_refunded",
+        subtotal_price: "25.00",
+        current_subtotal_price: "17.5",
+        refunded_amount: "7.50",
+      }),
+    ]);
+  });
+
+  it("applies a refunded amount supplied on a continuation CSV row", () => {
+    const rows = parseHistoricalImportRows(
+      [
+        "Name,Id,Financial Status,Subtotal,Refunded Amount,Lineitem quantity,Lineitem name,Lineitem price",
+        "#1303,7004,partially_refunded,25.00,,1,Product A - Blue,25.00",
+        "#1303,,,,7.50,1,Product B - Red,10.00",
+      ].join("\n"),
+      "orders",
+    );
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        subtotal_price: "25.00",
+        current_subtotal_price: "17.5",
+        refunded_amount: "7.50",
+      }),
+    ]);
+  });
+
   it("reads Shopify lifecycle aliases from an order CSV", () => {
     const rows = parseHistoricalImportRows(
       [
