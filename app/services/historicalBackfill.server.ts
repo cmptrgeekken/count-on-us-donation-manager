@@ -644,7 +644,7 @@ export async function importHistoricalCharges(input: {
 }
 
 function getOrderId(order: ShopifyOrderPayload) {
-  return normalizeId(order.admin_graphql_api_id);
+  return toOrderGid(normalizeId(order.admin_graphql_api_id));
 }
 
 async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: DbClient) {
@@ -1008,7 +1008,22 @@ export async function importHistoricalOrders(input: {
   const db = input.db ?? prisma;
   const summary = createEmptySummary("orders", input.rows.length);
   const importedAt = new Date();
-  const preparedOrders: Array<{ order: ShopifyOrderPayload; periodId: string | null }> = [];
+  const preparedOrders: Array<{
+    order: ShopifyOrderPayload;
+    periodId: string | null;
+    replacement?: {
+      id: string;
+      periodId: string | null;
+      customerDisplayName: string | null;
+      shopifyCustomerId: string | null;
+      normalizedCustomerEmailHash: string | null;
+      subtotalAmount: Prisma.Decimal;
+      discountAmount: Prisma.Decimal;
+      shippingAmount: Prisma.Decimal;
+      totalAmount: Prisma.Decimal;
+      salesTaxCollected: Prisma.Decimal;
+    };
+  }> = [];
 
   for (const [index, rawRow] of input.rows.entries()) {
     const order = rawRow as ShopifyOrderPayload;
@@ -1021,14 +1036,24 @@ export async function importHistoricalOrders(input: {
       const existing = db.orderRecord?.findUnique
         ? (await db.orderRecord.findUnique({
             where: { shopId_shopifyOrderId: { shopId: input.shopId, shopifyOrderId } },
-            select: { currentSnapshot: { select: { id: true } } },
+            select: { currentSnapshot: { select: {
+              id: true, origin: true, periodId: true, customerDisplayName: true,
+              shopifyCustomerId: true, normalizedCustomerEmailHash: true,
+              subtotalAmount: true, discountAmount: true, shippingAmount: true,
+              totalAmount: true, salesTaxCollected: true,
+            } } },
           }))?.currentSnapshot ?? null
         : await db.orderSnapshot.findFirst({
             where: { shopId: input.shopId, shopifyOrderId },
-            select: { id: true },
+            select: {
+              id: true, origin: true, periodId: true, customerDisplayName: true,
+              shopifyCustomerId: true, normalizedCustomerEmailHash: true,
+              subtotalAmount: true, discountAmount: true, shippingAmount: true,
+              totalAmount: true, salesTaxCollected: true,
+            },
           });
 
-      if (existing) {
+      if (existing && existing.origin !== "reconciliation") {
         summary.skipped += 1;
         continue;
       }
@@ -1054,8 +1079,24 @@ export async function importHistoricalOrders(input: {
         summary.warnings.push({ row: index + 1, message: "No reporting period covers this order date. Import the matching payout period, then rebuild it to attach the order." });
       }
 
-      summary.created += 1;
-      preparedOrders.push({ order, periodId: period?.id ?? null });
+      if (existing) summary.updated += 1;
+      else summary.created += 1;
+      preparedOrders.push({
+        order: { ...order, admin_graphql_api_id: shopifyOrderId },
+        periodId: existing?.periodId ?? period?.id ?? null,
+        replacement: existing ? {
+          id: existing.id,
+          periodId: existing.periodId,
+          customerDisplayName: existing.customerDisplayName,
+          shopifyCustomerId: existing.shopifyCustomerId,
+          normalizedCustomerEmailHash: existing.normalizedCustomerEmailHash,
+          subtotalAmount: existing.subtotalAmount,
+          discountAmount: existing.discountAmount,
+          shippingAmount: existing.shippingAmount,
+          totalAmount: existing.totalAmount,
+          salesTaxCollected: existing.salesTaxCollected,
+        } : undefined,
+      });
     } catch (error) {
       summary.errors.push({ row: index + 1, message: error instanceof Error ? error.message : "Invalid order row." });
     }
@@ -1067,14 +1108,22 @@ export async function importHistoricalOrders(input: {
       db,
     );
 
-    for (const { order, periodId } of preparedOrders) {
+    for (const { order, periodId, replacement } of preparedOrders) {
       await createSnapshot(
         input.shopId,
         order,
         db,
         "historical_import",
         input.fetchImpl ?? fetch,
-        { importBatchId: batch.id, importedAt, periodId },
+        {
+          importBatchId: batch.id,
+          importedAt,
+          periodId,
+          replaceExistingSnapshotId: replacement?.id,
+          replacementReason: replacement ? "Historical import superseded reconciliation snapshot" : null,
+          replacementSource: replacement ? "historical_import" : null,
+          fallbackSnapshot: replacement,
+        },
       );
     }
 

@@ -300,6 +300,73 @@ describe("createSnapshot", () => {
     });
   });
 
+  it("reconciles signed Faire fees from the Shopify subtotal without turning them into revenue", async () => {
+    const db = createDb();
+    const zeroCostResult = {
+      laborCost: decimal("0"),
+      materialCost: decimal("0"),
+      packagingCost: decimal("0"),
+      equipmentCost: decimal("0"),
+      mistakeBufferAmount: decimal("0"),
+      podCost: decimal("0"),
+      podLines: [],
+      podCostEstimated: false,
+      podCostMissing: false,
+      totalCost: decimal("0"),
+      netContribution: decimal("180"),
+      materialLines: [],
+      equipmentLines: [],
+    };
+    resolveCosts.mockResolvedValue(zeroCostResult);
+
+    await createSnapshot("shop-1", {
+      admin_graphql_api_id: "gid://shopify/Order/faire-exact",
+      subtotal_price: "138.38",
+      total_discounts: "5.00",
+      line_items: [
+        {
+          id: "merchandise",
+          variant_id: 100,
+          product_id: 200,
+          title: "Faire merchandise",
+          quantity: 1,
+          price: "185.00",
+          importLineKind: "product",
+        },
+        {
+          id: "commission",
+          title: "Faire commission",
+          quantity: 1,
+          price: "-37.00",
+          importLineKind: "not_eligible",
+        },
+        {
+          id: "processing-fee",
+          title: "Faire payment processing fee",
+          quantity: 1,
+          price: "-4.62",
+          importLineKind: "not_eligible",
+        },
+      ],
+    }, db);
+
+    expect(db.__spies.orderSnapshotCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ subtotalAmount: decimal("138.38") }),
+    });
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenNthCalledWith(1, {
+      data: expect.objectContaining({ subtotal: decimal("180"), netContribution: decimal("180") }),
+    });
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({ subtotal: decimal("-37"), netContribution: decimal("-37") }),
+    });
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenNthCalledWith(3, {
+      data: expect.objectContaining({ subtotal: decimal("-4.62"), netContribution: decimal("-4.62") }),
+    });
+    expect(db.__spies.causeAllocationCreateMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ amount: decimal("69.19") })],
+    });
+  });
+
   it("uses native Shopify line fulfillment evidence for webhook snapshots", async () => {
     const db = createDb();
     resolveCosts.mockResolvedValue({
