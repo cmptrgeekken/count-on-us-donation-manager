@@ -752,6 +752,7 @@ export async function createSnapshot(
           select: {
             id: true,
             shopifyId: true,
+            donationRoutingMode: true,
           },
         })
       : [];
