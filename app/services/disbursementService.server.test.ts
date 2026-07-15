@@ -2,7 +2,7 @@ import { Prisma } from "@prisma/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TransactionCapableDbClient } from "../db.server";
 import type { ReceiptStorage } from "./receiptStorage.server";
-import { logDisbursement, MAX_RECEIPT_BYTES } from "./disbursementService.server";
+import { logDisbursement, MAX_RECEIPT_BYTES, updateDisbursement } from "./disbursementService.server";
 
 function decimal(value: string | number) {
   return new Prisma.Decimal(value);
@@ -101,8 +101,8 @@ describe("logDisbursement", () => {
           periodId: "period-1",
           causeId: "cause-1",
           amount: decimal("47.00"),
-          allocatedAmount: decimal("40.00"),
-          extraContributionAmount: decimal("5.00"),
+          allocatedAmount: decimal("45.00"),
+          extraContributionAmount: decimal("0.00"),
           feesCoveredAmount: decimal("2.00"),
           paymentMethod: "ACH",
           referenceId: "payout-123",
@@ -116,7 +116,7 @@ describe("logDisbursement", () => {
           shopId: "shop-1",
           disbursementId: "disbursement-1",
           causeAllocationId: "allocation-1",
-          amount: decimal("40.00"),
+          amount: decimal("45.00"),
         },
       ],
     });
@@ -124,14 +124,14 @@ describe("logDisbursement", () => {
       where: { id: "allocation-1", shopId: "shop-1" },
       data: {
         disbursed: {
-          increment: decimal("40.00"),
+          increment: decimal("45.00"),
         },
       },
     });
-    expect(result.remaining.toString()).toBe("35");
+    expect(result.remaining.toString()).toBe("30");
   });
 
-  it("rejects disbursements larger than the remaining allocation", async () => {
+  it("records payout above the remaining allocation as an extra contribution", async () => {
     const tx = {
       reportingPeriod: {
         findFirst: vi.fn().mockResolvedValue({
@@ -156,23 +156,40 @@ describe("logDisbursement", () => {
             },
           },
         ]),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      disbursement: {
+        create: vi.fn().mockResolvedValue({ id: "disbursement-1" }),
+      },
+      disbursementApplication: {
+        createMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: {
+        create: vi.fn().mockResolvedValue(undefined),
       },
     };
     const db = createDb(tx);
 
-    await expect(
-      logDisbursement(
+    const result = await logDisbursement(
         "shop-1",
         {
           periodId: "period-1",
           causeId: "cause-1",
           allocatedAmount: "10.00",
           paidAt: new Date("2026-04-08T00:00:00.000Z"),
-          paymentMethod: "ACH",
         },
         { db },
-      ),
-    ).rejects.toThrow("Allocated amount cannot exceed the remaining allocation.");
+      );
+
+    expect(tx.disbursement.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        amount: decimal("10"),
+        allocatedAmount: decimal("5"),
+        extraContributionAmount: decimal("5"),
+        paymentMethod: null,
+      }),
+    }));
+    expect(result.remaining.toString()).toBe("0");
   });
 
   it("cleans up uploaded receipts when the transaction fails", async () => {
@@ -534,5 +551,85 @@ describe("logDisbursement", () => {
       },
     });
     expect(result.remaining.toString()).toBe("25");
+  });
+});
+
+describe("updateDisbursement", () => {
+  it("reverses old applications and recalculates allocated versus extra amounts", async () => {
+    const tx = {
+      disbursement: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: "disbursement-1",
+          shopId: "shop-1",
+          periodId: "period-1",
+          causeId: "cause-1",
+          receiptFileKey: "old-receipt.pdf",
+          period: { id: "period-1", status: "CLOSED", endDate: new Date("2026-04-01T00:00:00.000Z") },
+          applications: [{ causeAllocationId: "allocation-1", amount: decimal("40") }],
+        }),
+        update: vi.fn().mockImplementation(({ data }) => Promise.resolve({
+          id: "disbursement-1",
+          periodId: "period-1",
+          causeId: "cause-1",
+          referenceId: null,
+          receiptFileKey: null,
+          ...data,
+        })),
+      },
+      causeAllocation: {
+        findMany: vi.fn().mockResolvedValue([{
+          id: "allocation-1",
+          periodId: "period-1",
+          causeId: "cause-1",
+          causeName: "Cause One",
+          is501c3: false,
+          allocated: decimal("100"),
+          disbursed: decimal("0"),
+          period: { startDate: new Date("2026-03-01T00:00:00.000Z"), endDate: new Date("2026-04-01T00:00:00.000Z") },
+        }]),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      disbursementApplication: {
+        deleteMany: vi.fn().mockResolvedValue({ count: 1 }),
+        createMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: { create: vi.fn().mockResolvedValue(undefined) },
+    };
+    const storage = createStorage();
+
+    const result = await updateDisbursement("shop-1", {
+      disbursementId: "disbursement-1",
+      allocatedAmount: "120",
+      feesCoveredAmount: "3",
+      paidAt: new Date("2026-04-10T00:00:00.000Z"),
+      paymentMethod: null,
+      receipt: {
+        filename: "replacement.pdf",
+        contentType: "application/pdf",
+        body: new TextEncoder().encode("replacement"),
+      },
+    }, { db: createDb(tx), storage });
+
+    expect(tx.causeAllocation.updateMany).toHaveBeenNthCalledWith(1, {
+      where: { id: "allocation-1", shopId: "shop-1" },
+      data: { disbursed: { decrement: decimal("40") } },
+    });
+    expect(tx.disbursement.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        amount: decimal("123"),
+        allocatedAmount: decimal("100"),
+        extraContributionAmount: decimal("20"),
+        paymentMethod: null,
+        receiptFileKey: expect.stringContaining("replacement.pdf"),
+      }),
+    }));
+    expect(result.remaining.toString()).toBe("0");
+    expect(storage.put).toHaveBeenCalledWith(expect.objectContaining({
+      key: expect.stringContaining("replacement.pdf"),
+    }));
+    expect(storage.delete).toHaveBeenCalledWith({ key: "old-receipt.pdf" });
+    expect(tx.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: "DISBURSEMENT_UPDATED" }),
+    }));
   });
 });
