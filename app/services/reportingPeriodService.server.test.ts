@@ -205,6 +205,69 @@ describe("materializeCauseAllocationsForPeriod", () => {
       },
     });
   });
+
+  it("withholds the estimated tax reserve from materialized cause allocations", async () => {
+    const create = vi.fn().mockResolvedValue(undefined);
+    const db = {
+      orderSnapshotLine: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            netContribution: decimal("100"),
+            adjustments: [],
+            causeAllocations: [
+              {
+                causeId: "cause-1",
+                causeName: "Cause One",
+                is501c3: true,
+                amount: decimal("60"),
+              },
+              {
+                causeId: "cause-2",
+                causeName: "Cause Two",
+                is501c3: false,
+                amount: decimal("40"),
+              },
+            ],
+          },
+        ]),
+      },
+      shop: {
+        findUnique: vi.fn().mockResolvedValue({
+          effectiveTaxRate: decimal("0.25"),
+          taxDeductionMode: "all_causes",
+        }),
+      },
+      businessExpense: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("0") } }),
+      },
+      causeAllocation: {
+        findMany: vi.fn().mockResolvedValue([]),
+        create,
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        deleteMany: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+
+    const result = await materializeCauseAllocationsForPeriod(
+      "shop-1",
+      {
+        id: "period-1",
+        startDate: new Date("2026-04-01T00:00:00.000Z"),
+        endDate: new Date("2026-04-08T00:00:00.000Z"),
+      },
+      db as any,
+    );
+
+    expect(result.map((row) => ({
+      causeId: row.causeId,
+      allocated: row.allocated.toString(),
+      taxReserveDeduction: row.taxReserveDeduction.toString(),
+    }))).toEqual([
+      { causeId: "cause-1", allocated: "45", taxReserveDeduction: "15" },
+      { causeId: "cause-2", allocated: "30", taxReserveDeduction: "10" },
+    ]);
+    expect(create).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("materializeArtistAllocationsForPeriod", () => {

@@ -1,6 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.server";
 import { countUnresolvedSettlementsForPeriod } from "./orderSettlement.server";
+import {
+  applyEstimatedTaxReserveToAllocations,
+  computeEstimatedTaxReserve,
+  normalizeTaxDeductionMode,
+} from "./taxReserve.server";
 
 const ZERO = new Prisma.Decimal(0);
 const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
@@ -188,7 +193,7 @@ export async function materializeCauseAllocationsForPeriod(
   period: { id: string; startDate: Date; endDate: Date },
   db: DbClient = prisma,
 ) {
-  const snapshotLines = await db.orderSnapshotLine.findMany({
+  const [snapshotLines, shop, expenseSummary] = await Promise.all([db.orderSnapshotLine.findMany({
     where: {
       shopId,
       snapshot: {
@@ -216,7 +221,20 @@ export async function materializeCauseAllocationsForPeriod(
         },
       },
     },
-  });
+  }), db.shop?.findUnique
+    ? db.shop.findUnique({
+        where: { shopId },
+        select: { effectiveTaxRate: true, taxDeductionMode: true },
+      })
+    : Promise.resolve(null), db.businessExpense?.aggregate
+    ? db.businessExpense.aggregate({
+        where: {
+          shopId,
+          expenseDate: { gte: period.startDate, lt: period.endDate },
+        },
+        _sum: { amount: true },
+      })
+    : Promise.resolve({ _sum: { amount: null } })]);
 
   const allocations = new Map<string, AllocationDraft>();
 
@@ -240,13 +258,34 @@ export async function materializeCauseAllocationsForPeriod(
     }
   }
 
-  const rows = Array.from(allocations.values()).map((allocation) => ({
+  const grossRows = Array.from(allocations.values());
+  const totalNetContribution = snapshotLines.reduce((sum, line) => {
+    const adjustmentTotal = line.adjustments.reduce(
+      (adjustmentSum, adjustment) => adjustmentSum.add(adjustment.netContribAdj),
+      ZERO,
+    );
+    return sum.add(line.netContribution).add(adjustmentTotal);
+  }, ZERO);
+  const taxEstimate = computeEstimatedTaxReserve({
+    totalNetContribution,
+    businessExpenseTotal: expenseSummary._sum.amount ?? ZERO,
+    allocations: grossRows,
+    effectiveTaxRate: shop?.effectiveTaxRate,
+    taxDeductionMode: shop?.taxDeductionMode,
+  });
+  const netRows = applyEstimatedTaxReserveToAllocations(
+    grossRows,
+    taxEstimate.estimatedTaxReserve,
+    normalizeTaxDeductionMode(shop?.taxDeductionMode),
+  );
+  const rows = netRows.map((allocation) => ({
     shopId,
     periodId: period.id,
     causeId: allocation.causeId,
     causeName: allocation.causeName,
     is501c3: allocation.is501c3,
     allocated: allocation.allocated,
+    taxReserveDeduction: allocation.taxReserveDeduction,
   }));
 
   const existingAllocations = await db.causeAllocation.findMany({
@@ -275,6 +314,7 @@ export async function materializeCauseAllocationsForPeriod(
           causeName: row.causeName,
           is501c3: row.is501c3,
           allocated: row.allocated,
+          taxReserveDeduction: row.taxReserveDeduction,
         },
       });
     } else {
