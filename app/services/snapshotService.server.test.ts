@@ -1178,6 +1178,13 @@ describe("createSnapshot", () => {
       }],
     }, db as never);
 
+    expect(db.product.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: {
+        id: true,
+        shopifyId: true,
+        donationRoutingMode: true,
+      },
+    }));
     expect(db.__spies.artistAllocationCreateMany).toHaveBeenCalled();
     expect(db.__spies.causeAllocationCreateMany).toHaveBeenCalledWith(
       expect.objectContaining({
