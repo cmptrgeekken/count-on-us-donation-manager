@@ -1,5 +1,9 @@
 import { prisma } from "../db.server";
-import { createSnapshot } from "./snapshotService.server";
+import {
+  createSnapshot,
+  replaceSnapshotForFulfillmentChange,
+  type ShopifyOrderPayload,
+} from "./snapshotService.server";
 
 type AdminContext = {
   graphql: (query: string, options?: { variables?: Record<string, unknown> }) => Promise<Response>;
@@ -21,6 +25,7 @@ type ReconciliationOrderNode = {
 type ReconciliationLineItemNode = {
   id: string;
   quantity: number;
+  unfulfilledQuantity?: number | null;
   currentUnitPriceSet?: {
     shopMoney?: { amount?: string | null } | null;
   } | null;
@@ -75,6 +80,7 @@ const RECONCILIATION_ORDER_LINE_ITEMS_QUERY = `#graphql
             title
             variantTitle
             quantity
+            unfulfilledQuantity
             currentUnitPriceSet {
               shopMoney {
                 amount
@@ -241,9 +247,7 @@ export async function runReconciliation(
         continue;
       }
 
-      const result = await createSnapshot(
-        shopId,
-        {
+      const snapshotPayload = {
           admin_graphql_api_id: order.id,
           name: order.name,
           created_at: order.createdAt ?? null,
@@ -264,11 +268,15 @@ export async function runReconciliation(
             variant_title: node.variantTitle ?? null,
             quantity: node.quantity,
             price: node.currentUnitPriceSet?.shopMoney?.amount ?? "0",
+            importLineKind: node.variant?.id
+              ? node.unfulfilledQuantity === 0 ? "product" : "pending"
+              : node.title?.trim().toLowerCase() === "tip" ? "tip" : "not_eligible",
           })),
-        },
-        db,
-        "reconciliation",
-      );
+        } satisfies ShopifyOrderPayload;
+      const replacement = await replaceSnapshotForFulfillmentChange(shopId, snapshotPayload, db);
+      const result = replacement.replaced
+        ? { created: true, snapshotId: replacement.snapshotId }
+        : await createSnapshot(shopId, snapshotPayload, db, "reconciliation");
 
       if (result.created) {
         created += 1;

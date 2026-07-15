@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   sendArtistSubmissionNotificationEmail: vi.fn(),
   sendPostPurchaseDonationEmail: vi.fn(),
   createSnapshot: vi.fn(),
+  replaceSnapshotForFulfillmentChange: vi.fn(),
+  processOrderUpdate: vi.fn(),
   runProviderSync: vi.fn(),
   syncCollection: vi.fn(),
   adminFactory: vi.fn(),
@@ -40,7 +42,7 @@ vi.mock("../services/financialBackfill.server", () => ({
 }));
 
 vi.mock("../services/adjustmentService.server", () => ({
-  processOrderUpdate: vi.fn(),
+  processOrderUpdate: mocks.processOrderUpdate,
   processRefund: vi.fn(),
 }));
 
@@ -70,6 +72,7 @@ vi.mock("../services/artistSubmissionNotification.server", () => ({
 
 vi.mock("../services/snapshotService.server", () => ({
   createSnapshot: mocks.createSnapshot,
+  replaceSnapshotForFulfillmentChange: mocks.replaceSnapshotForFulfillmentChange,
 }));
 
 vi.mock("../services/providerSync.server", () => ({
@@ -107,6 +110,7 @@ describe("registerAllProcessors", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.prisma.orderSnapshot.findMany.mockResolvedValue([]);
+    mocks.replaceSnapshotForFulfillmentChange.mockResolvedValue({ replaced: false });
   });
 
   it("fans daily reconciliation out into singleton per-shop jobs", async () => {
@@ -187,6 +191,22 @@ describe("registerAllProcessors", () => {
       snapshotId: "snapshot-1",
       contactEmail: "customer@example.com",
     });
+  });
+
+  it("uses a snapshot revision when an order update changes fulfillment eligibility", async () => {
+    const boss = createBoss();
+    mocks.replaceSnapshotForFulfillmentChange.mockResolvedValue({ replaced: true, snapshotId: "snapshot-2" });
+    await registerAllProcessors(boss as any);
+
+    await boss.workers.get("orders.updated")!([{
+      data: {
+        shopId: "shop-1",
+        payload: { admin_graphql_api_id: "gid://shopify/Order/1", line_items: [] },
+      },
+    }]);
+
+    expect(mocks.replaceSnapshotForFulfillmentChange).toHaveBeenCalledOnce();
+    expect(mocks.processOrderUpdate).not.toHaveBeenCalled();
   });
 
   it("logs and rethrows post-purchase email failures", async () => {

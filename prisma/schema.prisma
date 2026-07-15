@@ -225,6 +225,7 @@ model CostTemplate {
   description               String?
   defaultLaborMinutes       Decimal?       @db.Decimal(10, 4)
   defaultLaborRate          Decimal?       @db.Decimal(10, 4)
+  mistakeBuffer             Decimal?       @db.Decimal(5, 4)
   status                    String         @default("active")
   createdAt                 DateTime       @default(now())
   updatedAt                 DateTime       @updatedAt

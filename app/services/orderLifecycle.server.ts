@@ -63,8 +63,11 @@ export function deriveLifecycleState(payload: OrderLifecyclePayload): OrderLifec
     case "authorized":
     case "paid":
     case "partially_paid":
-    case "pending":
       return "active";
+    case "pending":
+      return normalizeLifecycleValue(payload.fulfillment_status) === "fulfilled"
+        ? "active"
+        : "review_required";
     default:
       return "unknown";
   }

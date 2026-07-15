@@ -33,7 +33,7 @@ import {
   parseOptionalPositiveWholeNumber,
   parseRequiredNonNegativeWholeNumber,
 } from "../utils/number-parsing";
-import { parseOptionalNonNegativeMoney } from "../utils/money-parsing";
+import { parseOptionalNonNegativeMoney, parseOptionalPercentInputToRate } from "../utils/money-parsing";
 import { normalizeFixedDecimalInput } from "../utils/input-formatting";
 import {
   defaultUsageModeForBasis,
@@ -57,6 +57,7 @@ const templateDraftSchema = z.object({
   defaultShippingTemplateId: z.string().nullable().optional(),
   defaultLaborMinutes: z.string(),
   defaultLaborRate: z.string(),
+  mistakeBuffer: z.string(),
   materialLines: z.array(z.object({
     id: z.string(),
     materialId: z.string().min(1),
@@ -83,6 +84,7 @@ function serializeTemplate(template: {
   defaultShippingTemplateId: string | null;
   defaultLaborMinutes: { toString(): string } | null;
   defaultLaborRate: { toString(): string } | null;
+  mistakeBuffer: { toString(): string } | null;
   description: string | null;
   status: string;
   materialLines: Array<{
@@ -112,6 +114,9 @@ function serializeTemplate(template: {
     defaultShippingTemplateId: template.defaultShippingTemplateId,
     defaultLaborMinutes: template.defaultLaborMinutes?.toString() ?? "",
     defaultLaborRate: template.defaultLaborRate?.toString() ?? "",
+    mistakeBuffer: template.mistakeBuffer
+      ? new Prisma.Decimal(template.mistakeBuffer.toString()).mul(100).toString()
+      : "",
     description: template.description ?? "",
     status: template.status,
     materialLines: template.materialLines.map((line) => ({
@@ -152,6 +157,7 @@ function buildTemplateDraft(template: ReturnType<typeof serializeTemplate>): Tem
     defaultShippingTemplateId: template.defaultShippingTemplateId,
     defaultLaborMinutes: template.defaultLaborMinutes,
     defaultLaborRate: template.defaultLaborRate,
+    mistakeBuffer: template.mistakeBuffer,
     materialLines: cloneDraft(template.materialLines),
     equipmentLines: cloneDraft(template.equipmentLines),
   };
@@ -340,6 +346,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
   const normalizedDefaultShippingTemplateId = draft.defaultShippingTemplateId?.trim() || null;
   let defaultLaborMinutes: number | null;
   let defaultLaborRate: Prisma.Decimal | null;
+  let mistakeBuffer: Prisma.Decimal | null;
 
   try {
     defaultLaborMinutes = template.type === "production"
@@ -347,6 +354,9 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
       : null;
     defaultLaborRate = template.type === "production"
       ? parseOptionalNonNegativeMoney(draft.defaultLaborRate, "Default labor rate")
+      : null;
+    mistakeBuffer = template.type === "production"
+      ? parseOptionalPercentInputToRate(draft.mistakeBuffer, "Mistake buffer")
       : null;
   } catch (error) {
     if (error instanceof Response) {
@@ -438,6 +448,7 @@ export const action = async ({ request, params }: ActionFunctionArgs) => {
         defaultShippingTemplateId: template.type === "production" ? normalizedDefaultShippingTemplateId : null,
         defaultLaborMinutes,
         defaultLaborRate,
+        mistakeBuffer,
       },
     });
     
@@ -1106,6 +1117,23 @@ export default function TemplateDetailPage() {
                   />
                 </div>
               </InlineStack>
+              <TextField
+                label="Mistake buffer (%)"
+                type="number"
+                min={0}
+                max={100}
+                step={0.01}
+                value={draft.mistakeBuffer}
+                onChange={(value) => setDraft((current) => ({ ...current, mistakeBuffer: value }))}
+                onBlur={() =>
+                  setDraft((current) => ({
+                    ...current,
+                    mistakeBuffer: normalizeFixedDecimalInput(current.mistakeBuffer),
+                  }))
+                }
+                autoComplete="off"
+                helpText="Variants using this template inherit this buffer unless they set a variant override. Leave blank to use the shop default."
+              />
             </BlockStack>
           </Card>
         )}

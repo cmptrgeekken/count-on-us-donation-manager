@@ -12,7 +12,7 @@ import { sendArtistSubmissionNotificationEmail } from "../services/artistSubmiss
 import { sendPostPurchaseDonationEmail } from "../services/postPurchaseEmail.server";
 import { runCustomerMerchandisingSync } from "../services/customerMerchandisingSync.server";
 import { runProviderSync } from "../services/providerSync.server";
-import { createSnapshot } from "../services/snapshotService.server";
+import { createSnapshot, replaceSnapshotForFulfillmentChange } from "../services/snapshotService.server";
 import { unauthenticated } from "../shopify.server";
 
 const QUEUES = [
@@ -155,6 +155,8 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
       const job = jobs[0];
       if (!job) return;
       const { shopId, payload } = job.data;
+      const replacement = await replaceSnapshotForFulfillmentChange(shopId, payload as any, prisma);
+      if (replacement.replaced) return;
       await processOrderUpdate(shopId, payload as any, prisma);
     },
   );

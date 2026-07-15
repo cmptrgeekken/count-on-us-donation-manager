@@ -56,6 +56,7 @@ describe("staged editor helpers", () => {
       defaultShippingTemplateId: "ship-1",
       defaultLaborMinutes: " 12 ",
       defaultLaborRate: "30.00",
+      mistakeBuffer: " 7.50 ",
       materialLines: [
         {
           id: "line-1",
@@ -78,6 +79,7 @@ describe("staged editor helpers", () => {
       defaultShippingTemplateId: "ship-1",
       defaultLaborMinutes: "12",
       defaultLaborRate: "30.00",
+      mistakeBuffer: "7.50",
       materialLines: [
         {
           id: "line-1",

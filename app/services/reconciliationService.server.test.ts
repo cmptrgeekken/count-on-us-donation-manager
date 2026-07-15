@@ -1,12 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runReconciliation } from "./reconciliationService.server";
 
-const { createSnapshot } = vi.hoisted(() => ({
+const { createSnapshot, replaceSnapshotForFulfillmentChange } = vi.hoisted(() => ({
   createSnapshot: vi.fn(),
+  replaceSnapshotForFulfillmentChange: vi.fn(),
 }));
 
 vi.mock("./snapshotService.server", () => ({
   createSnapshot,
+  replaceSnapshotForFulfillmentChange,
 }));
 
 function createResponse(payload: unknown) {
@@ -18,6 +20,7 @@ function createResponse(payload: unknown) {
 describe("runReconciliation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    replaceSnapshotForFulfillmentChange.mockResolvedValue({ replaced: false });
   });
 
   it("creates reconciliation-originated snapshots and records the run summary", async () => {
@@ -67,6 +70,7 @@ describe("runReconciliation", () => {
                         title: "Tee",
                         variantTitle: "Large",
                         quantity: 2,
+                        unfulfilledQuantity: 0,
                         currentUnitPriceSet: { shopMoney: { amount: "25.00" } },
                         variant: {
                           id: "gid://shopify/ProductVariant/100",
@@ -107,6 +111,7 @@ describe("runReconciliation", () => {
       "shop-1",
       expect.objectContaining({
         admin_graphql_api_id: "gid://shopify/Order/1",
+        line_items: [expect.objectContaining({ importLineKind: "product" })],
       }),
       db,
       "reconciliation",

@@ -31,13 +31,16 @@ describe("historical backfill imports", () => {
     });
 
     expect(summary.created).toBe(0);
-    expect(summary.errors).toEqual([{ row: 1, message: "Stable payout id is required." }]);
+    expect(summary.errors).toEqual([{
+      row: 1,
+      message: "Payout ID is missing. Use a Shopify Payments export with the Payout ID column, or add shopifyPayoutId to this row.",
+    }]);
     expect(db.reportingPeriod.upsert).not.toHaveBeenCalled();
   });
 
   it("parses import payloads as JSON arrays", () => {
     expect(parseHistoricalImportRows('[{"id":"payout-1"}]')).toEqual([{ id: "payout-1" }]);
-    expect(() => parseHistoricalImportRows('{"id":"payout-1"}')).toThrow("Import payload must be a JSON array.");
+    expect(() => parseHistoricalImportRows('{"id":"payout-1"}')).toThrow("The JSON payload must be an array of rows");
   });
 
   it("parses Shopify payment transaction CSVs into payout periods", () => {
@@ -145,6 +148,28 @@ describe("historical backfill imports", () => {
     ]);
   });
 
+  it("classifies CSV lines by fulfillment eligibility without mapping marketplace fees", () => {
+    const rows = parseHistoricalImportRows(
+      [
+        "Name,Id,Financial Status,Fulfillment Status,Lineitem quantity,Lineitem name,Lineitem price,Lineitem sku,Lineitem fulfillment status",
+        "#1302,7003,paid,unfulfilled,1,Product A - Blue,25.00,SKU-BLUE,pending",
+        "#1302,,,,1,FAIRE-COMMISSION,-3.75,FAIRE-COMMISSION,not_eligible",
+        "#1302,,,,1,Product B - Red,30.00,SKU-RED,fulfilled",
+      ].join("\n"),
+      "orders",
+    );
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        line_items: [
+          expect.objectContaining({ sku: "SKU-BLUE", importLineKind: "pending" }),
+          expect.objectContaining({ sku: "FAIRE-COMMISSION", price: "-3.75", importLineKind: "not_eligible" }),
+          expect.objectContaining({ sku: "SKU-RED", importLineKind: "product" }),
+        ],
+      }),
+    ]);
+  });
+
   it("requires Shopify GraphQL order ids for imported order snapshots", async () => {
     const db = {
       orderSnapshot: {
@@ -160,7 +185,10 @@ describe("historical backfill imports", () => {
     });
 
     expect(summary.created).toBe(0);
-    expect(summary.errors).toEqual([{ row: 1, message: "Order admin_graphql_api_id is required." }]);
+    expect(summary.errors).toEqual([{
+      row: 1,
+      message: "Order ID is missing. Use a Shopify Orders CSV with the ID column, or add admin_graphql_api_id to this JSON row.",
+    }]);
     expect(db.orderSnapshot.findFirst).not.toHaveBeenCalled();
   });
 
@@ -625,9 +653,10 @@ describe("historical backfill imports", () => {
 
     expect(blocked.updated).toBe(0);
     expect(blocked.skipped).toBe(1);
-    expect(blocked.errors).toEqual([
-      { row: 1, message: "Snapshot belongs to a closed period. Enable force replacement to replace it." },
-    ]);
+    expect(blocked.errors).toEqual([{
+      row: 1,
+      message: "This snapshot belongs to a closed period. Review the dry run, enable Force closed-period replacement, enter REPLACE, and rebuild the period afterward.",
+    }]);
     expect(blocked.replacementResults).toEqual([
       expect.objectContaining({
         existingSnapshotId: "snapshot-1",

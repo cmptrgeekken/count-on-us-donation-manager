@@ -879,6 +879,50 @@ describe("resolveCosts material cost methods", () => {
     expect(result.totalCost.toString()).toBe("26.7");
   });
 
+  it("uses the production template mistake buffer between variant and shop defaults", async () => {
+    const productionMaterial = createMaterial({
+      id: "fabric",
+      type: "production",
+      costingModel: "counted",
+      purchasePrice: "10",
+      purchaseQty: "1",
+    });
+    const config = {
+      laborMinutes: null,
+      laborRate: null,
+      mistakeBuffer: null,
+      productionTemplate: {
+        defaultLaborMinutes: null,
+        defaultLaborRate: null,
+        mistakeBuffer: decimal("0.15"),
+        defaultShippingTemplate: null,
+        materialLines: [{
+          id: "fabric-line",
+          materialId: "fabric",
+          material: productionMaterial,
+          quantity: decimal("1"),
+          yield: null,
+          usesPerVariant: null,
+        }],
+        equipmentLines: [],
+      },
+      shippingTemplate: null,
+      materialLines: [],
+      equipmentLines: [],
+    };
+
+    const result = await resolveCosts(
+      "shop-1",
+      "variant-1",
+      decimal("50"),
+      "preview",
+      createDb(config, { mistakeBuffer: decimal("0.05") }),
+    );
+
+    expect(result.mistakeBufferAmount.toString()).toBe("1.5");
+    expect(result.totalCost.toString()).toBe("11.5");
+  });
+
   it("uses an explicit shipping template override before the production default", async () => {
     const productionMaterial = createMaterial({
       id: "fabric",

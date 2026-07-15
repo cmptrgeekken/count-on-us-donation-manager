@@ -15,6 +15,40 @@ export const loader = async ({ request }: LoaderFunctionArgs): Promise<Response>
     update: { shopifyDomain: shopId, currency: "USD" },
     create: { shopId, shopifyDomain: shopId, currency: "USD" },
   });
+  await prisma.importBatch.deleteMany({ where: { shopId } });
+  await prisma.importBatch.create({
+    data: {
+      shopId,
+      kind: "orders",
+      status: "completed_with_errors",
+      sourceName: "sample-orders.csv",
+      sourceType: "csv",
+      completedAt: new Date("2026-07-14T12:00:00.000Z"),
+      summary: {
+        kind: "orders",
+        totalRows: 6,
+        created: 3,
+        updated: 0,
+        skipped: 1,
+        errors: [
+          { row: 2, message: "Resolve line item mappings before importing this order." },
+          { row: 3, message: "Resolve line item mappings before importing this order." },
+        ],
+        warnings: [
+          { row: 2, message: "Line Tip could not be matched to a synced variant." },
+          { row: 3, message: "Line Tip could not be matched to a synced variant." },
+        ],
+        lineMappingRequests: [{
+          key: "tip|default title|",
+          title: "Tip",
+          variantTitle: "Default Title",
+          sku: null,
+          reason: "unresolved",
+          candidates: [],
+        }],
+      },
+    },
+  });
   await prisma.orderSnapshot.deleteMany({ where: { shopId, shopifyOrderId } });
   await prisma.orderRecord.deleteMany({ where: { shopId, shopifyOrderId } });
 
