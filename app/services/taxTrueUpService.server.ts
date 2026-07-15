@@ -117,6 +117,7 @@ export async function calculateEstimatedTaxForPeriod(
       select: {
         is501c3: true,
         allocated: true,
+        taxReserveDeduction: true,
       },
     }),
     db.lineCauseAllocation.findMany({
@@ -152,7 +153,10 @@ export async function calculateEstimatedTaxForPeriod(
 
   const totalNetContribution = (snapshotTotals._sum.netContribution ?? ZERO).add(adjustmentTotals._sum.netContribAdj ?? ZERO);
   const allocations = closedAllocationTotals.length > 0
-    ? closedAllocationTotals
+    ? closedAllocationTotals.map((allocation) => ({
+        is501c3: allocation.is501c3,
+        allocated: allocation.allocated.add(allocation.taxReserveDeduction ?? ZERO),
+      }))
     : liveAllocationTotals.map((allocation) => ({
         is501c3: allocation.is501c3,
         allocated: allocation.amount,

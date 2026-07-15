@@ -4,13 +4,16 @@ import { listOutstandingArtistAllocations } from "./artistPayables.server";
 import { listOutstandingCauseAllocations } from "./causePayables.server";
 import { createReceiptStorage } from "./receiptStorage.server";
 import { calculateEstimatedTaxForPeriod } from "./taxTrueUpService.server";
-import { normalizeTaxDeductionMode } from "./taxReserve.server";
+import {
+  applyEstimatedTaxReserveToAllocations,
+  normalizeTaxDeductionMode,
+} from "./taxReserve.server";
 
 const ZERO = new Prisma.Decimal(0);
 const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
 
 type CauseAllocationDetail = {
-  kind: "order_line" | "true_up";
+  kind: "order_line" | "true_up" | "tax_reserve";
   label?: string;
   orderSnapshotId?: string;
   shopifyOrderId?: string;
@@ -183,6 +186,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           causeName: true,
           is501c3: true,
           allocated: true,
+          taxReserveDeduction: true,
           disbursed: true,
         },
       }),
@@ -622,6 +626,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         causeName: allocation.causeName,
         is501c3: allocation.is501c3,
         allocated: allocation.allocated,
+        taxReserveDeduction: allocation.taxReserveDeduction,
         disbursed: allocation.disbursed,
       }))
     : Array.from(allocationMap.values()).map((allocation) => ({
@@ -629,6 +634,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         causeName: allocation.causeName,
         is501c3: allocation.is501c3,
         allocated: allocation.allocated,
+        taxReserveDeduction: ZERO,
         disbursed: ZERO,
       }));
 
@@ -679,6 +685,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           causeName: redistribution.causeName,
           is501c3: false,
           allocated: redistribution.amount,
+          taxReserveDeduction: ZERO,
           disbursed: ZERO,
         });
         allocationDetailMap.set(redistribution.causeId, [
@@ -701,6 +708,23 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
 
   const deductionPool = expenseTotal.add(allocation501c3Total);
   const taxEstimate = await calculateEstimatedTaxForPeriod(shopId, selectedPeriod.id, db);
+  if (!useClosedAllocations) {
+    allocationRows = applyEstimatedTaxReserveToAllocations(
+      allocationRows,
+      taxEstimate.estimatedTaxReserve,
+      shop?.taxDeductionMode,
+    );
+  }
+  for (const allocation of allocationRows) {
+    if (allocation.taxReserveDeduction.lessThanOrEqualTo(ZERO)) continue;
+    const details = allocationDetailMap.get(allocation.causeId) ?? [];
+    details.push({
+      kind: "tax_reserve",
+      label: "Estimated tax reserve",
+      allocatedAmount: allocation.taxReserveDeduction.negated(),
+    });
+    allocationDetailMap.set(allocation.causeId, details);
+  }
   const taxableExposure = taxEstimate.taxableBase.mul(taxEstimate.taxableWeight).toDecimalPlaces(
     2,
     Prisma.Decimal.ROUND_FLOOR,
@@ -944,7 +968,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         salesTaxCollected: salesTaxCollected.toString(),
         shopifyCharges: shopifyCharges.toString(),
         externalSettlementFees: externalSettlementFees.toString(),
-        donationPool: totalNetContribution.sub(shopifyCharges).sub(externalSettlementFees).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
+        donationPool: totalNetContribution.sub(shopifyCharges).sub(externalSettlementFees).sub(taxEstimate.estimatedTaxReserve).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
         taxTrueUpSurplusApplied: carryForwardSurplus.toString(),
         taxTrueUpShortfallApplied: carryForwardShortfall.toString(),
         artistPayoutTotal: totalArtistPayout.toString(),

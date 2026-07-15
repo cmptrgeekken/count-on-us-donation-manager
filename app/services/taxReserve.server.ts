@@ -16,6 +16,10 @@ export type TaxReserveAllocationInput = {
   allocated: Prisma.Decimal;
 };
 
+export type TaxReserveAllocation = TaxReserveAllocationInput & {
+  causeId: string;
+};
+
 export function decimalOrZero(value: Prisma.Decimal | null | undefined) {
   return value ?? ZERO;
 }
@@ -92,4 +96,53 @@ export function computeEstimatedTaxReserve({
       .mul(taxableWeight)
       .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP),
   };
+}
+
+export function applyEstimatedTaxReserveToAllocations<T extends TaxReserveAllocation>(
+  allocations: T[],
+  estimatedTaxReserve: Prisma.Decimal,
+  mode: string | null | undefined,
+): Array<T & { taxReserveDeduction: Prisma.Decimal }> {
+  const normalizedMode = normalizeTaxDeductionMode(mode);
+  const eligible = allocations.filter((allocation) =>
+    normalizedMode === taxDeductionModes.ALL_CAUSES ||
+    (normalizedMode === taxDeductionModes.NON_501C3_ONLY && !allocation.is501c3),
+  );
+  const eligibleTotal = eligible.reduce((sum, allocation) => sum.add(allocation.allocated), ZERO);
+  const eligibleCauseIds = new Set(eligible.map((allocation) => allocation.causeId));
+  const reserveToApply = Prisma.Decimal.min(
+    Prisma.Decimal.max(estimatedTaxReserve, ZERO),
+    eligibleTotal,
+  );
+
+  if (reserveToApply.lessThanOrEqualTo(ZERO) || eligibleTotal.lessThanOrEqualTo(ZERO)) {
+    return allocations.map((allocation) => ({
+      ...allocation,
+      taxReserveDeduction: ZERO,
+    }));
+  }
+
+  const lastEligibleCauseId = eligible.at(-1)?.causeId;
+  let applied = ZERO;
+
+  return allocations.map((allocation) => {
+    const isEligible = eligibleCauseIds.has(allocation.causeId);
+    if (!isEligible) {
+      return { ...allocation, taxReserveDeduction: ZERO };
+    }
+
+    const taxReserveDeduction = allocation.causeId === lastEligibleCauseId
+      ? reserveToApply.sub(applied)
+      : reserveToApply
+          .mul(allocation.allocated)
+          .div(eligibleTotal)
+          .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+    applied = applied.add(taxReserveDeduction);
+
+    return {
+      ...allocation,
+      allocated: Prisma.Decimal.max(allocation.allocated.sub(taxReserveDeduction), ZERO),
+      taxReserveDeduction,
+    };
+  });
 }
