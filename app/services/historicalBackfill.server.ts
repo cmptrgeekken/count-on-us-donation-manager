@@ -199,7 +199,7 @@ function parseCsvRows(input: string): CsvRow[] {
 
   const [headers, ...dataRows] = rows;
   if (!headers || headers.length === 0) {
-    throw new Error("CSV import payload must include a header row.");
+    throw new Error("The CSV has no header row. Export it again from Shopify without removing the first row, then retry.");
   }
 
   const normalizedHeaders = headers.map(normalizeCsvHeader);
@@ -214,7 +214,7 @@ function parseCsvRows(input: string): CsvRow[] {
 function parseJsonArray(input: string) {
   const parsed = JSON.parse(input);
   if (!Array.isArray(parsed)) {
-    throw new Error("Import payload must be a JSON array.");
+    throw new Error("The JSON payload must be an array of rows enclosed in [ ]. Correct its structure, then run the dry run again.");
   }
   return parsed as unknown[];
 }
@@ -401,7 +401,7 @@ function parseCsvImportRows(input: string, kind?: string) {
   if (kind === "payouts") return parseShopifyPaymentTransactionsCsv(rows);
   if (kind === "charges") return parseShopifyChargesCsv(rows);
   if (kind === "orders") return parseShopifyOrdersCsv(rows);
-  throw new Error("Choose an import type before uploading CSV.");
+  throw new Error("Choose Payouts, Shopify charges, or Orders as the import type, then upload the CSV again.");
 }
 
 export function parseHistoricalImportRows(input: string, kind?: string) {
@@ -511,13 +511,13 @@ export async function importHistoricalPayouts(input: {
     try {
       const shopifyPayoutId = getPayoutId(row);
       if (!shopifyPayoutId) {
-        throw new Error("Stable payout id is required.");
+        throw new Error("Payout ID is missing. Use a Shopify Payments export with the Payout ID column, or add shopifyPayoutId to this row.");
       }
 
       const startDate = parseDate(row.startDate ?? row.periodStart, "startDate");
       const endDate = parseDate(row.endDate ?? row.periodEnd, "endDate");
       if (endDate <= startDate) {
-        throw new Error("endDate must be after startDate.");
+        throw new Error("endDate must be later than startDate. Correct both dates in this row and retry.");
       }
 
       const existing = await db.reportingPeriod.findUnique({
@@ -580,11 +580,11 @@ export async function importHistoricalCharges(input: {
     try {
       const shopifyTransactionId = getChargeId(row);
       const amount = new Prisma.Decimal(row.amount ?? "0");
-      if (amount.lte(0)) throw new Error("amount must be greater than zero.");
+      if (amount.lte(0)) throw new Error("Charge amount must be greater than zero. Correct this row's amount and retry.");
 
       const period = await findPeriodForCharge(input.shopId, row, db);
       if (!period) {
-        summary.warnings.push({ row: index + 1, message: "No matching reporting period found; charge will be imported without a period." });
+        summary.warnings.push({ row: index + 1, message: "No reporting period covers this charge. Import the matching payout period, then rebuild it to attach the charge." });
       }
 
       const existing = await db.shopifyChargeTransaction.findUnique({
@@ -640,11 +640,11 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
   const lineItems = order.line_items ?? [];
 
   if (!getOrderId(order)) {
-    throw new Error("Order admin_graphql_api_id is required.");
+    throw new Error("Order ID is missing. Use a Shopify Orders CSV with the ID column, or add admin_graphql_api_id to this JSON row.");
   }
 
   if (lineItems.length === 0) {
-    warnings.push("Order has no line items.");
+    warnings.push("Order has no line items. Export it again with Shopify line-item columns, or remove the empty order from the import.");
   }
   if (
     order.financial_status === undefined &&
@@ -652,7 +652,7 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
     order.cancelled_at === undefined &&
     order.canceled_at === undefined
   ) {
-    warnings.push("Order is missing lifecycle evidence and will be excluded from finalized reporting until reconciled.");
+    warnings.push("Order is missing payment, cancellation, or refund status. Import those lifecycle fields or review the order in Order History before relying on finalized reporting.");
   }
 
   for (const line of lineItems) {
@@ -664,7 +664,7 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
 
     const variantId = normalizeId(line.admin_graphql_api_id?.includes("ProductVariant") ? line.admin_graphql_api_id : line.variant_id);
     if (!variantId) {
-      warnings.push(`Line ${line.title ?? "Untitled"} is missing variant id.`);
+      warnings.push(`Line ${line.title ?? "Untitled"} has no variant ID. Map it to a synced variant or classify it as a tip or custom item before importing.`);
       continue;
     }
 
@@ -673,9 +673,12 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
       where: { shopId_shopifyId: { shopId, shopifyId: variantGid } },
       select: {
         id: true,
+        title: true,
+        sku: true,
         costConfig: { select: { id: true } },
         product: {
           select: {
+            title: true,
             causeAssignments: { select: { id: true }, take: 1 },
             artistAssignments: { select: { id: true }, take: 1 },
           },
@@ -684,16 +687,18 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
     });
 
     if (!variant) {
-      warnings.push(`Variant ${variantGid} is not synced in Count On Us.`);
+      warnings.push(`Line ${line.title ?? "Untitled"} references a variant that is not synced in Count On Us. Sync the Shopify catalog, then rerun the dry run and map the line.`);
       continue;
     }
 
+    const variantLabel = `${variant.product.title} — ${variant.title}${variant.sku ? ` (${variant.sku})` : ""}`;
+
     if (!variant.costConfig) {
-      warnings.push(`Variant ${variantGid} has no cost configuration.`);
+      warnings.push(`${variantLabel} has no cost configuration.`);
     }
 
     if (variant.product.causeAssignments.length === 0 && variant.product.artistAssignments.length === 0) {
-      warnings.push(`Variant ${variantGid} has no Cause or Artist routing.`);
+      warnings.push(`${variantLabel} has no Cause or Artist routing.`);
     }
   }
 
@@ -997,7 +1002,7 @@ export async function importHistoricalOrders(input: {
     try {
       const shopifyOrderId = getOrderId(order);
       if (!shopifyOrderId) {
-        throw new Error("Order admin_graphql_api_id is required.");
+        throw new Error("Order ID is missing. Use a Shopify Orders CSV with the ID column, or add admin_graphql_api_id to this JSON row.");
       }
 
       const existing = db.orderRecord?.findUnique
@@ -1021,7 +1026,7 @@ export async function importHistoricalOrders(input: {
       }
       addLineMappingRequests(summary, enrichment.lineMappingRequests);
       if (!input.dryRun && enrichment.lineMappingRequests.length > 0) {
-        summary.errors.push({ row: index + 1, message: "Resolve line item mappings before importing this order." });
+        summary.errors.push({ row: index + 1, message: "Choose a product/variant, Tip, or Custom handling for every unresolved line below, then import again." });
         continue;
       }
 
@@ -1033,7 +1038,7 @@ export async function importHistoricalOrders(input: {
       const orderDate = optionalDate(order.created_at ?? order.createdAt);
       const period = orderDate ? await findPeriodForDate(input.shopId, orderDate, db) : null;
       if (!period) {
-        summary.warnings.push({ row: index + 1, message: "No matching reporting period found for order date." });
+        summary.warnings.push({ row: index + 1, message: "No reporting period covers this order date. Import the matching payout period, then rebuild it to attach the order." });
       }
 
       summary.created += 1;
@@ -1093,7 +1098,7 @@ export async function replaceOrderSnapshots(input: {
   summary.replacementResults = [];
 
   if (!dryRun && replacementReason.length < 8) {
-    throw new Error("Snapshot replacement requires a reason of at least 8 characters.");
+    throw new Error("Enter a replacement reason of at least 8 characters explaining why the financial snapshot is changing, then retry.");
   }
 
   for (const [index, rawRow] of input.rows.entries()) {
@@ -1102,7 +1107,7 @@ export async function replaceOrderSnapshots(input: {
     try {
       const shopifyOrderId = getOrderId(order);
       if (!shopifyOrderId) {
-        throw new Error("Order admin_graphql_api_id is required.");
+        throw new Error("Order ID is missing. Use a Shopify Orders CSV with the ID column, or add admin_graphql_api_id to this JSON row.");
       }
 
       const existing = db.orderRecord?.findUnique
@@ -1162,7 +1167,7 @@ export async function replaceOrderSnapshots(input: {
           netContribution: "0",
           status: "skipped",
         });
-        summary.warnings.push({ row: rowNumber, message: "No existing snapshot found for this order." });
+        summary.warnings.push({ row: rowNumber, message: "No existing snapshot was found. Import this order through Historical import before using Snapshot replacement." });
         continue;
       }
 
@@ -1172,7 +1177,7 @@ export async function replaceOrderSnapshots(input: {
       }
       addLineMappingRequests(summary, enrichment.lineMappingRequests);
       if (enrichment.lineMappingRequests.length > 0) {
-        summary.errors.push({ row: rowNumber, message: "Resolve line item mappings before replacing this snapshot." });
+        summary.errors.push({ row: rowNumber, message: "Choose a product/variant, Tip, or Custom handling for every unresolved line below, then rerun replacement." });
         continue;
       }
 
@@ -1201,7 +1206,7 @@ export async function replaceOrderSnapshots(input: {
       if (requiresForce && !forceClosed) {
         summary.skipped += 1;
         summary.replacementResults.push({ ...baseResult, status: "blocked" });
-        summary.errors.push({ row: rowNumber, message: "Snapshot belongs to a closed period. Enable force replacement to replace it." });
+        summary.errors.push({ row: rowNumber, message: "This snapshot belongs to a closed period. Review the dry run, enable Force closed-period replacement, enter REPLACE, and rebuild the period afterward." });
         continue;
       }
 
@@ -1259,7 +1264,7 @@ export async function rebuildReportingPeriod(input: {
     where: { shopId: input.shopId, id: input.periodId },
     select: { id: true, startDate: true, endDate: true },
   });
-  if (!period) throw new Error("Reporting period not found.");
+  if (!period) throw new Error("The selected reporting period no longer exists. Refresh the page, choose a current period, and retry the rebuild.");
 
   return rebuildPaymentSafeReportingPeriod({ shopId: input.shopId, period, db });
 }

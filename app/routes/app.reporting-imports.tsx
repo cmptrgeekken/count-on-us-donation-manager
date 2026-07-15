@@ -1,7 +1,7 @@
 import { jsonResponse } from "~/utils/json-response.server";
 import { useEffect, useRef, useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
-import { Form, useActionData, useLoaderData, useNavigation, useRouteError, useSubmit } from "@remix-run/react";
+import { Form, Link, useActionData, useLoaderData, useNavigation, useRouteError, useSubmit } from "@remix-run/react";
 import { AssignmentPicker } from "../components/AssignmentControls";
 import { prisma } from "../db.server";
 import {
@@ -112,13 +112,297 @@ function actionKindForIntent(intent: string | undefined): ActionData["actionKind
   return undefined;
 }
 
+function importOutcomeMessage(
+  label: string,
+  summary: {
+    totalRows: number;
+    created: number;
+    updated: number;
+    skipped: number;
+    errors: Array<{ row: number }>;
+    lineMappingRequests?: unknown[];
+  },
+  dryRun: boolean,
+): string {
+  const affectedRows = new Set(summary.errors.map((error) => error.row)).size;
+  const mappingCount = summary.lineMappingRequests?.length ?? 0;
+  const readyOrImported = summary.created + summary.updated;
+  if (dryRun) {
+    if (mappingCount > 0) {
+      return `${label} dry run found ${mappingCount} line mapping(s) that need attention. Review them below before importing.`;
+    }
+    return affectedRows > 0
+      ? `${label} dry run found ${affectedRows} row(s) that need attention. ${readyOrImported} of ${summary.totalRows} rows are ready.`
+      : `${label} dry run complete. All ${summary.totalRows} rows are ready.`;
+  }
+  return affectedRows > 0
+    ? `${label} import completed with issues. ${readyOrImported} of ${summary.totalRows} rows were imported; ${affectedRows} need attention${summary.skipped > 0 ? `; ${summary.skipped} were skipped` : ""}.`
+    : `${label} import complete. ${readyOrImported} rows were imported${summary.skipped > 0 ? ` and ${summary.skipped} were skipped` : ""}.`;
+}
+
 function formatDate(value: string | null) {
   if (!value) return "No date";
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(new Date(value));
 }
 
-function stringifySummary(summary: unknown) {
-  return JSON.stringify(summary, null, 2);
+type ImportIssue = { row: number; message: string };
+type ReplacementResult = {
+  row: number;
+  shopifyOrderId: string;
+  orderNumber: string | null;
+  status: string;
+  lineCount: number;
+  totalCost: string;
+  netContribution: string;
+};
+type ReadableImportSummary = {
+  kind: string;
+  totalRows: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  warnings: ImportIssue[];
+  errors: ImportIssue[];
+  lineMappingRequests: LineMappingRequest[];
+  replacementResults: ReplacementResult[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function readCount(record: Record<string, unknown>, key: string): number {
+  const value = record[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function readIssues(value: unknown): ImportIssue[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((issue) => {
+    if (!isRecord(issue) || typeof issue.row !== "number" || typeof issue.message !== "string") return [];
+    return [{ row: issue.row, message: issue.message }];
+  });
+}
+
+function readImportSummary(summary: unknown): ReadableImportSummary | null {
+  if (!isRecord(summary) || typeof summary.kind !== "string") return null;
+  const mappings = Array.isArray(summary.lineMappingRequests)
+    ? summary.lineMappingRequests.filter((request): request is LineMappingRequest => (
+        isRecord(request) && typeof request.key === "string" && typeof request.title === "string"
+      ))
+    : [];
+  const replacementResults = Array.isArray(summary.replacementResults)
+    ? summary.replacementResults.filter((result): result is ReplacementResult => (
+        isRecord(result) &&
+        typeof result.row === "number" &&
+        typeof result.shopifyOrderId === "string" &&
+        typeof result.status === "string" &&
+        typeof result.lineCount === "number" &&
+        typeof result.totalCost === "string" &&
+        typeof result.netContribution === "string"
+      ))
+    : [];
+
+  return {
+    kind: summary.kind,
+    totalRows: readCount(summary, "totalRows"),
+    created: readCount(summary, "created"),
+    updated: readCount(summary, "updated"),
+    skipped: readCount(summary, "skipped"),
+    warnings: readIssues(summary.warnings),
+    errors: readIssues(summary.errors),
+    lineMappingRequests: mappings,
+    replacementResults,
+  };
+}
+
+function importActionTone(data: ActionData): "success" | "warning" | "critical" {
+  if (data.ok) return "success";
+  const summary = readImportSummary(data.summary);
+  if (summary && (summary.created > 0 || summary.updated > 0 || summary.lineMappingRequests.length > 0)) {
+    return "warning";
+  }
+  return "critical";
+}
+
+function humanize(value: string): string {
+  return value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function formatRowRanges(rows: number[]): string {
+  const sorted = [...new Set(rows)].sort((left, right) => left - right);
+  const ranges: string[] = [];
+  let start = sorted[0];
+  let end = start;
+  for (const row of sorted.slice(1)) {
+    if (row === (end ?? row) + 1) {
+      end = row;
+      continue;
+    }
+    if (start !== undefined && end !== undefined) ranges.push(start === end ? `${start}` : `${start}–${end}`);
+    start = row;
+    end = row;
+  }
+  if (start !== undefined && end !== undefined) ranges.push(start === end ? `${start}` : `${start}–${end}`);
+  return ranges.join(", ");
+}
+
+function groupedIssues(issues: ImportIssue[]): Array<{ message: string; rows: number[] }> {
+  const groups = new Map<string, number[]>();
+  for (const issue of issues) groups.set(issue.message, [...(groups.get(issue.message) ?? []), issue.row]);
+  return Array.from(groups, ([message, rows]) => ({ message, rows }));
+}
+
+function resolutionForIssue(message: string): { text: string; href?: string; linkLabel?: string } {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("line item mapping") || normalized.includes("could not be matched") || normalized.includes("unresolved line")) {
+    return { text: "In Historical import, run the order dry run again, then map the line to a variant or classify it as a tip or custom item." };
+  }
+  if (normalized.includes("not synced in count on us") || normalized.includes("missing variant id") || normalized.includes("no variant id")) {
+    return { text: "Sync the Shopify catalog, return here, and run the dry run again. If the line is intentionally non-catalog, classify it as a tip or custom item.", href: "/app/products", linkLabel: "Sync Shopify catalog" };
+  }
+  if (normalized.includes("no cost configuration")) {
+    return { text: "Configure production costs for the named variant, then replace the affected snapshot so its financial values are recalculated.", href: "/app/variants", linkLabel: "Open variants" };
+  }
+  if (normalized.includes("no cause or artist routing")) {
+    return { text: "Assign Cause or Artist routing to the named product, then replace the affected snapshot to freeze the corrected routing.", href: "/app/products", linkLabel: "Open products" };
+  }
+  if (normalized.includes("lifecycle evidence") || normalized.includes("payment, cancellation, or refund status")) {
+    return { text: "Review the affected order and confirm whether it is active, canceled, or fully refunded.", href: "/app/order-history?review=required", linkLabel: "Review order lifecycles" };
+  }
+  if (normalized.includes("reporting period")) {
+    return { text: "Import a payout/reporting period covering the row date, then rebuild that period so the imported record is attached to it." };
+  }
+  if (normalized.includes("no existing snapshot") || normalized.includes("no existing snapshot was found")) {
+    return { text: "Import this order through Historical import first. After its initial snapshot exists, rerun Snapshot replacement." };
+  }
+  if (normalized.includes("closed period")) {
+    return { text: "Review the dry run, enable Force closed-period replacement, enter REPLACE, and rebuild the affected period afterward." };
+  }
+  if (normalized.includes("payout id") || normalized.includes("stable payout")) {
+    return { text: "Use a Shopify Payments export containing the Payout ID column, or add shopifyPayoutId to the JSON row, then retry." };
+  }
+  if (normalized.includes("order id") || normalized.includes("admin_graphql_api_id")) {
+    return { text: "Use a Shopify Orders export containing the ID column, or add admin_graphql_api_id with the Shopify order GID to the JSON row." };
+  }
+  if (normalized.includes("startdate") || normalized.includes("enddate")) {
+    return { text: "Correct startDate and endDate using valid dates, with endDate later than startDate, then retry." };
+  }
+  if (normalized.includes("amount")) {
+    return { text: "Correct the row amount to a positive monetary value and rerun the dry run before importing." };
+  }
+  if (normalized.includes("no line items")) {
+    return { text: "Export the order again with Shopify line-item columns included. If it genuinely has no merchandise, remove it from this import." };
+  }
+  if (normalized.includes("custom line")) {
+    return { text: "Confirm that zero production cost and no product-specific routing are intended. Otherwise map the line to a synced variant." };
+  }
+  return { text: "Use the listed row numbers to correct the source data, then run Dry run again. If the message remains, retain the source filename and batch date when contacting support." };
+}
+
+function IssueDetails({ label, issues, open }: { label: string; issues: ImportIssue[]; open: boolean }) {
+  if (issues.length === 0) return null;
+  return (
+    <details open={open}>
+      <summary style={{ cursor: "pointer", fontWeight: 600 }}>{label} ({issues.length})</summary>
+      <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.25rem", display: "grid", gap: "0.45rem" }}>
+        {groupedIssues(issues).map((group) => (
+          <li key={group.message}>
+            <div>{group.message} <span style={{ color: "var(--p-color-text-secondary, #616161)" }}>Rows {formatRowRanges(group.rows)}</span></div>
+            {(() => {
+              const resolution = resolutionForIssue(group.message);
+              return (
+                <div style={{ marginTop: "0.2rem", color: "var(--p-color-text-secondary, #616161)" }}>
+                  <strong>How to resolve:</strong> {resolution.text}{" "}
+                  {resolution.href ? <Link to={resolution.href}>{resolution.linkLabel ?? "Open resolution page"}</Link> : null}
+                </div>
+              );
+            })()}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function ImportSummaryDisplay({
+  summary,
+  compact = false,
+  formatMoney,
+}: {
+  summary: unknown;
+  compact?: boolean;
+  formatMoney: (value: string | number) => string;
+}) {
+  const readable = readImportSummary(summary);
+  if (!readable) return <s-text>Summary details are unavailable for this entry.</s-text>;
+
+  const metrics = [
+    ["Rows", readable.totalRows],
+    ["Created", readable.created],
+    ["Updated", readable.updated],
+    ["Skipped", readable.skipped],
+    ["Errors", readable.errors.length],
+    ["Warnings", readable.warnings.length],
+  ] as const;
+
+  return (
+    <div style={{ display: "grid", gap: "0.65rem", marginTop: compact ? 0 : "0.75rem", minWidth: compact ? "24rem" : undefined }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.45rem 1rem" }}>
+        {metrics.map(([label, value]) => (
+          <span key={label}><strong>{label}:</strong> {value.toLocaleString()}</span>
+        ))}
+      </div>
+      {readable.errors.length === 0 && readable.warnings.length === 0 ? (
+        <span>No errors or warnings.</span>
+      ) : null}
+      <IssueDetails label="Errors" issues={readable.errors} open={!compact} />
+      <IssueDetails label="Warnings" issues={readable.warnings} open={false} />
+      {readable.lineMappingRequests.length > 0 ? (
+        <details open={!compact}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+            Line mappings required ({readable.lineMappingRequests.length})
+          </summary>
+          <ul style={{ margin: "0.6rem 0 0", paddingLeft: "1.25rem" }}>
+            {readable.lineMappingRequests.map((request) => (
+              <li key={request.key}>
+                {request.title} — {request.variantTitle}{request.sku ? ` (${request.sku})` : ""}: {humanize(request.reason)}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+      {readable.replacementResults.length > 0 ? (
+        <details open={!compact}>
+          <summary style={{ cursor: "pointer", fontWeight: 600 }}>
+            Snapshot replacement results ({readable.replacementResults.length})
+          </summary>
+          <div style={{ overflowX: "auto", marginTop: "0.6rem" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", textAlign: "left" }}>
+              <thead><tr><th>Row</th><th>Order</th><th>Result</th><th>Lines</th><th>Cost</th><th>Net contribution</th></tr></thead>
+              <tbody>
+                {readable.replacementResults.map((result) => (
+                  <tr key={`${result.row}:${result.shopifyOrderId}`}>
+                    <td>{result.row}</td>
+                    <td>{result.orderNumber ?? result.shopifyOrderId}</td>
+                    <td>{humanize(result.status)}</td>
+                    <td>{result.lineCount}</td>
+                    <td>{formatMoney(result.totalCost)}</td>
+                    <td>{formatMoney(result.netContribution)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      ) : null}
+    </div>
+  );
+}
+
+function actionableFailureMessage(error: unknown): string {
+  const detail = error instanceof Error ? error.message : "The operation failed for an unknown reason.";
+  return `${detail} If that message does not identify a correction, refresh the page and rerun the dry run. If it happens again, contact support with the source filename, import type, and time of the attempt.`;
 }
 
 function isRebuildPeriodResult(value: unknown): value is RebuildPeriodResult {
@@ -287,26 +571,26 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Response>
 
       if (kind === "payouts") {
         const summary = await importHistoricalPayouts({ shopId, rows, dryRun, sourceName });
-        return actionJson({ ok: summary.errors.length === 0, message: dryRun ? "Payout dry run complete." : "Payout import complete.", actionKind: "import", summary, importPayload: payload, importKind: kind, sourceName });
+        return actionJson({ ok: summary.errors.length === 0, message: importOutcomeMessage("Payout", summary, dryRun), actionKind: "import", summary, importPayload: payload, importKind: kind, sourceName });
       }
 
       if (kind === "charges") {
         const summary = await importHistoricalCharges({ shopId, rows, dryRun, sourceName });
-        return actionJson({ ok: summary.errors.length === 0, message: dryRun ? "Charge dry run complete." : "Charge import complete.", actionKind: "import", summary, importPayload: payload, importKind: kind, sourceName });
+        return actionJson({ ok: summary.errors.length === 0, message: importOutcomeMessage("Charge", summary, dryRun), actionKind: "import", summary, importPayload: payload, importKind: kind, sourceName });
       }
 
       if (kind === "orders") {
         const summary = await importHistoricalOrders({ shopId, rows, dryRun, sourceName, mappingOverrides });
-        return actionJson({ ok: summary.errors.length === 0, message: dryRun ? "Order dry run complete." : "Order import complete.", actionKind: "import", summary, importPayload: payload, importKind: kind, sourceName, mappingOverrides });
+        return actionJson({ ok: summary.errors.length === 0 && (summary.lineMappingRequests?.length ?? 0) === 0, message: importOutcomeMessage("Order", summary, dryRun), actionKind: "import", summary, importPayload: payload, importKind: kind, sourceName, mappingOverrides });
       }
 
-      return actionJson({ ok: false, message: "Choose an import type.", actionKind: "import" }, { status: 400 });
+      return actionJson({ ok: false, message: "Select Payouts, Shopify charges, or Orders under Import type, then run the dry run again.", actionKind: "import" }, { status: 400 });
     }
 
     if (intent === "rebuild-period") {
       const periodId = formData.get("periodId")?.toString() ?? "";
       if (!periodId) {
-        return actionJson({ ok: false, message: "Choose a period to rebuild.", actionKind: "rebuild" }, { status: 400 });
+        return actionJson({ ok: false, message: "Choose a reporting period from the Period list, then select Rebuild period again.", actionKind: "rebuild" }, { status: 400 });
       }
       const result = await rebuildReportingPeriod({ shopId, periodId });
       return actionJson({ ok: true, message: "Reporting period rebuilt. Results are shown below.", actionKind: "rebuild", summary: result });
@@ -329,7 +613,7 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Response>
 
       if (!dryRun && confirmation !== "REPLACE") {
         return actionJson(
-          { ok: false, message: "Type REPLACE to confirm snapshot replacement.", actionKind: "replacement", importPayload: payload, importKind: "orders", sourceName, mappingOverrides, replacementReason, forceClosed },
+          { ok: false, message: "Enter REPLACE in the confirmation field exactly as shown, then submit the snapshot replacement again.", actionKind: "replacement", importPayload: payload, importKind: "orders", sourceName, mappingOverrides, replacementReason, forceClosed },
           { status: 400 },
         );
       }
@@ -344,8 +628,10 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Response>
         mappingOverrides,
       });
       return actionJson({
-        ok: summary.errors.length === 0,
-        message: dryRun ? "Snapshot replacement dry run complete." : "Snapshots replaced. Rebuild affected reporting periods after reviewing the results.",
+        ok: summary.errors.length === 0 && (summary.lineMappingRequests?.length ?? 0) === 0,
+        message: dryRun
+          ? importOutcomeMessage("Snapshot replacement", summary, true)
+          : `${importOutcomeMessage("Snapshot replacement", summary, false)} Rebuild affected reporting periods after reviewing the results.`,
         actionKind: "replacement",
         summary,
         importPayload: payload,
@@ -357,10 +643,10 @@ export const action = async ({ request }: ActionFunctionArgs): Promise<Response>
       });
     }
 
-    return actionJson({ ok: false, message: "Unknown action." }, { status: 400 });
+    return actionJson({ ok: false, message: "The requested action is no longer available. Refresh this page and retry using the displayed controls." }, { status: 400 });
   } catch (error) {
     return actionJson(
-      { ok: false, message: error instanceof Error ? error.message : "Import or rebuild failed.", actionKind: actionKindForIntent(intent) },
+      { ok: false, message: actionableFailureMessage(error), actionKind: actionKindForIntent(intent) },
       { status: 400 },
     );
   }
@@ -460,12 +746,10 @@ export default function ReportingImportsPage() {
         <s-section heading="Historical import">
           <div style={{ display: "grid", gap: "1rem" }}>
             {importActionData ? (
-              <s-banner tone={importActionData.ok ? "success" : "critical"}>
+              <s-banner tone={importActionTone(importActionData)}>
                 <s-text>{importActionData.message}</s-text>
                 {importActionData.summary ? (
-                  <pre style={{ overflowX: "auto", whiteSpace: "pre-wrap", margin: "0.75rem 0 0" }}>
-                    {stringifySummary(importActionData.summary)}
-                  </pre>
+                  <ImportSummaryDisplay summary={importActionData.summary} formatMoney={formatMoney} />
                 ) : null}
               </s-banner>
             ) : null}
@@ -631,12 +915,10 @@ export default function ReportingImportsPage() {
               </s-banner>
             ) : null}
             {replacementActionData ? (
-              <s-banner tone={replacementActionData.ok ? "success" : "critical"}>
+              <s-banner tone={importActionTone(replacementActionData)}>
                 <s-text>{replacementActionData.message}</s-text>
                 {replacementActionData.summary ? (
-                  <pre style={{ overflowX: "auto", whiteSpace: "pre-wrap", margin: "0.75rem 0 0" }}>
-                    {stringifySummary(replacementActionData.summary)}
-                  </pre>
+                  <ImportSummaryDisplay summary={replacementActionData.summary} formatMoney={formatMoney} />
                 ) : null}
               </s-banner>
             ) : null}
@@ -867,9 +1149,7 @@ export default function ReportingImportsPage() {
                     </table>
                   </div>
                 ) : rebuildActionData.summary ? (
-                  <pre style={{ overflowX: "auto", whiteSpace: "pre-wrap", margin: "0.75rem 0 0" }}>
-                    {stringifySummary(rebuildActionData.summary)}
-                  </pre>
+                  <s-text>Rebuild completed, but no comparable period metrics were returned.</s-text>
                 ) : null}
               </s-banner>
             ) : null}
@@ -920,14 +1200,12 @@ export default function ReportingImportsPage() {
               ) : (
                 batches.map((batch) => (
                   <s-table-row key={batch.id}>
-                    <s-table-cell>{batch.sourceName || batch.id}</s-table-cell>
-                    <s-table-cell>{batch.kind}</s-table-cell>
-                    <s-table-cell>{batch.status}</s-table-cell>
+                    <s-table-cell>{batch.sourceName || `${humanize(batch.kind)} import`}</s-table-cell>
+                    <s-table-cell>{humanize(batch.kind)}</s-table-cell>
+                    <s-table-cell>{humanize(batch.status)}</s-table-cell>
                     <s-table-cell>{formatDate(batch.createdAt)}</s-table-cell>
                     <s-table-cell>
-                      <pre style={{ maxWidth: "34rem", overflowX: "auto", whiteSpace: "pre-wrap" }}>
-                        {stringifySummary(batch.summary)}
-                      </pre>
+                      <ImportSummaryDisplay summary={batch.summary} compact formatMoney={formatMoney} />
                     </s-table-cell>
                   </s-table-row>
                 ))
@@ -947,7 +1225,7 @@ export function ErrorBoundary() {
       <ui-title-bar title="Imports & rebuild" />
       <s-page>
         <s-banner tone="critical">
-          <s-text>Something went wrong loading historical imports. Please refresh the page.</s-text>
+          <s-text>Imports &amp; rebuild could not be loaded. Refresh the page once; if it still fails, contact support with the shop domain and time of the attempt.</s-text>
         </s-banner>
       </s-page>
     </>

@@ -826,7 +826,9 @@ export async function resolveCosts(
   );
 
   // Step 6: Mistake buffer — applied to production materials only
-  const mistakeBufferPct = decimalOrZero(config.mistakeBuffer ?? shop?.mistakeBuffer);
+  const mistakeBufferPct = decimalOrZero(
+    config.mistakeBuffer ?? productionTemplate?.mistakeBuffer ?? shop?.mistakeBuffer,
+  );
   const mistakeBufferAmount = materialCost.mul(mistakeBufferPct);
 
   const laborMinutes = config.laborMinutes ?? productionTemplate?.defaultLaborMinutes;

@@ -31,13 +31,16 @@ describe("historical backfill imports", () => {
     });
 
     expect(summary.created).toBe(0);
-    expect(summary.errors).toEqual([{ row: 1, message: "Stable payout id is required." }]);
+    expect(summary.errors).toEqual([{
+      row: 1,
+      message: "Payout ID is missing. Use a Shopify Payments export with the Payout ID column, or add shopifyPayoutId to this row.",
+    }]);
     expect(db.reportingPeriod.upsert).not.toHaveBeenCalled();
   });
 
   it("parses import payloads as JSON arrays", () => {
     expect(parseHistoricalImportRows('[{"id":"payout-1"}]')).toEqual([{ id: "payout-1" }]);
-    expect(() => parseHistoricalImportRows('{"id":"payout-1"}')).toThrow("Import payload must be a JSON array.");
+    expect(() => parseHistoricalImportRows('{"id":"payout-1"}')).toThrow("The JSON payload must be an array of rows");
   });
 
   it("parses Shopify payment transaction CSVs into payout periods", () => {
@@ -160,7 +163,10 @@ describe("historical backfill imports", () => {
     });
 
     expect(summary.created).toBe(0);
-    expect(summary.errors).toEqual([{ row: 1, message: "Order admin_graphql_api_id is required." }]);
+    expect(summary.errors).toEqual([{
+      row: 1,
+      message: "Order ID is missing. Use a Shopify Orders CSV with the ID column, or add admin_graphql_api_id to this JSON row.",
+    }]);
     expect(db.orderSnapshot.findFirst).not.toHaveBeenCalled();
   });
 
@@ -625,9 +631,10 @@ describe("historical backfill imports", () => {
 
     expect(blocked.updated).toBe(0);
     expect(blocked.skipped).toBe(1);
-    expect(blocked.errors).toEqual([
-      { row: 1, message: "Snapshot belongs to a closed period. Enable force replacement to replace it." },
-    ]);
+    expect(blocked.errors).toEqual([{
+      row: 1,
+      message: "This snapshot belongs to a closed period. Review the dry run, enable Force closed-period replacement, enter REPLACE, and rebuild the period afterward.",
+    }]);
     expect(blocked.replacementResults).toEqual([
       expect.objectContaining({
         existingSnapshotId: "snapshot-1",

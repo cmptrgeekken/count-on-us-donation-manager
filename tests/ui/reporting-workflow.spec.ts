@@ -49,8 +49,51 @@ test("snapshot replacement preflight lets merchants resolve unmapped lines", asy
   await page.getByRole("button", { name: "Add selected" }).click();
   await page.getByRole("button", { name: "Dry run with mappings" }).click();
 
-  await expect(page.locator("s-banner").getByText("Snapshot replacement dry run complete.")).toBeVisible();
-  await expect(page.getByText(/"status": "would_replace"/)).toBeVisible();
+  await expect(page.locator("s-banner").getByText("Snapshot replacement dry run complete. All 1 rows are ready.")).toBeVisible();
+  await expect(page.getByText("Would Replace")).toBeVisible();
+});
+
+test("reporting imports present batch outcomes and repeated issues in readable groups", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/reporting-imports-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.reportingImportsUrl);
+
+  const batchRow = page.locator("s-table-row").filter({ hasText: "sample-orders.csv" });
+  await expect(batchRow).toContainText("Completed With Errors");
+  await expect(batchRow).toContainText("Rows: 6");
+  await expect(batchRow).toContainText("Created: 3");
+  await expect(batchRow).toContainText("Errors: 2");
+  await batchRow.locator("summary").filter({ hasText: "Errors (2)" }).click();
+  await expect(batchRow.getByText("Resolve line item mappings before importing this order.")).toBeVisible();
+  await expect(batchRow.getByText("Rows 2–3").first()).toBeVisible();
+  await expect(batchRow.getByText(/How to resolve:/).first()).toBeVisible();
+  await expect(batchRow.getByText(/run the order dry run again/).first()).toBeVisible();
+  await expect(batchRow).not.toContainText('"totalRows"');
+});
+
+test("order imports report partial completion and blocked rows clearly", async ({ page, request }) => {
+  const bootstrapResponse = await request.get("/ui-fixtures/reporting-imports-bootstrap");
+  expect(bootstrapResponse.ok()).toBeTruthy();
+  const bootstrap = await bootstrapResponse.json();
+  await page.goto(bootstrap.reportingImportsUrl);
+
+  await page.locator("#kind").selectOption("orders");
+  await page.getByLabel("JSON or CSV fallback").first().fill(JSON.stringify([{
+    admin_graphql_api_id: "gid://shopify/Order/900000000999",
+    created_at: "2026-07-14T12:00:00.000Z",
+    financial_status: "paid",
+    line_items: [{ id: "line-unmapped", title: "Unmapped item", quantity: 1, price: "10.00" }],
+  }]));
+  await page.getByRole("button", { name: "Import", exact: true }).click();
+
+  const resultBanner = page.locator("s-banner").filter({ hasText: "Order import completed with issues" });
+  await expect(resultBanner).toContainText("0 of 1 rows were imported; 1 need attention");
+  await expect(resultBanner).toContainText("Rows: 1");
+  await expect(resultBanner).toContainText("Errors: 1");
+  await expect(resultBanner.getByText("Choose a product/variant, Tip, or Custom handling for every unresolved line below, then import again.")).toBeVisible();
+  await expect(resultBanner.getByText(/How to resolve:/).first()).toBeVisible();
+  await expect(page.getByText("Some order lines need a product/variant mapping or non-product classification before import.")).toBeVisible();
 });
 
 test("reporting dashboard shows track summaries and charges", async ({ page, request }) => {

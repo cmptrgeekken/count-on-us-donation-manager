@@ -31,6 +31,7 @@ export type TemplateDraft = {
   defaultShippingTemplateId?: string | null;
   defaultLaborMinutes: string;
   defaultLaborRate: string;
+  mistakeBuffer: string;
   materialLines: TemplateDraftMaterialLine[];
   equipmentLines: TemplateDraftEquipmentLine[];
 };
@@ -155,6 +156,7 @@ export function normalizeTemplateDraft(draft: TemplateDraft) {
     defaultShippingTemplateId: draft.defaultShippingTemplateId ?? "",
     defaultLaborMinutes: draft.defaultLaborMinutes.trim(),
     defaultLaborRate: draft.defaultLaborRate.trim(),
+    mistakeBuffer: draft.mistakeBuffer.trim(),
     materialLines: draft.materialLines.map((line) => ({
       id: line.id,
       materialId: line.materialId,
