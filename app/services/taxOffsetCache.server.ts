@@ -32,7 +32,12 @@ export async function recomputeTaxOffsetCache(shopId: string, db = prisma) {
           orderRecord: { lifecycle: { is: { state: { in: ["active", "partially_refunded"] } } } },
         },
       },
-      _sum: { netContribution: true },
+      _sum: {
+        subtotal: true,
+        materialCost: true,
+        packagingCost: true,
+        netContribution: true,
+      },
     }),
     db.adjustment.aggregate({
       where: {
@@ -44,7 +49,7 @@ export async function recomputeTaxOffsetCache(shopId: string, db = prisma) {
           },
         },
       },
-      _sum: { netContribAdj: true },
+      _sum: { netContribAdj: true, laborAdj: true, equipmentAdj: true },
     }),
     db.orderSnapshotLine.findMany({
       where: {
@@ -79,6 +84,12 @@ export async function recomputeTaxOffsetCache(shopId: string, db = prisma) {
   const allocationTotal = decimalOrZero(allocationTotals._sum.amount);
   const snapshotTotal = decimalOrZero(snapshotTotals._sum.netContribution);
   const adjustmentTotal = decimalOrZero(adjustmentTotals._sum.netContribAdj);
+  const taxableContribution = decimalOrZero(snapshotTotals._sum.subtotal)
+    .sub(decimalOrZero(snapshotTotals._sum.materialCost))
+    .sub(decimalOrZero(snapshotTotals._sum.packagingCost))
+    .add(adjustmentTotal)
+    .add(decimalOrZero(adjustmentTotals._sum.laborAdj))
+    .add(decimalOrZero(adjustmentTotals._sum.equipmentAdj));
   const adjustedAllocationTotal = adjustedAllocationLines.reduce((sum, line) => {
     if (line.netContribution.equals(0)) return sum;
 
@@ -92,7 +103,7 @@ export async function recomputeTaxOffsetCache(shopId: string, db = prisma) {
 
   const cumulativeNetContrib = snapshotTotal.plus(adjustmentTotal);
   const deductionPool = expenseTotal.plus(allocationTotal).plus(adjustedAllocationTotal);
-  const taxableExposure = cumulativeNetContrib.minus(deductionPool);
+  const taxableExposure = taxableContribution.minus(deductionPool);
   const widgetTaxSuppressed = taxableExposure.lessThanOrEqualTo(0);
 
   await db.taxOffsetCache.upsert({

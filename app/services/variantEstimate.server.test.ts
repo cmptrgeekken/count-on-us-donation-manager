@@ -97,18 +97,18 @@ describe("buildVariantEstimatePayload", () => {
       packaging: "0.75",
       mistakeBuffer: "0.25",
       shopifyFees: "0.88",
-      taxReserve: "1.82",
+      taxReserve: "2.59",
       artistPayout: "0.00",
-      allocatedDonations: "10.30",
+      allocatedDonations: "9.53",
     });
     expect(result.causes).toEqual([
       expect.objectContaining({
         causeId: "cause-1",
-        estimatedDonationAmount: "6.18",
+        estimatedDonationAmount: "5.72",
       }),
       expect.objectContaining({
         causeId: "cause-2",
-        estimatedDonationAmount: "4.12",
+        estimatedDonationAmount: "3.81",
       }),
     ]);
     expect(result.materialLines[0]).toMatchObject({

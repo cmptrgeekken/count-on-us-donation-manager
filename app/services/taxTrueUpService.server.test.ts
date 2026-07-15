@@ -38,10 +38,10 @@ describe("recordTaxTrueUp", () => {
         }),
       },
       orderSnapshotLine: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribution: decimal("100.00") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { subtotal: decimal("120.00"), materialCost: decimal("10.00"), packagingCost: decimal("10.00"), netContribution: decimal("100.00") } }),
       },
       adjustment: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("0.00") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("0.00"), laborAdj: decimal("0.00"), equipmentAdj: decimal("0.00") } }),
       },
       causeAllocation: {
         findMany: vi.fn().mockResolvedValue([
@@ -108,10 +108,10 @@ describe("recordTaxTrueUp", () => {
         }),
       },
       orderSnapshotLine: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribution: decimal("100.00") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { subtotal: decimal("120.00"), materialCost: decimal("10.00"), packagingCost: decimal("10.00"), netContribution: decimal("100.00") } }),
       },
       adjustment: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("0.00") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("0.00"), laborAdj: decimal("0.00"), equipmentAdj: decimal("0.00") } }),
       },
       causeAllocation: {
         findMany: vi.fn().mockResolvedValue([
@@ -172,10 +172,10 @@ describe("recordTaxTrueUp", () => {
         }),
       },
       orderSnapshotLine: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribution: decimal("100.00") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { subtotal: decimal("120.00"), materialCost: decimal("10.00"), packagingCost: decimal("10.00"), netContribution: decimal("100.00") } }),
       },
       adjustment: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("0.00") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("0.00"), laborAdj: decimal("0.00"), equipmentAdj: decimal("0.00") } }),
       },
       causeAllocation: {
         findMany: vi.fn().mockResolvedValue([

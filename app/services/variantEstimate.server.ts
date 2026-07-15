@@ -394,7 +394,10 @@ export async function buildVariantEstimatePayload(input: {
         estimatedTaxReserve: ZERO,
       }
     : computeEstimatedTaxReserve({
-        totalNetContribution: preTaxContribution,
+        taxableContribution: Prisma.Decimal.max(
+          estimatedTotal.sub(materialCost).sub(packagingCost),
+          ZERO,
+        ),
         businessExpenseTotal: ZERO,
         allocations: taxAllocationEstimates,
         effectiveTaxRate: input.shop.effectiveTaxRate,

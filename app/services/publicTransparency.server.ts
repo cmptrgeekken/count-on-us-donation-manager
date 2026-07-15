@@ -521,7 +521,20 @@ export async function buildPublicTransparencyPage(
     })),
   );
   const taxEstimate = computeEstimatedTaxReserve({
-    totalNetContribution,
+    taxableContribution: snapshotLines.reduce((sum, line) => {
+      const adjustment = line.adjustments.reduce(
+        (adjustmentSum, item) => adjustmentSum
+          .add(item.netContribAdj)
+          .add(item.laborAdj)
+          .add(item.equipmentAdj),
+        new Prisma.Decimal(0),
+      );
+      return sum
+        .add(line.subtotal)
+        .sub(line.materialCost)
+        .sub(line.packagingCost)
+        .add(adjustment);
+    }, new Prisma.Decimal(0)),
     businessExpenseTotal: new Prisma.Decimal(businessExpenseTotals._sum.amount?.toString() ?? 0),
     allocations: allocationInputs,
     effectiveTaxRate: shop?.effectiveTaxRate,

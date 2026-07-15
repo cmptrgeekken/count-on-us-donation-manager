@@ -33,7 +33,7 @@ describe("computeTaxableWeight", () => {
 describe("computeEstimatedTaxReserve", () => {
   it("computes the period reserve from the taxable base and weight", () => {
     const result = computeEstimatedTaxReserve({
-      totalNetContribution: decimal("100.00"),
+      taxableContribution: decimal("100.00"),
       businessExpenseTotal: decimal("20.00"),
       allocations: [
         { is501c3: true, allocated: decimal("60.00") },

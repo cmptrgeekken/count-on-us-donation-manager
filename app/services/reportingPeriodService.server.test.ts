@@ -213,6 +213,9 @@ describe("materializeCauseAllocationsForPeriod", () => {
         findMany: vi.fn().mockResolvedValue([
           {
             netContribution: decimal("100"),
+            subtotal: decimal("100"),
+            materialCost: decimal("0"),
+            packagingCost: decimal("0"),
             adjustments: [],
             causeAllocations: [
               {

@@ -181,7 +181,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
               },
             },
           },
-          adjustments: { select: { netContribAdj: true } },
+          adjustments: { select: { netContribAdj: true, laborAdj: true, equipmentAdj: true } },
           causeAllocations: {
             select: { causeId: true, causeName: true, is501c3: true, amount: true },
           },
@@ -557,6 +557,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   let podDeduction = ZERO;
   let mistakeBufferDeduction = ZERO;
   let netContributionAdjustments = ZERO;
+  let taxableContributionAdjustments = ZERO;
   let totalNetContribution = ZERO;
 
   for (const line of snapshotLines) {
@@ -571,6 +572,15 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
     podDeduction = podDeduction.add(line.podCost ?? ZERO);
     mistakeBufferDeduction = mistakeBufferDeduction.add(line.mistakeBufferAmount ?? ZERO);
     netContributionAdjustments = netContributionAdjustments.add(adjustmentTotal);
+    taxableContributionAdjustments = taxableContributionAdjustments.add(
+      line.adjustments.reduce(
+        (sum, adjustment) => sum
+          .add(adjustment.netContribAdj)
+          .add(adjustment.laborAdj ?? ZERO)
+          .add(adjustment.equipmentAdj ?? ZERO),
+        ZERO,
+      ),
+    );
     const adjustedLineNetContribution = line.netContribution.add(adjustmentTotal);
     totalNetContribution = totalNetContribution.add(adjustedLineNetContribution);
 
@@ -718,9 +728,13 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   );
 
   const deductionPool = expenseTotal.add(allocation501c3Total);
+  const taxableContribution = grossContribution
+    .sub(materialDeduction)
+    .sub(packagingDeduction)
+    .add(taxableContributionAdjustments);
   const taxEstimate = isAllTime
     ? computeEstimatedTaxReserve({
-        totalNetContribution,
+        taxableContribution,
         businessExpenseTotal: expenseTotal,
         allocations: allocationRows,
         effectiveTaxRate: shop?.effectiveTaxRate,
@@ -1004,6 +1018,8 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         shopifyCharges: shopifyCharges.toString(),
         externalSettlementFees: externalSettlementFees.toString(),
         estimatedTaxReserve: taxEstimate.estimatedTaxReserve.toString(),
+        taxableContribution: taxableContribution.toString(),
+        taxableBase: taxEstimate.taxableBase.toString(),
         donationPool: totalNetContribution.sub(shopifyCharges).sub(externalSettlementFees).sub(totalArtistPayout).sub(taxEstimate.estimatedTaxReserve).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
         taxTrueUpSurplusApplied: carryForwardSurplus.toString(),
         taxTrueUpShortfallApplied: carryForwardShortfall.toString(),

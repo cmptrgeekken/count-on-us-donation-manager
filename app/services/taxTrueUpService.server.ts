@@ -91,7 +91,12 @@ export async function calculateEstimatedTaxForPeriod(
           },
         },
       },
-      _sum: { netContribution: true },
+      _sum: {
+        subtotal: true,
+        materialCost: true,
+        packagingCost: true,
+        netContribution: true,
+      },
     }),
     db.adjustment.aggregate({
       where: {
@@ -107,7 +112,7 @@ export async function calculateEstimatedTaxForPeriod(
           },
         },
       },
-      _sum: { netContribAdj: true },
+      _sum: { netContribAdj: true, laborAdj: true, equipmentAdj: true },
     }),
     db.causeAllocation.findMany({
       where: {
@@ -152,6 +157,12 @@ export async function calculateEstimatedTaxForPeriod(
   ]);
 
   const totalNetContribution = (snapshotTotals._sum.netContribution ?? ZERO).add(adjustmentTotals._sum.netContribAdj ?? ZERO);
+  const taxableContribution = (snapshotTotals._sum.subtotal ?? ZERO)
+    .sub(snapshotTotals._sum.materialCost ?? ZERO)
+    .sub(snapshotTotals._sum.packagingCost ?? ZERO)
+    .add(adjustmentTotals._sum.netContribAdj ?? ZERO)
+    .add(adjustmentTotals._sum.laborAdj ?? ZERO)
+    .add(adjustmentTotals._sum.equipmentAdj ?? ZERO);
   const allocations = closedAllocationTotals.length > 0
     ? closedAllocationTotals.map((allocation) => ({
         is501c3: allocation.is501c3,
@@ -166,7 +177,7 @@ export async function calculateEstimatedTaxForPeriod(
   const taxDeductionMode: TaxDeductionMode = normalizeTaxDeductionMode(shop?.taxDeductionMode);
 
   const result = computeEstimatedTaxReserve({
-    totalNetContribution,
+    taxableContribution,
     businessExpenseTotal,
     allocations,
     effectiveTaxRate,

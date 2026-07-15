@@ -61,20 +61,20 @@ export function computeTaxableWeight(
 }
 
 export function computeEstimatedTaxReserve({
-  totalNetContribution,
+  taxableContribution,
   businessExpenseTotal,
   allocations,
   effectiveTaxRate,
   taxDeductionMode,
 }: {
-  totalNetContribution: Prisma.Decimal;
+  taxableContribution: Prisma.Decimal;
   businessExpenseTotal: Prisma.Decimal;
   allocations: TaxReserveAllocationInput[];
   effectiveTaxRate: Prisma.Decimal | null | undefined;
   taxDeductionMode: string | null | undefined;
 }) {
   const rate = decimalOrZero(effectiveTaxRate);
-  const taxableBase = Prisma.Decimal.max(ZERO, totalNetContribution.sub(businessExpenseTotal)).toDecimalPlaces(
+  const taxableBase = Prisma.Decimal.max(ZERO, taxableContribution.sub(businessExpenseTotal)).toDecimalPlaces(
     2,
     Prisma.Decimal.ROUND_FLOOR,
   );
