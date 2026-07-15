@@ -1028,12 +1028,12 @@ export async function importHistoricalOrders(input: {
   for (const [index, rawRow] of input.rows.entries()) {
     const order = rawRow as ShopifyOrderPayload;
     try {
-      const shopifyOrderId = getOrderId(order);
+      let shopifyOrderId = getOrderId(order);
       if (!shopifyOrderId) {
         throw new Error("Order ID is missing. Use a Shopify Orders CSV with the ID column, or add admin_graphql_api_id to this JSON row.");
       }
 
-      const existing = db.orderRecord?.findUnique
+      let existing = db.orderRecord?.findUnique
         ? (await db.orderRecord.findUnique({
             where: { shopId_shopifyOrderId: { shopId: input.shopId, shopifyOrderId } },
             select: { currentSnapshot: { select: {
@@ -1052,6 +1052,29 @@ export async function importHistoricalOrders(input: {
               totalAmount: true, salesTaxCollected: true,
             },
           });
+
+      const hasCanonicalShopifyOrderId = /^gid:\/\/shopify\/Order\/\d+$/.test(shopifyOrderId);
+      if (!existing && !hasCanonicalShopifyOrderId && order.name && db.orderRecord?.findFirst) {
+        const matchingRecord = await db.orderRecord.findFirst({
+          where: {
+            shopId: input.shopId,
+            currentSnapshot: { is: { orderNumber: order.name } },
+          },
+          select: {
+            shopifyOrderId: true,
+            currentSnapshot: { select: {
+              id: true, origin: true, periodId: true, customerDisplayName: true,
+              shopifyCustomerId: true, normalizedCustomerEmailHash: true,
+              subtotalAmount: true, discountAmount: true, shippingAmount: true,
+              totalAmount: true, salesTaxCollected: true,
+            } },
+          },
+        });
+        if (matchingRecord?.currentSnapshot) {
+          shopifyOrderId = matchingRecord.shopifyOrderId;
+          existing = matchingRecord.currentSnapshot;
+        }
+      }
 
       if (existing && existing.origin !== "reconciliation") {
         summary.skipped += 1;

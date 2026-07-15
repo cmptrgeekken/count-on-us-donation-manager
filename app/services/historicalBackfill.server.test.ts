@@ -192,7 +192,7 @@ describe("historical backfill imports", () => {
     expect(db.orderSnapshot.findFirst).not.toHaveBeenCalled();
   });
 
-  it("replaces a reconciliation snapshot during historical import and canonicalizes numeric JSON ids", async () => {
+  it("replaces a reconciliation snapshot when a historical CSV identity used the order name", async () => {
     const existing = {
       id: "snapshot-reconciliation",
       origin: "reconciliation",
@@ -208,7 +208,11 @@ describe("historical backfill imports", () => {
     };
     const db = {
       orderRecord: {
-        findUnique: vi.fn().mockResolvedValue({ currentSnapshot: existing }),
+        findUnique: vi.fn().mockResolvedValue(null),
+        findFirst: vi.fn().mockResolvedValue({
+          shopifyOrderId: "gid://shopify/Order/123",
+          currentSnapshot: existing,
+        }),
       },
       reportingPeriod: { findFirst: vi.fn().mockResolvedValue({ id: "period-1" }) },
     };
@@ -216,7 +220,8 @@ describe("historical backfill imports", () => {
     const summary = await importHistoricalOrders({
       shopId: "shop-1",
       rows: [{
-        admin_graphql_api_id: "123",
+        admin_graphql_api_id: "gid://shopify/Order/#123",
+        name: "#123",
         created_at: "2026-01-02T00:00:00.000Z",
         financial_status: "paid",
         line_items: [],
@@ -230,8 +235,14 @@ describe("historical backfill imports", () => {
       where: {
         shopId_shopifyOrderId: {
           shopId: "shop-1",
-          shopifyOrderId: "gid://shopify/Order/123",
+          shopifyOrderId: "gid://shopify/Order/#123",
         },
+      },
+    }));
+    expect(db.orderRecord.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        shopId: "shop-1",
+        currentSnapshot: { is: { orderNumber: "#123" } },
       },
     }));
   });
