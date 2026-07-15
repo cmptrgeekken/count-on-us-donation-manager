@@ -40,7 +40,9 @@ type GraphqlUserError = {
 };
 
 async function parseGraphqlResponse<T>(response: Response): Promise<T> {
-  const json = (await response.json()) as T & { errors?: Array<{ message?: string }> };
+  const json = (await response.json()) as T & {
+    errors?: Array<{ message?: string }>;
+  };
   if (Array.isArray(json.errors) && json.errors.length > 0) {
     throw new Error(json.errors.map((error) => error.message ?? "Unknown Shopify GraphQL error").join("; "));
   }
@@ -172,9 +174,9 @@ export async function buildProductDescriptionDonationSummaryHtml(shopId: string,
 
   if (!product || !shop) return null;
 
-  const artistNames = product.artistAssignments.map((assignment) => (
-    assignment.creditOverride?.trim() || assignment.artist.creditName || assignment.artist.displayName
-  ));
+  const artistNames = product.artistAssignments.map(
+    (assignment) => assignment.creditOverride?.trim() || assignment.artist.creditName || assignment.artist.displayName,
+  );
   const routingSource = resolveProductDonationRoutingSource(
     product.donationRoutingMode,
     product.artistAssignments.length,
@@ -226,16 +228,16 @@ export async function buildProductDescriptionDonationSummaryHtml(shopId: string,
     ? `<p><strong>Cause${causeNames.size === 1 ? "" : "s"}:</strong> ${escapeHtml(Array.from(causeNames).join(", "))}</p>`
     : routingSource === "product_override"
       ? "<p><strong>Cause:</strong> This product currently has no Cause allocation.</p>"
-    : artistNames.length
-      ? "<p><strong>Cause:</strong> Donation routing has not been configured for this artist collaboration yet.</p>"
-    : "";
+      : artistNames.length
+        ? "<p><strong>Cause:</strong> Donation routing has not been configured for this artist collaboration yet.</p>"
+        : "";
   const donationMarkup = donationSummary
     ? `<p><strong>Estimated donation:</strong> ${escapeHtml(donationSummary)} depending on variant and purchase details.</p>`
     : causeNames.size
       ? "<p><strong>Estimated donation:</strong> Available after product costs and donation routing are fully configured.</p>"
-    : "";
+      : "";
 
-  return `<section data-count-on-us-description-summary><h3>Donation impact</h3>${artistsMarkup}${causesMarkup}${donationMarkup}<p><em>Donation amounts are estimates. Final allocations are confirmed after purchase.</em></p></section>`;
+  return `<section class="count-on-us-description-summary" data-count-on-us-description-summary><h3>Donation impact</h3>${artistsMarkup}${causesMarkup}${donationMarkup}<p><em>Donation amounts are estimates. Final allocations are confirmed after purchase.</em></p></section>`;
 }
 
 export async function syncProductDescriptionDonationSummary({
@@ -253,7 +255,10 @@ export async function syncProductDescriptionDonationSummary({
 }): Promise<boolean> {
   if (canWriteProducts === false) return false;
   if (canWriteProducts === undefined) {
-    const hasProductWriteScope = await canWriteShopifyProducts({ admin, shopId });
+    const hasProductWriteScope = await canWriteShopifyProducts({
+      admin,
+      shopId,
+    });
     if (!hasProductWriteScope) return false;
   }
 
@@ -265,12 +270,12 @@ export async function syncProductDescriptionDonationSummary({
   }>(descriptionResponse);
   const productDescription = descriptionJson.data?.product;
   if (!productDescription) {
-    throw new Error(`Shopify product ${product.shopifyId} was not found while updating the Count On Us description summary.`);
+    throw new Error(
+      `Shopify product ${product.shopifyId} was not found while updating the Count On Us description summary.`,
+    );
   }
   const descriptionHtml = productDescription.descriptionHtml ?? "";
-  const summary = enabled
-    ? await buildProductDescriptionDonationSummaryHtml(shopId, product.id)
-    : null;
+  const summary = enabled ? await buildProductDescriptionDonationSummaryHtml(shopId, product.id) : null;
   const nextDescription = replaceMarkedBlock(descriptionHtml, summary);
 
   if (nextDescription === descriptionHtml) return true;

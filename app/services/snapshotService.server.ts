@@ -632,7 +632,12 @@ export async function createSnapshot(
     };
   } = {},
 ): Promise<{ created: boolean; snapshotId?: string }> {
-  const shopifyOrderId = order.admin_graphql_api_id ?? null;
+  const rawShopifyOrderId = order.admin_graphql_api_id?.trim() ?? "";
+  const shopifyOrderId = rawShopifyOrderId
+    ? rawShopifyOrderId.startsWith("gid://")
+      ? rawShopifyOrderId
+      : `gid://shopify/Order/${rawShopifyOrderId}`
+    : null;
   if (!shopifyOrderId) {
     throw new Error("Shopify order GID is required to create a snapshot.");
   }

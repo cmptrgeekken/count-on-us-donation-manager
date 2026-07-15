@@ -169,8 +169,23 @@ export default function ProductDonationWidgetFixtureRoute() {
   return (
     <>
       <style dangerouslySetInnerHTML={{ __html: css }} />
-      <main style={{ maxWidth: "48rem", margin: "0 auto", display: "grid", gap: "1rem", padding: "2rem" }}>
+      <main
+        style={{
+          maxWidth: "48rem",
+          margin: "0 auto",
+          display: "grid",
+          gap: "1rem",
+          padding: "2rem",
+        }}
+      >
         <h1 style={{ margin: 0, fontSize: "1.5rem" }}>Product donation widget fixture</h1>
+        <div data-testid="product-description">
+          <p>Merchant-provided product description.</p>
+          <section className="count-on-us-description-summary" data-count-on-us-description-summary>
+            <h2>Donation impact</h2>
+            <p>Injected donation summary.</p>
+          </section>
+        </div>
         <form action="/cart/add" method="post" style={{ display: "grid", gap: "0.75rem" }}>
           <label style={{ display: "grid", gap: "0.35rem" }}>
             <span>Variant</span>

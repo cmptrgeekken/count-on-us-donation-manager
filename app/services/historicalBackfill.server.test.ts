@@ -192,6 +192,50 @@ describe("historical backfill imports", () => {
     expect(db.orderSnapshot.findFirst).not.toHaveBeenCalled();
   });
 
+  it("replaces a reconciliation snapshot during historical import and canonicalizes numeric JSON ids", async () => {
+    const existing = {
+      id: "snapshot-reconciliation",
+      origin: "reconciliation",
+      periodId: "period-1",
+      customerDisplayName: null,
+      shopifyCustomerId: null,
+      normalizedCustomerEmailHash: null,
+      subtotalAmount: decimal("10"),
+      discountAmount: decimal("0"),
+      shippingAmount: decimal("0"),
+      totalAmount: decimal("10"),
+      salesTaxCollected: decimal("0"),
+    };
+    const db = {
+      orderRecord: {
+        findUnique: vi.fn().mockResolvedValue({ currentSnapshot: existing }),
+      },
+      reportingPeriod: { findFirst: vi.fn().mockResolvedValue({ id: "period-1" }) },
+    };
+
+    const summary = await importHistoricalOrders({
+      shopId: "shop-1",
+      rows: [{
+        admin_graphql_api_id: "123",
+        created_at: "2026-01-02T00:00:00.000Z",
+        financial_status: "paid",
+        line_items: [],
+      }],
+      dryRun: true,
+      db: db as any,
+    });
+
+    expect(summary).toMatchObject({ created: 0, updated: 1, skipped: 0, errors: [] });
+    expect(db.orderRecord.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        shopId_shopifyOrderId: {
+          shopId: "shop-1",
+          shopifyOrderId: "gid://shopify/Order/123",
+        },
+      },
+    }));
+  });
+
   it("matches renamed CSV order products by normalized product and variant titles", async () => {
     const variant = {
       id: "variant-1",

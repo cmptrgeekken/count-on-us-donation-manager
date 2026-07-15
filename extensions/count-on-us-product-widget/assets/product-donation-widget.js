@@ -1,5 +1,6 @@
 (function () {
   const SELECTOR = "[data-count-on-us-widget]";
+  const DESCRIPTION_SUMMARY_SELECTOR = "[data-count-on-us-description-summary]";
   const money = (value) => {
     const parsed = Number.parseFloat(String(value ?? "0"));
     return Number.isFinite(parsed) ? parsed : 0;
@@ -63,8 +64,7 @@
     pod: "This portion helps cover any print-on-demand production cost tied to this item before any donation amount is estimated.",
     mistakeBuffer:
       "This portion sets aside a small buffer for remakes, spoilage, or similar production issues so those costs do not come out of the donation estimate later.",
-    fees:
-      "This estimate helps cover payment processing fees charged on the order. The exact amount can vary depending on how the purchase is completed.",
+    fees: "This estimate helps cover payment processing fees charged on the order. The exact amount can vary depending on how the purchase is completed.",
     taxReserve:
       "This estimate sets aside money for taxes that may be owed on the sale, so that amount is not counted as part of the donation estimate.",
     estimatedDonationPool:
@@ -90,9 +90,34 @@
       ? normalized
       : `gid://shopify/ProductVariant/${normalized}`;
   };
-  const findVariant = (payload, variantId) => payload.variants.find((variant) => variant.variantId === variantId) || payload.variants[0] || null;
-  const closestAddToCartForm = (container) => container.closest("form[action*='/cart/add']") || document.querySelector("form[action*='/cart/add']");
+  const findVariant = (payload, variantId) =>
+    payload.variants.find((variant) => variant.variantId === variantId) || payload.variants[0] || null;
+  const closestAddToCartForm = (container) =>
+    container.closest("form[action*='/cart/add']") || document.querySelector("form[action*='/cart/add']");
+  const syncDescriptionSummaryVisibility = () => {
+    const widgetIsVisible = Array.from(document.querySelectorAll(SELECTOR)).some(
+      (widget) => widget.dataset.countOnUsWidgetVisible === "true",
+    );
+
+    document.querySelectorAll(DESCRIPTION_SUMMARY_SELECTOR).forEach((summary) => {
+      if (widgetIsVisible) {
+        if (!summary.hidden) {
+          summary.hidden = true;
+          summary.dataset.countOnUsWidgetSuppressed = "true";
+        }
+        return;
+      }
+
+      if (summary.dataset.countOnUsWidgetSuppressed === "true") {
+        summary.hidden = false;
+        delete summary.dataset.countOnUsWidgetSuppressed;
+      }
+    });
+  };
   const setContainerVisibility = (container, visible) => {
+    container.dataset.countOnUsWidgetVisible = String(visible);
+    syncDescriptionSummaryVisibility();
+
     if (container.dataset.countOnUsDesignMode === "true") {
       container.hidden = false;
       container.removeAttribute("hidden");
@@ -134,13 +159,16 @@
     const mistakeBuffer = money(variant.reconciliation?.mistakeBuffer || variant.mistakeBufferAmount) * nextQuantity;
     const artistPayout = money(variant.reconciliation?.artistPayout) * nextQuantity;
     const processingRate = money(variant.shopifyFees?.processingRate) / 100;
-    const managedMarketsRate = variant.shopifyFees?.managedMarketsApplicable ? money(variant.shopifyFees?.managedMarketsRate) / 100 : 0;
+    const managedMarketsRate = variant.shopifyFees?.managedMarketsApplicable
+      ? money(variant.shopifyFees?.managedMarketsRate) / 100
+      : 0;
     const processingFlatFee = money(variant.shopifyFees?.processingFlatFee);
     const shopifyFees = estimatedTotal * (processingRate + managedMarketsRate) + processingFlatFee;
     const taxReserve = money(variant.taxReserve?.estimatedAmount) * nextQuantity;
     const donationPool = Math.max(
       0,
-      estimatedTotal - (labor + materials + equipment + packaging + pod + mistakeBuffer + artistPayout + shopifyFees + taxReserve),
+      estimatedTotal -
+        (labor + materials + equipment + packaging + pod + mistakeBuffer + artistPayout + shopifyFees + taxReserve),
     );
     const totalDonationPercentage = variant.causes.reduce((sum, cause) => sum + money(cause.donationPercentage), 0);
     const allocatedDonations = Math.min(
@@ -165,7 +193,10 @@
         lineCost: nextLineCost.toFixed(2),
         componentCosts: line.componentCosts
           ? Object.fromEntries(
-              Object.entries(line.componentCosts).map(([key, value]) => [key, (money(value) * nextQuantity).toFixed(2)]),
+              Object.entries(line.componentCosts).map(([key, value]) => [
+                key,
+                (money(value) * nextQuantity).toFixed(2),
+              ]),
             )
           : line.componentCosts,
         consumableLines: Array.isArray(line.consumableLines)
@@ -188,7 +219,10 @@
       laborCost: (money(variant.laborCost) * nextQuantity).toFixed(2),
       materialLines: variant.materialLines.map(scaleLine),
       equipmentLines: variant.equipmentLines.map(scaleLine),
-      shippingMaterialLines: variant.shippingMaterialLines.map((line) => ({ ...line, lineCost: money(line.lineCost).toFixed(2) })),
+      shippingMaterialLines: variant.shippingMaterialLines.map((line) => ({
+        ...line,
+        lineCost: money(line.lineCost).toFixed(2),
+      })),
       podCostTotal: (money(variant.podCostTotal) * nextQuantity).toFixed(2),
       mistakeBufferAmount: (money(variant.mistakeBufferAmount) * nextQuantity).toFixed(2),
       causes: variant.causes.map((cause) => ({
@@ -196,7 +230,10 @@
         estimatedDonationAmount:
           totalDonationPercentage > 0 ? (donationPool * (money(cause.donationPercentage) / 100)).toFixed(2) : "0.00",
       })),
-      taxReserve: { ...variant.taxReserve, estimatedAmount: (money(variant.taxReserve.estimatedAmount) * nextQuantity).toFixed(2) },
+      taxReserve: {
+        ...variant.taxReserve,
+        estimatedAmount: (money(variant.taxReserve.estimatedAmount) * nextQuantity).toFixed(2),
+      },
       reconciliation: {
         estimatedTotal: estimatedTotal.toFixed(2),
         allocatedDonations: allocatedDonations.toFixed(2),
@@ -215,13 +252,18 @@
     };
   };
   const fetchJson = async (url) => {
-    const response = await fetch(url, { credentials: "same-origin", headers: { Accept: "application/json" } });
+    const response = await fetch(url, {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
     if (!response.ok) throw new Error(`Widget request failed with ${response.status}`);
     return response.json();
   };
   const loadMetadata = async (container) => {
     const proxyBase = container.dataset.proxyBase || "/apps/count-on-us";
-    const json = await fetchJson(`${proxyBase}/products/${encodeURIComponent(container.dataset.productId)}?metadataOnly=1`);
+    const json = await fetchJson(
+      `${proxyBase}/products/${encodeURIComponent(container.dataset.productId)}?metadataOnly=1`,
+    );
     return json.data;
   };
   const loadPayload = async (container) => {
@@ -229,18 +271,64 @@
     const json = await fetchJson(`${proxyBase}/products/${encodeURIComponent(container.dataset.productId)}`);
     return json.data;
   };
-  const section = (title, body) => `<section class="count-on-us-widget__section"><h4 class="count-on-us-widget__section-title">${escapeHtml(title)}</h4>${body}</section>`;
+  const section = (title, body) =>
+    `<section class="count-on-us-widget__section"><h4 class="count-on-us-widget__section-title">${escapeHtml(title)}</h4>${body}</section>`;
   const buildReconciliationRows = (reconciliation) =>
     [
-      { label: "Labor", key: "labor", value: money(reconciliation.labor), estimated: false },
-      { label: "Materials", key: "materials", value: money(reconciliation.materials), estimated: false },
-      { label: "Equipment", key: "equipment", value: money(reconciliation.equipment), estimated: false },
-      { label: "Packaging", key: "packaging", value: money(reconciliation.packaging), estimated: true },
-      { label: "POD", key: "pod", value: money(reconciliation.pod), estimated: false },
-      { label: "Mistake buffer", key: "mistakeBuffer", value: money(reconciliation.mistakeBuffer), estimated: false },
-      { label: "Artist payout", key: "artistPayout", value: money(reconciliation.artistPayout), estimated: false },
-      { label: "Shopify fees", key: "fees", value: money(reconciliation.shopifyFees), estimated: true },
-      { label: "Tax reserve", key: "taxReserve", value: money(reconciliation.taxReserve), estimated: true },
+      {
+        label: "Labor",
+        key: "labor",
+        value: money(reconciliation.labor),
+        estimated: false,
+      },
+      {
+        label: "Materials",
+        key: "materials",
+        value: money(reconciliation.materials),
+        estimated: false,
+      },
+      {
+        label: "Equipment",
+        key: "equipment",
+        value: money(reconciliation.equipment),
+        estimated: false,
+      },
+      {
+        label: "Packaging",
+        key: "packaging",
+        value: money(reconciliation.packaging),
+        estimated: true,
+      },
+      {
+        label: "POD",
+        key: "pod",
+        value: money(reconciliation.pod),
+        estimated: false,
+      },
+      {
+        label: "Mistake buffer",
+        key: "mistakeBuffer",
+        value: money(reconciliation.mistakeBuffer),
+        estimated: false,
+      },
+      {
+        label: "Artist payout",
+        key: "artistPayout",
+        value: money(reconciliation.artistPayout),
+        estimated: false,
+      },
+      {
+        label: "Shopify fees",
+        key: "fees",
+        value: money(reconciliation.shopifyFees),
+        estimated: true,
+      },
+      {
+        label: "Tax reserve",
+        key: "taxReserve",
+        value: money(reconciliation.taxReserve),
+        estimated: true,
+      },
     ]
       .filter((row) => Math.abs(row.value) >= 0.01)
       .sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
@@ -259,12 +347,10 @@
   const buildLineItemRows = (lines, currencyCode) => {
     const rows = lines
       .filter((line) => Math.abs(money(line.lineCost)) >= 0.01)
-      .map(
-        (line) => {
-          const componentRows = buildEquipmentComponentRows(line, currencyCode);
-          return `<tr><td>${lineNameMarkup(line)}</td><td>${escapeHtml(line.quantity || "-")}</td><td>${rateMarkup(line)}</td><td>${formatMoney(money(line.lineCost), currencyCode)}</td></tr>${componentRows}`;
-        },
-      )
+      .map((line) => {
+        const componentRows = buildEquipmentComponentRows(line, currencyCode);
+        return `<tr><td>${lineNameMarkup(line)}</td><td>${escapeHtml(line.quantity || "-")}</td><td>${rateMarkup(line)}</td><td>${formatMoney(money(line.lineCost), currencyCode)}</td></tr>${componentRows}`;
+      })
       .join("");
 
     if (!rows) return "";
@@ -278,7 +364,10 @@
 
     const components = [
       { label: "Electricity", value: money(componentCosts?.electricity) },
-      { label: "Depreciation reserve", value: money(componentCosts?.depreciation) },
+      {
+        label: "Depreciation reserve",
+        value: money(componentCosts?.depreciation),
+      },
       { label: "Consumables", value: money(componentCosts?.consumables) },
       { label: "Maintenance", value: money(componentCosts?.maintenance) },
       { label: "Manual rate", value: money(componentCosts?.manualOverride) },
@@ -315,14 +404,18 @@
       return { title: "Equipment", lines: variant.equipmentLines };
     }
     if (rowKey === "packaging") {
-      return { title: "Packaging / shipping materials", lines: variant.shippingMaterialLines };
+      return {
+        title: "Packaging / shipping materials",
+        lines: variant.shippingMaterialLines,
+      };
     }
     return null;
   };
   const renderVariant = (panel, payload, variantId, quantity, showLineItemDetails, breakdownOpen) => {
     const variant = findVariant(payload, variantId);
     if (!variant) {
-      panel.innerHTML = '<p class="count-on-us-widget__status count-on-us-widget__status--error">Donation estimate unavailable right now.</p>';
+      panel.innerHTML =
+        '<p class="count-on-us-widget__status count-on-us-widget__status--error">Donation estimate unavailable right now.</p>';
       return;
     }
     const scaled = scaleVariant(variant, quantity);
@@ -363,7 +456,9 @@
   };
   const openLineItemModal = (container, trigger) => {
     const title = trigger.getAttribute("data-count-on-us-line-detail-title") || "Line item details";
-    const body = trigger.closest(".count-on-us-widget__row")?.querySelector("[data-count-on-us-line-detail-body]")?.innerHTML || "";
+    const body =
+      trigger.closest(".count-on-us-widget__row")?.querySelector("[data-count-on-us-line-detail-body]")?.innerHTML ||
+      "";
     if (!body) return;
 
     closeLineItemModal(container);
@@ -488,9 +583,14 @@
     document.addEventListener("variant:change", scheduleSync);
     container.dataset.widgetInteractive = "true";
   }
-  const boot = (root) => root.querySelectorAll(SELECTOR).forEach((container) => void setupWidget(container));
+  const boot = (root) => {
+    root.querySelectorAll(SELECTOR).forEach((container) => void setupWidget(container));
+    syncDescriptionSummaryVisibility();
+  };
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => boot(document), { once: true });
+    document.addEventListener("DOMContentLoaded", () => boot(document), {
+      once: true,
+    });
     window.addEventListener("load", () => boot(document), { once: true });
     window.setTimeout(() => boot(document), 0);
   } else {
