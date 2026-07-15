@@ -6,11 +6,13 @@ import { createReceiptStorage } from "./receiptStorage.server";
 import { calculateEstimatedTaxForPeriod } from "./taxTrueUpService.server";
 import {
   applyEstimatedTaxReserveToAllocations,
+  computeEstimatedTaxReserve,
   normalizeTaxDeductionMode,
 } from "./taxReserve.server";
 
 const ZERO = new Prisma.Decimal(0);
 const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
+export const ALL_TIME_PERIOD_ID = "all-time";
 
 type CauseAllocationDetail = {
   kind: "order_line" | "true_up" | "tax_reserve";
@@ -97,7 +99,33 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
     };
   }
 
-  const selectedPeriod = periods.find((period) => period.id === requestedPeriodId) ?? periods[0];
+  const isAllTime = requestedPeriodId === ALL_TIME_PERIOD_ID;
+  const selectedPeriod = isAllTime
+    ? {
+        id: ALL_TIME_PERIOD_ID,
+        status: "ROLLUP",
+        source: "synthetic",
+        startDate: periods.reduce((earliest, period) => period.startDate < earliest ? period.startDate : earliest, periods[0].startDate),
+        endDate: periods.reduce((latest, period) => period.endDate > latest ? period.endDate : latest, periods[0].endDate),
+        shopifyPayoutId: null,
+        closedAt: null,
+      }
+    : periods.find((period) => period.id === requestedPeriodId) ?? periods[0];
+  const chargeWhere = isAllTime
+    ? {
+        shopId,
+        processedAt: { gte: selectedPeriod.startDate, lt: selectedPeriod.endDate },
+      }
+    : {
+        shopId,
+        OR: [
+          { periodId: selectedPeriod.id },
+          {
+            periodId: null,
+            processedAt: { gte: selectedPeriod.startDate, lt: selectedPeriod.endDate },
+          },
+        ],
+      };
   const mockableDb = db as typeof db & {
     artistAllocation?: { findMany?: typeof db.artistAllocation.findMany };
     artistPayment?: { findMany?: typeof db.artistPayment.findMany };
@@ -131,10 +159,17 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         },
         select: {
           shopifyLineItemId: true,
+          lineKind: true,
           productTitle: true,
           variantTitle: true,
           quantity: true,
           subtotal: true,
+          laborCost: true,
+          materialCost: true,
+          packagingCost: true,
+          equipmentCost: true,
+          podCost: true,
+          mistakeBufferAmount: true,
           netContribution: true,
           snapshot: {
             select: {
@@ -177,10 +212,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         _sum: { salesTaxCollected: true },
       }),
       db.causeAllocation.findMany({
-        where: {
-          shopId,
-          periodId: selectedPeriod.id,
-        },
+        where: isAllTime ? { shopId, id: { in: [] } } : { shopId, periodId: selectedPeriod.id },
         select: {
           causeId: true,
           causeName: true,
@@ -201,35 +233,11 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         _sum: { amount: true },
       }),
       db.shopifyChargeTransaction.aggregate({
-        where: {
-          shopId,
-          OR: [
-            { periodId: selectedPeriod.id },
-            {
-              periodId: null,
-              processedAt: {
-                gte: selectedPeriod.startDate,
-                lt: selectedPeriod.endDate,
-              },
-            },
-          ],
-        },
+        where: chargeWhere,
         _sum: { amount: true },
       }),
       db.shopifyChargeTransaction.findMany({
-        where: {
-          shopId,
-          OR: [
-            { periodId: selectedPeriod.id },
-            {
-              periodId: null,
-              processedAt: {
-                gte: selectedPeriod.startDate,
-                lt: selectedPeriod.endDate,
-              },
-            },
-          ],
-        },
+        where: chargeWhere,
         orderBy: [{ processedAt: "desc" }, { createdAt: "desc" }],
         take: 15,
         select: {
@@ -240,10 +248,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         },
       }),
       db.disbursement.findMany({
-        where: {
-          shopId,
-          periodId: selectedPeriod.id,
-        },
+        where: isAllTime ? { shopId } : { shopId, periodId: selectedPeriod.id },
         orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
         select: {
           id: true,
@@ -287,10 +292,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         },
       }),
       db.taxTrueUp.findMany({
-        where: {
-          shopId,
-          periodId: selectedPeriod.id,
-        },
+        where: isAllTime ? { shopId } : { shopId, periodId: selectedPeriod.id },
         orderBy: [{ filedAt: "desc" }, { createdAt: "desc" }],
         select: {
           id: true,
@@ -310,10 +312,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         },
       }),
       db.taxTrueUp.findMany({
-        where: {
-          shopId,
-          appliedPeriodId: selectedPeriod.id,
-        },
+        where: isAllTime ? { shopId, appliedPeriodId: { not: null } } : { shopId, appliedPeriodId: selectedPeriod.id },
         select: {
           id: true,
           periodId: true,
@@ -350,10 +349,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   const [closedArtistAllocations, artistPayments, activeArtists, outstandingArtistAllocations] = await Promise.all([
     mockableDb.artistAllocation?.findMany
       ? mockableDb.artistAllocation.findMany({
-          where: {
-            shopId,
-            periodId: selectedPeriod.id,
-          },
+          where: isAllTime ? { shopId, id: { in: [] } } : { shopId, periodId: selectedPeriod.id },
           select: {
             artistId: true,
             artistName: true,
@@ -365,10 +361,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       : Promise.resolve([]),
     mockableDb.artistPayment?.findMany
       ? mockableDb.artistPayment.findMany({
-          where: {
-            shopId,
-            periodId: selectedPeriod.id,
-          },
+          where: isAllTime ? { shopId } : { shopId, periodId: selectedPeriod.id },
           orderBy: [{ paidAt: "desc" }, { createdAt: "desc" }],
           select: {
             id: true,
@@ -556,10 +549,28 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   const allocationMap = new Map<string, { causeId: string; causeName: string; is501c3: boolean; allocated: Prisma.Decimal }>();
   const artistAllocationMap = new Map<string, { artistId: string; artistName: string; creditName: string; allocated: Prisma.Decimal }>();
   const allocationDetailMap = new Map<string, CauseAllocationDetail[]>();
+  let grossContribution = ZERO;
+  let laborDeduction = ZERO;
+  let materialDeduction = ZERO;
+  let packagingDeduction = ZERO;
+  let equipmentDeduction = ZERO;
+  let podDeduction = ZERO;
+  let mistakeBufferDeduction = ZERO;
+  let netContributionAdjustments = ZERO;
   let totalNetContribution = ZERO;
 
   for (const line of snapshotLines) {
     const adjustmentTotal = line.adjustments.reduce((sum, adj) => sum.add(adj.netContribAdj), ZERO);
+    if (line.lineKind !== "tip") {
+      grossContribution = grossContribution.add(line.subtotal);
+    }
+    laborDeduction = laborDeduction.add(line.laborCost ?? ZERO);
+    materialDeduction = materialDeduction.add(line.materialCost ?? ZERO);
+    packagingDeduction = packagingDeduction.add(line.packagingCost ?? ZERO);
+    equipmentDeduction = equipmentDeduction.add(line.equipmentCost ?? ZERO);
+    podDeduction = podDeduction.add(line.podCost ?? ZERO);
+    mistakeBufferDeduction = mistakeBufferDeduction.add(line.mistakeBufferAmount ?? ZERO);
+    netContributionAdjustments = netContributionAdjustments.add(adjustmentTotal);
     const adjustedLineNetContribution = line.netContribution.add(adjustmentTotal);
     totalNetContribution = totalNetContribution.add(adjustedLineNetContribution);
 
@@ -707,7 +718,15 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   );
 
   const deductionPool = expenseTotal.add(allocation501c3Total);
-  const taxEstimate = await calculateEstimatedTaxForPeriod(shopId, selectedPeriod.id, db);
+  const taxEstimate = isAllTime
+    ? computeEstimatedTaxReserve({
+        totalNetContribution,
+        businessExpenseTotal: expenseTotal,
+        allocations: allocationRows,
+        effectiveTaxRate: shop?.effectiveTaxRate,
+        taxDeductionMode: shop?.taxDeductionMode,
+      })
+    : await calculateEstimatedTaxForPeriod(shopId, selectedPeriod.id, db);
   if (!useClosedAllocations) {
     allocationRows = applyEstimatedTaxReserveToAllocations(
       allocationRows,
@@ -944,7 +963,15 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   );
 
   return {
-    periods: periods.map((period) => ({
+    periods: [{
+      id: ALL_TIME_PERIOD_ID,
+      status: "ROLLUP",
+      source: "synthetic",
+      startDate: periods.reduce((earliest, period) => period.startDate < earliest ? period.startDate : earliest, periods[0].startDate).toISOString(),
+      endDate: periods.reduce((latest, period) => period.endDate > latest ? period.endDate : latest, periods[0].endDate).toISOString(),
+      shopifyPayoutId: null,
+      closedAt: null,
+    }, ...periods.map((period) => ({
       id: period.id,
       status: period.status,
       source: period.source,
@@ -952,7 +979,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       endDate: period.endDate.toISOString(),
       shopifyPayoutId: period.shopifyPayoutId ?? null,
       closedAt: period.closedAt?.toISOString() ?? null,
-    })),
+    }))],
     selectedPeriodId: selectedPeriod.id,
     summary: {
       period: {
@@ -964,11 +991,20 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         closedAt: selectedPeriod.closedAt?.toISOString() ?? null,
       },
       track1: {
+        grossContribution: grossContribution.toString(),
+        laborDeduction: laborDeduction.toString(),
+        materialDeduction: materialDeduction.toString(),
+        packagingDeduction: packagingDeduction.toString(),
+        equipmentDeduction: equipmentDeduction.toString(),
+        podDeduction: podDeduction.toString(),
+        mistakeBufferDeduction: mistakeBufferDeduction.toString(),
+        netContributionAdjustments: netContributionAdjustments.toString(),
         totalNetContribution: totalNetContribution.toString(),
         salesTaxCollected: salesTaxCollected.toString(),
         shopifyCharges: shopifyCharges.toString(),
         externalSettlementFees: externalSettlementFees.toString(),
-        donationPool: totalNetContribution.sub(shopifyCharges).sub(externalSettlementFees).sub(taxEstimate.estimatedTaxReserve).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
+        estimatedTaxReserve: taxEstimate.estimatedTaxReserve.toString(),
+        donationPool: totalNetContribution.sub(shopifyCharges).sub(externalSettlementFees).sub(totalArtistPayout).sub(taxEstimate.estimatedTaxReserve).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
         taxTrueUpSurplusApplied: carryForwardSurplus.toString(),
         taxTrueUpShortfallApplied: carryForwardShortfall.toString(),
         artistPayoutTotal: totalArtistPayout.toString(),

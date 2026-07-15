@@ -74,6 +74,12 @@ describe("buildReportingSummary", () => {
             variantTitle: "Large",
             quantity: 2,
             subtotal: decimal("120.00"),
+            laborCost: decimal("5"),
+            materialCost: decimal("10"),
+            packagingCost: decimal("2"),
+            equipmentCost: decimal("1"),
+            podCost: decimal("1"),
+            mistakeBufferAmount: decimal("1"),
             netContribution: decimal("100.00"),
             snapshot: {
               id: "snapshot-1",
@@ -89,6 +95,14 @@ describe("buildReportingSummary", () => {
                 amount: decimal("50.00"),
               },
             ],
+            artistAllocations: [{
+              artistId: "artist-1",
+              artistName: "Artist One",
+              creditName: "Artist One",
+              payoutAmount: decimal("10"),
+              payoutEnabled: true,
+              payoutExclusionReason: null,
+            }],
           },
           {
             shopifyLineItemId: "line-2",
@@ -96,6 +110,12 @@ describe("buildReportingSummary", () => {
             variantTitle: "Default",
             quantity: 1,
             subtotal: decimal("40.00"),
+            laborCost: decimal("5"),
+            materialCost: decimal("5"),
+            packagingCost: decimal("2"),
+            equipmentCost: decimal("3"),
+            podCost: decimal("4"),
+            mistakeBufferAmount: decimal("1"),
             netContribution: decimal("20.00"),
             snapshot: {
               id: "snapshot-2",
@@ -111,6 +131,7 @@ describe("buildReportingSummary", () => {
                 amount: decimal("20.00"),
               },
             ],
+            artistAllocations: [],
           },
         ]),
       },
@@ -168,20 +189,32 @@ describe("buildReportingSummary", () => {
                 },
               ],
             },
-          ]),
+          ])
+          .mockResolvedValue([]),
       },
       cause: {
         findMany: vi.fn().mockResolvedValue([]),
       },
     };
 
+    calculateEstimatedTaxForPeriod.mockResolvedValue({
+      taxableBase: decimal("130"),
+      taxableWeight: decimal("1"),
+      estimatedTaxReserve: decimal("4"),
+    });
     const result = await buildReportingSummary("shop-1", "period-1", db as never);
 
     expect(result.summary?.track1.totalNetContribution).toBe("130");
+    expect(result.summary?.track1.grossContribution).toBe("160");
+    expect(result.summary?.track1.laborDeduction).toBe("10");
+    expect(result.summary?.track1.materialDeduction).toBe("15");
+    expect(result.summary?.track1.netContributionAdjustments).toBe("10");
     expect(result.summary?.track1.salesTaxCollected).toBe("12.34");
     expect(result.summary?.track1.shopifyCharges).toBe("10");
     expect(result.summary?.track1.externalSettlementFees).toBe("12.5");
-    expect(result.summary?.track1.donationPool).toBe("112.5");
+    expect(result.summary?.track1.artistPayoutTotal).toBe("11");
+    expect(result.summary?.track1.estimatedTaxReserve).toBe("4");
+    expect(result.summary?.track1.donationPool).toBe("97.5");
     expect(result.summary?.externalSettlements).toEqual([
       expect.objectContaining({
         id: "settlement-1",
@@ -194,7 +227,7 @@ describe("buildReportingSummary", () => {
     expect(result.summary?.track1.allocations).toEqual([
       expect.objectContaining({
         causeId: "cause-1",
-        allocated: "80",
+        allocated: "76",
         details: [
           expect.objectContaining({
             kind: "order_line",
@@ -221,8 +254,23 @@ describe("buildReportingSummary", () => {
             label: "Tax true-up redistribution",
             allocatedAmount: "5",
           }),
+          expect.objectContaining({
+            kind: "tax_reserve",
+            label: "Estimated tax reserve",
+            allocatedAmount: "-4",
+          }),
         ],
       }),
     ]);
+
+    const allTimeResult = await buildReportingSummary("shop-1", "all-time", db as never);
+    expect(allTimeResult.selectedPeriodId).toBe("all-time");
+    expect(allTimeResult.periods[0]).toEqual(expect.objectContaining({
+      id: "all-time",
+      status: "ROLLUP",
+    }));
+    expect(allTimeResult.summary?.track1.grossContribution).toBe("160");
+    expect(allTimeResult.summary?.track1.estimatedTaxReserve).toBe("32.5");
+    expect(allTimeResult.summary?.track1.donationPool).toBe("64");
   });
 });
