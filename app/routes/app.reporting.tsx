@@ -1040,7 +1040,9 @@ export default function ReportingPage() {
     () =>
       periods.map((period: PeriodRow) => ({
         id: period.id,
-        label: `${formatDateRange(period.startDate, period.endDate, locale)} · ${period.status}`,
+        label: period.id === "all-time"
+          ? "All Time · Roll-up"
+          : `${formatDateRange(period.startDate, period.endDate, locale)} · ${period.status}`,
       })),
     [periods, locale],
   );
@@ -1191,6 +1193,7 @@ export default function ReportingPage() {
   const donationPoolIsNegative = isLessThanZero(summary.track1.donationPool);
   const shopifyChargesArePositive = isGreaterThanZero(summary.track1.shopifyCharges);
   const artistPayoutsArePositive = isGreaterThanZero(summary.track1.artistPayoutTotal ?? "0");
+  const taxReserveIsPositive = isGreaterThanZero(summary.track1.estimatedTaxReserve ?? "0");
   const trueUpShortfallIsPositive = isGreaterThanZero(summary.track1.taxTrueUpShortfallApplied);
   const selectCauseForPayment = (causeId: string) => {
     setSelectedDisbursementCauseId(causeId);
@@ -1333,7 +1336,9 @@ export default function ReportingPage() {
             </div>
             {selectedPeriod ? (
               <s-text color="subdued">
-                {formatDateRange(selectedPeriod.startDate, selectedPeriod.endDate, locale)} · {selectedPeriod.status}
+                {selectedPeriod.id === "all-time"
+                  ? `All reporting history · ${formatDateRange(selectedPeriod.startDate, selectedPeriod.endDate, locale)} · Read only`
+                  : `${formatDateRange(selectedPeriod.startDate, selectedPeriod.endDate, locale)} · ${selectedPeriod.status}`}
               </s-text>
             ) : null}
           </div>
@@ -1861,7 +1866,7 @@ export default function ReportingPage() {
             <div style={{ display: "grid", gap: "1rem" }}>
               <SectionHeader
                 title="Available for cause allocation"
-                description="Track 1 starts with contribution dollars, subtracts operational obligations, applies prior tax true-ups, then produces the pool available for causes."
+                description="Track 1 starts with discounted gross contributions, subtracts each frozen cost category and operational obligation, applies tax reserves and prior tax true-ups, then produces the pool available for causes."
               />
               {donationPoolIsNegative ? (
                 <s-banner tone="warning">
@@ -1877,6 +1882,23 @@ export default function ReportingPage() {
                   gridTemplateColumns: "repeat(auto-fit, minmax(12rem, 1fr))",
                 }}
               >
+                <MetricCard
+                  label="Gross contributions"
+                  value={formatMoney(summary.track1.grossContribution)}
+                  detail="Discounted line subtotals before production costs."
+                />
+                <MetricCard label="Labor deductions" value={`-${formatMoney(summary.track1.laborDeduction)}`} tone="subdued" detail="Frozen labor cost from order snapshots." />
+                <MetricCard label="Material deductions" value={`-${formatMoney(summary.track1.materialDeduction)}`} tone="subdued" detail="Frozen material cost from order snapshots." />
+                <MetricCard label="Packaging deductions" value={`-${formatMoney(summary.track1.packagingDeduction)}`} tone="subdued" detail="Packaging allocated to order lines." />
+                <MetricCard label="Equipment deductions" value={`-${formatMoney(summary.track1.equipmentDeduction)}`} tone="subdued" detail="Frozen equipment usage cost." />
+                <MetricCard label="POD deductions" value={`-${formatMoney(summary.track1.podDeduction)}`} tone="subdued" detail="Print-on-demand production cost." />
+                <MetricCard label="Mistake buffer" value={`-${formatMoney(summary.track1.mistakeBufferDeduction)}`} tone="subdued" detail="Configured production-risk reserve." />
+                <MetricCard
+                  label="Contribution adjustments"
+                  value={formatMoney(summary.track1.netContributionAdjustments)}
+                  tone={isLessThanZero(summary.track1.netContributionAdjustments) ? "warning" : "subdued"}
+                  detail="Refund and lifecycle adjustments applied after snapshot creation."
+                />
                 <MetricCard
                   label="Net contribution"
                   value={formatMoney(summary.track1.totalNetContribution)}
@@ -1899,6 +1921,12 @@ export default function ReportingPage() {
                   value={artistPayoutsArePositive ? `-${formatMoney(summary.track1.artistPayoutTotal ?? "0")}` : formatMoney(summary.track1.artistPayoutTotal ?? "0")}
                   tone={artistPayoutsArePositive ? "warning" : "subdued"}
                   detail="Artist obligations are paid before cause allocation."
+                />
+                <MetricCard
+                  label="Estimated tax reserve"
+                  value={taxReserveIsPositive ? `-${formatMoney(summary.track1.estimatedTaxReserve)}` : formatMoney(summary.track1.estimatedTaxReserve)}
+                  tone={taxReserveIsPositive ? "warning" : "subdued"}
+                  detail="Current period reserve withheld according to the selected tax mode."
                 />
                 <MetricCard
                   label="Tax true-up carry-forward"
