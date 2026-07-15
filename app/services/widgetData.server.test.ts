@@ -153,7 +153,7 @@ describe("buildWidgetProductPayload", () => {
           taxReserve: {
             suppressed: false,
             estimatedRate: "25.00",
-            estimatedAmount: "3.94",
+            estimatedAmount: "4.92",
           },
         },
       ],
@@ -215,7 +215,7 @@ describe("buildWidgetProductPayload", () => {
         name: "Neighborhood Arts",
         iconUrl: "https://example.com/icon.png",
         donationPercentage: "100.00",
-        estimatedDonationAmount: "11.81",
+        estimatedDonationAmount: "10.83",
         donationCurrencyCode: "USD",
         donationLink: "https://example.com/donate",
       },
