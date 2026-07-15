@@ -22,7 +22,9 @@ type SnapshotLineItemPayload = {
   variant_title?: string | null;
   sku?: string | null;
   importMappingKey?: string | null;
-  importLineKind?: "product" | "tip" | "custom" | null;
+  importLineKind?: "product" | "tip" | "custom" | "pending" | "not_eligible" | null;
+  fulfillment_status?: string | null;
+  fulfillable_quantity?: number | string | null;
   quantity?: number | string | null;
   price?: string | number | null;
   total_discount?: string | number | null;
@@ -199,10 +201,26 @@ function getDiscountedUnitPrice(lineItem: SnapshotLineItemPayload, quantity: num
   return getDiscountedLineSubtotal(lineItem, quantity).div(quantity);
 }
 
-function getLineKind(lineItem: SnapshotLineItemPayload): "product" | "tip" | "custom" {
-  return lineItem.importLineKind === "tip" || lineItem.importLineKind === "custom"
-    ? lineItem.importLineKind
-    : "product";
+export function getOrderLineKind(lineItem: SnapshotLineItemPayload): "product" | "tip" | "custom" | "pending" | "not_eligible" {
+  if (lineItem.importLineKind === "tip" ||
+    lineItem.importLineKind === "custom" ||
+    lineItem.importLineKind === "pending" ||
+    lineItem.importLineKind === "not_eligible") {
+    return lineItem.importLineKind;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(lineItem, "fulfillment_status")) {
+    const status = lineItem.fulfillment_status?.trim().toLowerCase().replace(/[\s-]+/g, "_") ?? "";
+    if (status === "fulfilled") return "product";
+    if (status === "not_eligible") return "not_eligible";
+    const fulfillableQuantity = Number(lineItem.fulfillable_quantity);
+    if (!status && Number.isFinite(fulfillableQuantity) && fulfillableQuantity === 0) {
+      return "not_eligible";
+    }
+    return "pending";
+  }
+
+  return "product";
 }
 
 function getOrderDiscount(order: ShopifyOrderPayload) {
@@ -295,7 +313,13 @@ function getCustomerDisplayName(order: ShopifyOrderPayload) {
   return shippingName || null;
 }
 
-function allocateOrderLevelDiscounts<T extends { subtotal: Prisma.Decimal; quantity: number; salePrice: Prisma.Decimal; discountEligible: boolean }>(
+function allocateOrderLevelDiscounts<T extends {
+  subtotal: Prisma.Decimal;
+  quantity: number;
+  salePrice: Prisma.Decimal;
+  discountEligible: boolean;
+  includedInOrderSubtotal: boolean;
+}>(
   lines: T[],
   orderDiscountedSubtotal: Prisma.Decimal | null,
 ): T[] {
@@ -306,7 +330,7 @@ function allocateOrderLevelDiscounts<T extends { subtotal: Prisma.Decimal; quant
     ZERO,
   );
   const excludedSubtotal = lines.reduce(
-    (sum, line) => line.discountEligible ? sum : sum.add(line.subtotal),
+    (sum, line) => line.discountEligible || !line.includedInOrderSubtotal ? sum : sum.add(line.subtotal),
     ZERO,
   );
   const targetEligibleSubtotal = Prisma.Decimal.max(orderDiscountedSubtotal.sub(excludedSubtotal), ZERO);
@@ -380,7 +404,7 @@ function toProductGid(lineItem: SnapshotLineItemPayload) {
 }
 
 type SnapshotResolution = {
-  lineKind: "product" | "tip" | "custom";
+  lineKind: "product" | "tip" | "custom" | "pending" | "not_eligible";
   variantId: string | null;
   productGid: string | null;
   lineItemId: string;
@@ -741,13 +765,16 @@ export async function createSnapshot(
       : null;
   const unadjustedLinePricing = lineItems.map((lineItem) => {
       const quantity = Math.max(0, Number(lineItem.quantity ?? 0));
-      const subtotal = getDiscountedLineSubtotal(lineItem, quantity);
-      const lineKind = getLineKind(lineItem);
+      const lineKind = getOrderLineKind(lineItem);
+      const subtotal = lineKind === "not_eligible"
+        ? toDecimal(lineItem.price).mul(quantity).sub(getLineDiscount(lineItem))
+        : getDiscountedLineSubtotal(lineItem, quantity);
       return {
         quantity,
         subtotal,
         salePrice: quantity > 0 ? subtotal.div(quantity) : ZERO,
-        discountEligible: lineKind !== "tip",
+        discountEligible: lineKind !== "tip" && lineKind !== "not_eligible",
+        includedInOrderSubtotal: lineKind !== "tip",
       };
     });
   const unadjustedLineSubtotal = unadjustedLinePricing.reduce((sum, line) => sum.add(line.subtotal), ZERO);
@@ -766,12 +793,15 @@ export async function createSnapshot(
     lineItems.map(async (lineItem, index): Promise<SnapshotResolution> => {
       const variantGid = toVariantGid(lineItem);
       const productGid = toProductGid(lineItem);
-      const lineKind = getLineKind(lineItem);
+      const lineKind = getOrderLineKind(lineItem);
       const pricing = adjustedLinePricing[index] ?? {
         quantity: Math.max(0, Number(lineItem.quantity ?? 0)),
         salePrice: getDiscountedUnitPrice(lineItem, Math.max(0, Number(lineItem.quantity ?? 0))),
-        subtotal: getDiscountedLineSubtotal(lineItem, Math.max(0, Number(lineItem.quantity ?? 0))),
-        discountEligible: lineKind !== "tip",
+        subtotal: lineKind === "not_eligible"
+          ? toDecimal(lineItem.price).mul(Math.max(0, Number(lineItem.quantity ?? 0))).sub(getLineDiscount(lineItem))
+          : getDiscountedLineSubtotal(lineItem, Math.max(0, Number(lineItem.quantity ?? 0))),
+        discountEligible: lineKind !== "tip" && lineKind !== "not_eligible",
+        includedInOrderSubtotal: lineKind !== "tip",
       };
       const quantity = pricing.quantity;
       const salePrice = pricing.salePrice;
@@ -830,7 +860,9 @@ export async function createSnapshot(
 
   const snapshotLineSubtotal = firstPassResolutions.reduce((sum, line) => sum.add(line.subtotal), ZERO);
   const packagingEligibleSubtotal = firstPassResolutions.reduce(
-    (sum, line) => line.lineKind === "tip" ? sum : sum.add(line.subtotal),
+    (sum, line) => line.lineKind === "tip" || line.lineKind === "not_eligible" || line.lineKind === "pending"
+      ? sum
+      : sum.add(line.subtotal),
     ZERO,
   );
   const packagingCost = firstPassResolutions.reduce(
@@ -841,7 +873,7 @@ export async function createSnapshot(
   const withFinalCosts = await Promise.all(
     firstPassResolutions.map(async (line) => {
       const packagingAllocated =
-        line.lineKind !== "tip" && packagingEligibleSubtotal.gt(ZERO)
+        line.lineKind !== "tip" && line.lineKind !== "not_eligible" && line.lineKind !== "pending" && packagingEligibleSubtotal.gt(ZERO)
           ? packagingCost.mul(line.subtotal).div(packagingEligibleSubtotal)
           : ZERO;
       const packagingAllocatedPerUnit =
@@ -998,6 +1030,32 @@ export async function createSnapshot(
     }),
   );
 
+  // Marketplace commission/processing rows remain financial evidence, but are
+  // not donation recipients. Apply only their negative contribution once,
+  // proportionally across otherwise-routable donation allocations.
+  const routableNetContribution = withFinalCosts.reduce(
+    (sum, line) => line.lineKind === "product"
+      ? sum.add(Prisma.Decimal.max((line.finalCosts.netContribution ?? ZERO).mul(line.quantity), ZERO))
+      : sum,
+    ZERO,
+  );
+  const marketplaceFeeContribution = withFinalCosts.reduce(
+    (sum, line) => line.lineKind === "not_eligible"
+      ? sum.add(Prisma.Decimal.min((line.finalCosts.netContribution ?? ZERO).mul(line.quantity), ZERO))
+      : sum,
+    ZERO,
+  );
+  const donationScale = routableNetContribution.gt(ZERO)
+    ? Prisma.Decimal.max(routableNetContribution.add(marketplaceFeeContribution), ZERO).div(routableNetContribution)
+    : ZERO;
+  const financiallyScaledLines = withFinalCosts.map((line) => ({
+    ...line,
+    allocations: line.allocations.map((allocation) => ({
+      ...allocation,
+      amount: allocation.amount.mul(donationScale),
+    })),
+  }));
+
   try {
     const result = await db.$transaction(async (tx: any) => {
       const record = tx.orderRecord?.upsert
@@ -1085,7 +1143,7 @@ export async function createSnapshot(
         packagingCost: Prisma.Decimal;
       }> = [];
 
-      for (const line of withFinalCosts) {
+      for (const line of financiallyScaledLines) {
         const snapshotLine = await tx.orderSnapshotLine.create({
           data: {
             shopId,
@@ -1303,7 +1361,7 @@ export async function createSnapshot(
           entity: "OrderSnapshot",
           entityId: snapshot.id,
           action: isReplacing ? "ORDER_SNAPSHOT_REPLACED" : "ORDER_SNAPSHOT_CREATED",
-          actor: isReplacing ? "merchant" : "system",
+          actor: isReplacing && metadata.replacementSource === "merchant" ? "merchant" : "system",
           payload: {
             shopifyOrderId,
             lineCount: withFinalCosts.length,
@@ -1346,4 +1404,79 @@ export async function createSnapshot(
       snapshotId: existingSnapshot?.id,
     };
   }
+}
+
+export async function replaceSnapshotForFulfillmentChange(
+  shopId: string,
+  order: ShopifyOrderPayload,
+  db: any = prisma,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ replaced: boolean; snapshotId?: string }> {
+  const shopifyOrderId = order.admin_graphql_api_id ?? null;
+  if (!shopifyOrderId || !(order.line_items ?? []).some((line) =>
+    Object.prototype.hasOwnProperty.call(line, "fulfillment_status") || line.importLineKind !== undefined
+  )) {
+    return { replaced: false };
+  }
+
+  const record = await db.orderRecord.findUnique({
+    where: { shopId_shopifyOrderId: { shopId, shopifyOrderId } },
+    select: {
+      currentSnapshot: {
+        select: {
+          id: true,
+          origin: true,
+          periodId: true,
+          customerDisplayName: true,
+          shopifyCustomerId: true,
+          normalizedCustomerEmailHash: true,
+          subtotalAmount: true,
+          discountAmount: true,
+          shippingAmount: true,
+          totalAmount: true,
+          salesTaxCollected: true,
+          lines: { select: { shopifyLineItemId: true, lineKind: true } },
+        },
+      },
+    },
+  });
+  const current = record?.currentSnapshot;
+  if (!current) return { replaced: false };
+
+  const incomingKinds = new Map(
+    (order.line_items ?? []).flatMap((line) => {
+      const id = line.admin_graphql_api_id ?? line.id?.toString();
+      return id ? [[id, getOrderLineKind(line)] as const] : [];
+    }),
+  );
+  const changed = current.lines.some((line: { shopifyLineItemId: string; lineKind: string }) => {
+    const incomingKind = incomingKinds.get(line.shopifyLineItemId);
+    return incomingKind !== undefined && incomingKind !== line.lineKind;
+  });
+  if (!changed) return { replaced: false, snapshotId: current.id };
+
+  const result = await createSnapshot(
+    shopId,
+    order,
+    db,
+    current.origin,
+    fetchImpl,
+    {
+      replaceExistingSnapshotId: current.id,
+      replacementReason: "Shopify line fulfillment eligibility changed",
+      replacementSource: "shopify_fulfillment_update",
+      periodId: current.periodId,
+      fallbackSnapshot: {
+        customerDisplayName: current.customerDisplayName,
+        shopifyCustomerId: current.shopifyCustomerId,
+        normalizedCustomerEmailHash: current.normalizedCustomerEmailHash,
+        subtotalAmount: current.subtotalAmount,
+        discountAmount: current.discountAmount,
+        shippingAmount: current.shippingAmount,
+        totalAmount: current.totalAmount,
+        salesTaxCollected: current.salesTaxCollected,
+      },
+    },
+  );
+  return { replaced: result.created, snapshotId: result.snapshotId };
 }

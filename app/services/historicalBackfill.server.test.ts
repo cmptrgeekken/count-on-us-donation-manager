@@ -148,6 +148,28 @@ describe("historical backfill imports", () => {
     ]);
   });
 
+  it("classifies CSV lines by fulfillment eligibility without mapping marketplace fees", () => {
+    const rows = parseHistoricalImportRows(
+      [
+        "Name,Id,Financial Status,Fulfillment Status,Lineitem quantity,Lineitem name,Lineitem price,Lineitem sku,Lineitem fulfillment status",
+        "#1302,7003,paid,unfulfilled,1,Product A - Blue,25.00,SKU-BLUE,pending",
+        "#1302,,,,1,FAIRE-COMMISSION,-3.75,FAIRE-COMMISSION,not_eligible",
+        "#1302,,,,1,Product B - Red,30.00,SKU-RED,fulfilled",
+      ].join("\n"),
+      "orders",
+    );
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        line_items: [
+          expect.objectContaining({ sku: "SKU-BLUE", importLineKind: "pending" }),
+          expect.objectContaining({ sku: "FAIRE-COMMISSION", price: "-3.75", importLineKind: "not_eligible" }),
+          expect.objectContaining({ sku: "SKU-RED", importLineKind: "product" }),
+        ],
+      }),
+    ]);
+  });
+
   it("requires Shopify GraphQL order ids for imported order snapshots", async () => {
     const db = {
       orderSnapshot: {

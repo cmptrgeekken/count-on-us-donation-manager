@@ -16,6 +16,8 @@ describe("order lifecycle eligibility", () => {
     expect(deriveLifecycleState({ financial_status: "paid", cancelled_at: "2026-07-14T00:00:00Z" })).toBe("canceled");
     expect(deriveLifecycleState({})).toBe("unknown");
     expect(deriveLifecycleState({ financial_status: "Partially Refunded" })).toBe("partially_refunded");
+    expect(deriveLifecycleState({ financial_status: "pending", fulfillment_status: "unfulfilled" })).toBe("review_required");
+    expect(deriveLifecycleState({ financial_status: "pending", fulfillment_status: "fulfilled" })).toBe("active");
   });
 
   it("bulk-confirms selected unresolved lifecycles in one shop-scoped transaction", async () => {

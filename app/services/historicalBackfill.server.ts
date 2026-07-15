@@ -390,6 +390,18 @@ function parseShopifyOrdersCsv(rows: CsvRow[]): ShopifyOrderPayload[] {
       quantity: getCsvValue(row, "Lineitem quantity", "Line item quantity") || "0",
       price: getCsvValue(row, "Lineitem price", "Line item price") || "0",
       total_discount: getCsvValue(row, "Lineitem discount", "Line item discount") || "0",
+      importLineKind: (() => {
+        const status = normalizeText(getCsvValue(
+          row,
+          "Lineitem fulfillment status",
+          "Line item fulfillment status",
+          "Lineitem fulfullment status",
+          "Line item fulfullment status",
+        )).replace(/ /g, "_");
+        if (status === "not_eligible") return "not_eligible";
+        if (status === "fulfilled") return "product";
+        return "pending";
+      })(),
     });
   }
 
@@ -656,7 +668,7 @@ async function validateOrderRow(shopId: string, order: ShopifyOrderPayload, db: 
   }
 
   for (const line of lineItems) {
-    if (line.importLineKind === "tip") continue;
+    if (line.importLineKind === "tip" || line.importLineKind === "pending" || line.importLineKind === "not_eligible") continue;
     if (line.importLineKind === "custom") {
       warnings.push(`Custom line ${line.title ?? "Untitled"} will import with zero recorded production cost and no product-specific routing.`);
       continue;
@@ -862,6 +874,7 @@ async function enrichHistoricalOrderRows(
   const syncedVariantGids = new Set(syncedSuppliedVariants.map((variant) => variant.shopifyId));
 
   for (const lineItem of order.line_items ?? []) {
+    if (lineItem.importLineKind === "pending" || lineItem.importLineKind === "not_eligible") continue;
     const existingVariantId = normalizeId(lineItem.admin_graphql_api_id?.includes("ProductVariant") ? lineItem.admin_graphql_api_id : lineItem.variant_id);
     const existingVariantGid = existingVariantId
       ? existingVariantId.startsWith("gid://")

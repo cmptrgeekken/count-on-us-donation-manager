@@ -175,7 +175,7 @@ describe("createSnapshot", () => {
       "shop-1",
       {
         admin_graphql_api_id: "gid://shopify/Order/1",
-        subtotal_price: "23.00",
+        subtotal_price: "18.00",
         line_items: [
           {
             id: "custom-line",
@@ -216,6 +216,145 @@ describe("createSnapshot", () => {
         packagingCost: decimal("0"),
         netContribution: decimal("0"),
       }),
+    });
+  });
+
+  it("does not apply a shipping discount to merchandise when Shopify subtotal is unchanged", async () => {
+    const db = createDb({ variant: null });
+
+    await createSnapshot("shop-1", {
+      admin_graphql_api_id: "gid://shopify/Order/shipping-discount",
+      subtotal_price: "15.00",
+      total_discounts: "5.00",
+      total_shipping_price_set: { shop_money: { amount: "5.00" } },
+      total_price: "16.28",
+      total_tax: "1.28",
+      line_items: [{
+        id: "line-1",
+        title: "Earrings",
+        quantity: 1,
+        price: "15.00",
+        importLineKind: "custom",
+      }],
+    }, db);
+
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({ subtotal: decimal("15"), netContribution: decimal("15") }),
+    });
+  });
+
+  it("subtracts not-eligible marketplace fees once from fulfilled-line donation allocations", async () => {
+    const costResult = {
+      laborCost: decimal("0"),
+      materialCost: decimal("0"),
+      packagingCost: decimal("0"),
+      equipmentCost: decimal("0"),
+      mistakeBufferAmount: decimal("0"),
+      podCost: decimal("0"),
+      podLines: [],
+      podCostEstimated: false,
+      podCostMissing: false,
+      totalCost: decimal("0"),
+      netContribution: decimal("100"),
+      materialLines: [],
+      equipmentLines: [],
+    };
+    resolveCosts.mockResolvedValue(costResult);
+    const db = createDb();
+
+    await createSnapshot(
+      "shop-1",
+      {
+        admin_graphql_api_id: "gid://shopify/Order/faire",
+        line_items: [
+          {
+            id: "fulfilled-line",
+            variant_id: 100,
+            product_id: 200,
+            title: "Product",
+            quantity: 1,
+            price: "100.00",
+            importLineKind: "product",
+          },
+          {
+            id: "faire-fee",
+            title: "FAIRE-COMMISSION",
+            quantity: 1,
+            price: "-10.00",
+            importLineKind: "not_eligible",
+          },
+        ],
+      },
+      db,
+    );
+
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({
+        lineKind: "not_eligible",
+        subtotal: decimal("-10"),
+        netContribution: decimal("-10"),
+      }),
+    });
+    expect(db.__spies.causeAllocationCreateMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ amount: decimal("45") })],
+    });
+  });
+
+  it("uses native Shopify line fulfillment evidence for webhook snapshots", async () => {
+    const db = createDb();
+    resolveCosts.mockResolvedValue({
+      laborCost: decimal("0"), materialCost: decimal("0"), packagingCost: decimal("0"),
+      equipmentCost: decimal("0"), mistakeBufferAmount: decimal("0"), podCost: decimal("0"),
+      podLines: [], podCostEstimated: false, podCostMissing: false, totalCost: decimal("0"),
+      netContribution: decimal("20"), materialLines: [], equipmentLines: [],
+    });
+
+    await createSnapshot("shop-1", {
+      admin_graphql_api_id: "gid://shopify/Order/native-status",
+      line_items: [
+        {
+          id: "fulfilled",
+          variant_id: 100,
+          product_id: 200,
+          title: "Fulfilled product",
+          quantity: 1,
+          price: "20",
+          fulfillment_status: "fulfilled",
+          fulfillable_quantity: 0,
+        },
+        {
+          id: "pending",
+          variant_id: 100,
+          product_id: 200,
+          title: "Pending product",
+          quantity: 1,
+          price: "20",
+          fulfillment_status: null,
+          fulfillable_quantity: 1,
+        },
+        {
+          id: "fee",
+          title: "FAIRE-COMMISSION",
+          quantity: 1,
+          price: "-5",
+          fulfillment_status: null,
+          fulfillable_quantity: 0,
+        },
+      ],
+    }, db, "webhook");
+
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenNthCalledWith(1, {
+      data: expect.objectContaining({ lineKind: "product" }),
+    });
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({ lineKind: "pending" }),
+    });
+    expect(db.__spies.orderSnapshotLineCreate).toHaveBeenNthCalledWith(3, {
+      data: expect.objectContaining({ lineKind: "not_eligible", netContribution: decimal("-5") }),
+    });
+    expect(db.__spies.causeAllocationCreateMany).toHaveBeenCalledTimes(1);
+    expect(db.__spies.causeAllocationCreateMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ amount: decimal("7.5") })],
     });
   });
 
