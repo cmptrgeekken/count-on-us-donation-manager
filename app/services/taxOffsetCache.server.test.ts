@@ -17,11 +17,11 @@ describe("recomputeTaxOffsetCache", () => {
         aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("25") } }),
       },
       orderSnapshotLine: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribution: decimal("60") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { subtotal: decimal("100"), materialCost: decimal("20"), packagingCost: decimal("10"), netContribution: decimal("60") } }),
         findMany: vi.fn().mockResolvedValue([]),
       },
       adjustment: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("-5") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("-5"), laborAdj: decimal("0"), equipmentAdj: decimal("0") } }),
       },
       taxOffsetCache: {
         upsert,
@@ -32,12 +32,12 @@ describe("recomputeTaxOffsetCache", () => {
 
     expect(result.cumulativeNetContrib.toString()).toBe("55");
     expect(result.deductionPool.toString()).toBe("75");
-    expect(result.taxableExposure.toString()).toBe("-20");
+    expect(result.taxableExposure.toString()).toBe("-10");
     expect(result.widgetTaxSuppressed).toBe(true);
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({
         create: expect.objectContaining({
-          taxableExposure: decimal("-20"),
+          taxableExposure: decimal("-10"),
         }),
       }),
     );
@@ -52,7 +52,7 @@ describe("recomputeTaxOffsetCache", () => {
         aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("20") } }),
       },
       orderSnapshotLine: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribution: decimal("100") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { subtotal: decimal("120"), materialCost: decimal("10"), packagingCost: decimal("10"), netContribution: decimal("100") } }),
         findMany: vi.fn().mockResolvedValue([
           {
             netContribution: decimal("40"),
@@ -62,7 +62,7 @@ describe("recomputeTaxOffsetCache", () => {
         ]),
       },
       adjustment: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("-10") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("-10"), laborAdj: decimal("5"), equipmentAdj: decimal("2") } }),
       },
       taxOffsetCache: {
         upsert: vi.fn().mockResolvedValue(undefined),
@@ -73,7 +73,7 @@ describe("recomputeTaxOffsetCache", () => {
 
     expect(result.deductionPool.toString()).toBe("25");
     expect(result.cumulativeNetContrib.toString()).toBe("90");
-    expect(result.taxableExposure.toString()).toBe("65");
+    expect(result.taxableExposure.toString()).toBe("72");
     expect(db.lineCauseAllocation.aggregate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
@@ -92,7 +92,7 @@ describe("recomputeTaxOffsetCache", () => {
         aggregate: vi.fn().mockResolvedValue({ _sum: { amount: decimal("20") } }),
       },
       orderSnapshotLine: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribution: decimal("100") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { subtotal: decimal("130"), materialCost: decimal("20"), packagingCost: decimal("10"), netContribution: decimal("100") } }),
         findMany: vi.fn().mockResolvedValue([
           {
             netContribution: decimal("0.01"),
@@ -102,7 +102,7 @@ describe("recomputeTaxOffsetCache", () => {
         ]),
       },
       adjustment: {
-        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("1") } }),
+        aggregate: vi.fn().mockResolvedValue({ _sum: { netContribAdj: decimal("1"), laborAdj: decimal("0"), equipmentAdj: decimal("0") } }),
       },
       taxOffsetCache: {
         upsert: vi.fn().mockResolvedValue(undefined),

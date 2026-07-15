@@ -20,6 +20,8 @@ const summary: NonNullable<ReportingSummaryResult["summary"]> = {
     podDeduction: "0.00",
     mistakeBufferDeduction: "0.00",
     netContributionAdjustments: "0.00",
+    taxableContribution: "90.00",
+    taxableBase: "90.00",
     totalNetContribution: "90.00",
     salesTaxCollected: "0.00",
     shopifyCharges: "12.00",

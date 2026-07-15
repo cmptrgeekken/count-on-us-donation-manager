@@ -1923,6 +1923,16 @@ export default function ReportingPage() {
                   detail="Artist obligations are paid before cause allocation."
                 />
                 <MetricCard
+                  label="Taxable contribution"
+                  value={formatMoney(summary.track1.taxableContribution)}
+                  detail="Gross contributions less only material and packaging deductions, including refund adjustments."
+                />
+                <MetricCard
+                  label="Taxable base after expenses"
+                  value={formatMoney(summary.track1.taxableBase)}
+                  detail="Taxable contribution after eligible non-order business expenses."
+                />
+                <MetricCard
                   label="Estimated tax reserve"
                   value={taxReserveIsPositive ? `-${formatMoney(summary.track1.estimatedTaxReserve)}` : formatMoney(summary.track1.estimatedTaxReserve)}
                   tone={taxReserveIsPositive ? "warning" : "subdued"}

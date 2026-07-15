@@ -209,9 +209,12 @@ export async function materializeCauseAllocationsForPeriod(
     },
     select: {
       netContribution: true,
+      subtotal: true,
+      materialCost: true,
+      packagingCost: true,
       shopifyProductId: true,
       adjustments: {
-        select: { netContribAdj: true },
+        select: { netContribAdj: true, laborAdj: true, equipmentAdj: true },
       },
       causeAllocations: {
         select: {
@@ -326,7 +329,17 @@ export async function materializeCauseAllocationsForPeriod(
     return sum.add(line.netContribution).add(adjustmentTotal);
   }, ZERO);
   const taxEstimate = computeEstimatedTaxReserve({
-    totalNetContribution,
+    taxableContribution: snapshotLines.reduce((sum, line) => sum
+      .add(line.subtotal ?? ZERO)
+      .sub(line.materialCost ?? ZERO)
+      .sub(line.packagingCost ?? ZERO)
+      .add(line.adjustments.reduce(
+        (adjustmentSum, adjustment) => adjustmentSum
+          .add(adjustment.netContribAdj)
+          .add(adjustment.laborAdj ?? ZERO)
+          .add(adjustment.equipmentAdj ?? ZERO),
+        ZERO,
+      )), ZERO),
     businessExpenseTotal: expenseSummary._sum.amount ?? ZERO,
     allocations: grossRows,
     effectiveTaxRate: shop?.effectiveTaxRate,

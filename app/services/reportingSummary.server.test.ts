@@ -270,7 +270,9 @@ describe("buildReportingSummary", () => {
       status: "ROLLUP",
     }));
     expect(allTimeResult.summary?.track1.grossContribution).toBe("160");
-    expect(allTimeResult.summary?.track1.estimatedTaxReserve).toBe("32.5");
-    expect(allTimeResult.summary?.track1.donationPool).toBe("64");
+    expect(allTimeResult.summary?.track1.taxableContribution).toBe("151");
+    expect(allTimeResult.summary?.track1.taxableBase).toBe("151");
+    expect(allTimeResult.summary?.track1.estimatedTaxReserve).toBe("37.75");
+    expect(allTimeResult.summary?.track1.donationPool).toBe("58.75");
   });
 });
