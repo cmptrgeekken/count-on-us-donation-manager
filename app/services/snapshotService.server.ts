@@ -68,6 +68,7 @@ export type ShopifyOrderPayload = {
   total_discounts?: string | number | null;
   subtotal_price?: string | number | null;
   current_subtotal_price?: string | number | null;
+  refunded_amount?: string | number | null;
   total_received?: string | number | null;
   total_outstanding?: string | number | null;
   payment_gateway_names?: string[] | null;
@@ -267,14 +268,21 @@ function getOrderShipping(order: ShopifyOrderPayload) {
 }
 
 function getOrderDiscountedSubtotal(order: ShopifyOrderPayload) {
-  const explicitSubtotal =
+  const currentSubtotal =
     order.current_subtotal_price ??
-    order.current_subtotal_price_set?.shop_money?.amount ??
-    order.subtotal_price ??
-    order.subtotal_price_set?.shop_money?.amount;
+    order.current_subtotal_price_set?.shop_money?.amount;
 
-  if (explicitSubtotal !== null && explicitSubtotal !== undefined && explicitSubtotal !== "") {
-    return toDecimal(explicitSubtotal);
+  if (currentSubtotal !== null && currentSubtotal !== undefined && currentSubtotal !== "") {
+    return toDecimal(currentSubtotal);
+  }
+
+  const originalSubtotal = order.subtotal_price ?? order.subtotal_price_set?.shop_money?.amount;
+
+  if (originalSubtotal !== null && originalSubtotal !== undefined && originalSubtotal !== "") {
+    return Prisma.Decimal.max(
+      toDecimal(originalSubtotal).sub(toDecimal(order.refunded_amount)),
+      ZERO,
+    );
   }
 
   const preDiscountSubtotal = toDecimal(
