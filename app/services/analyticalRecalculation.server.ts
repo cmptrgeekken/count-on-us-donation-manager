@@ -3,6 +3,7 @@ import { prisma } from "../db.server";
 import { jobQueue } from "../jobs/queue.server";
 import { resolveCosts } from "./costEngine.server";
 import { buildReportingSummary } from "./reportingSummary.server";
+import { capCauseAllocations, computeDonationPool } from "./donationPool.server";
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -222,8 +223,47 @@ export async function computeAnalyticalRecalculationSummary(shopId: string, peri
 
   const authoritativeNetContribution = new Prisma.Decimal(authoritative.summary.track1.totalNetContribution);
   const shopifyCharges = new Prisma.Decimal(authoritative.summary.track1.shopifyCharges);
-  const authoritativeDonationPool = authoritativeNetContribution.sub(shopifyCharges);
-  const recalculatedDonationPool = recalculatedNetContribution.sub(shopifyCharges);
+  const externalSettlementFees = new Prisma.Decimal(authoritative.summary.track1.externalSettlementFees ?? 0);
+  const artistPayouts = new Prisma.Decimal(authoritative.summary.track1.artistPayoutTotal ?? 0);
+  const estimatedTaxReserve = new Prisma.Decimal(authoritative.summary.track1.estimatedTaxReserve ?? 0);
+  const taxTrueUpSurplus = new Prisma.Decimal(authoritative.summary.track1.taxTrueUpSurplusApplied ?? 0);
+  const taxTrueUpShortfall = new Prisma.Decimal(authoritative.summary.track1.taxTrueUpShortfallApplied ?? 0);
+  const recalculatedRequestedDonation = Array.from(recalculatedCauseTotals.values()).reduce(
+    (sum, cause) => sum.add(cause.amount),
+    ZERO,
+  );
+  const recalculatedDonationPool = computeDonationPool({
+    totalNetContribution: recalculatedNetContribution,
+    shopifyCharges,
+    externalSettlementFees,
+    artistPayouts,
+    estimatedTaxReserve,
+    taxTrueUpSurplus,
+    taxTrueUpShortfall,
+    requestedDonation: recalculatedRequestedDonation,
+  }).donationPool;
+  const cappedRecalculatedCauseTotals = new Map(
+    capCauseAllocations(
+      Array.from(recalculatedCauseTotals.values()).map((cause) => ({ ...cause, allocated: cause.amount })),
+      recalculatedDonationPool,
+    ).map((cause) => [cause.causeId, { ...cause, amount: cause.allocated }]),
+  );
+  const authoritativeRequestedDonation = authoritative.summary.track1.allocations.reduce(
+    (sum, allocation) => sum.add(new Prisma.Decimal(allocation.allocated)),
+    ZERO,
+  );
+  const authoritativeDonationPool = authoritative.summary.track1.donationPool !== undefined
+    ? new Prisma.Decimal(authoritative.summary.track1.donationPool)
+    : computeDonationPool({
+        totalNetContribution: authoritativeNetContribution,
+        shopifyCharges,
+        externalSettlementFees,
+        artistPayouts,
+        estimatedTaxReserve,
+        taxTrueUpSurplus,
+        taxTrueUpShortfall,
+        requestedDonation: authoritativeRequestedDonation,
+      }).donationPool;
 
   const authoritativeCauseTotals = new Map(
     authoritative.summary.track1.allocations.map((allocation) => [
@@ -236,11 +276,11 @@ export async function computeAnalyticalRecalculationSummary(shopId: string, peri
     ]),
   );
 
-  const allCauseIds = [...new Set([...authoritativeCauseTotals.keys(), ...recalculatedCauseTotals.keys()])];
+  const allCauseIds = [...new Set([...authoritativeCauseTotals.keys(), ...cappedRecalculatedCauseTotals.keys()])];
   const causes = allCauseIds
     .map((causeId) => {
       const authoritativeCause = authoritativeCauseTotals.get(causeId);
-      const recalculatedCause = recalculatedCauseTotals.get(causeId);
+      const recalculatedCause = cappedRecalculatedCauseTotals.get(causeId);
       const authoritativeAllocated = authoritativeCause?.amount ?? ZERO;
       const recalculatedAllocated = recalculatedCause?.amount ?? ZERO;
 

@@ -597,7 +597,7 @@ export async function importHistoricalCharges(input: {
     try {
       const shopifyTransactionId = getChargeId(row);
       const amount = new Prisma.Decimal(row.amount ?? "0");
-      if (amount.lte(0)) throw new Error("Charge amount must be greater than zero. Correct this row's amount and retry.");
+      if (amount.equals(0)) throw new Error("Charge amount must be nonzero. Use a positive amount for a deduction or a negative amount for a credit/refund.");
 
       const period = await findPeriodForCharge(input.shopId, row, db);
       if (!period) {
@@ -1424,8 +1424,10 @@ async function summarizeRebuildPeriodState(input: {
     return sum.add(line.netContribution).add(adjustmentTotal);
   }, new Prisma.Decimal(0));
   const shopifyCharges = chargesSummary._sum.amount ?? new Prisma.Decimal(0);
-  const donationPool = totalNetContribution.sub(shopifyCharges);
   const causeAllocationTotal = sumDecimals(causeAllocations.map((allocation) => allocation.allocated));
+  // Materialized cause allocations are proportionally capped to the authoritative
+  // available capacity. Their reconciled total is therefore the committed pool.
+  const donationPool = causeAllocationTotal;
   const artistPayoutTotal = sumDecimals(artistAllocations.map((allocation) => allocation.allocated));
 
   return {

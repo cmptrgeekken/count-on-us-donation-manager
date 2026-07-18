@@ -183,6 +183,8 @@ type AllocationRow = {
   is501c3: boolean;
   allocated: string;
   disbursed: string;
+  adjustments: string;
+  adjustedOutstanding: string;
   remaining: string;
   details: Array<{
     kind: "order_line" | "true_up" | "tax_reserve";
@@ -1107,7 +1109,9 @@ export default function ReportingPage() {
           is501c3: allocation.is501c3,
           allocated: allocation.allocated,
           disbursed: allocation.disbursed,
-          remaining: subtractCurrency(allocation.allocated, allocation.disbursed),
+          adjustments: allocation.adjustments ?? "0",
+          adjustedOutstanding: allocation.adjustedOutstanding ?? subtractCurrency(allocation.allocated, allocation.disbursed),
+          remaining: allocation.adjustedOutstanding ?? subtractCurrency(allocation.allocated, allocation.disbursed),
           details: allocation.details ?? [],
         };
       })
@@ -1190,7 +1194,6 @@ export default function ReportingPage() {
   const totalArtistOutstanding = sumCurrency(artistPayables.map((payable) => payable.totalOutstanding));
   const overdueCauseCount = causePayables.filter((payable) => payable.overdue).length;
   const overdueArtistCount = artistPayables.filter((payable) => payable.overdue).length;
-  const donationPoolIsNegative = isLessThanZero(summary.track1.donationPool);
   const shopifyChargesArePositive = isGreaterThanZero(summary.track1.shopifyCharges);
   const artistPayoutsArePositive = isGreaterThanZero(summary.track1.artistPayoutTotal ?? "0");
   const taxReserveIsPositive = isGreaterThanZero(summary.track1.estimatedTaxReserve ?? "0");
@@ -1460,7 +1463,7 @@ export default function ReportingPage() {
                 <h2 style={{ margin: 0, fontSize: "1rem" }}>Log disbursement</h2>
                 <SectionHeader
                   title="Log cause disbursement"
-                  description="Record funds paid out to the selected cause. Allocated amounts auto-apply to the oldest outstanding closed balances first."
+                  description="Record funds paid out to the selected cause. Payments apply only to obligations earned before the paid date; purchases on or after that date remain available for future disbursement. Any excess is an extra contribution."
                   actions={(
                     <button
                       type="button"
@@ -1865,13 +1868,13 @@ export default function ReportingPage() {
           <s-section heading="Donation pool math">
             <div style={{ display: "grid", gap: "1rem" }}>
               <SectionHeader
-                title="Available for cause allocation"
-                description="Track 1 starts with discounted gross contributions, subtracts each frozen cost category and operational obligation, applies tax reserves and prior tax true-ups, then produces the pool available for causes."
+                title="Donation commitment and capacity"
+                description="Track 1 calculates available profit capacity, compares it with cause-directed commitments, caps those commitments at capacity, and leaves the remainder as retained shop profit."
               />
-              {donationPoolIsNegative ? (
+              {(summary.allocationAdjustmentReviews?.length ?? 0) > 0 ? (
                 <s-banner tone="warning">
                   <s-text>
-                    This period&apos;s donation pool is negative because Shopify charges, external settlement fees, artist payouts, or prior true-up shortfalls exceeded contribution dollars. Review the math below before closing or paying allocations.
+                    {summary.allocationAdjustmentReviews.length} order line{summary.allocationAdjustmentReviews.length === 1 ? " has" : "s have"} an extreme adjustment that could not be safely applied proportionally to cause or artist allocations. Review the affected order adjustments before closing this period.
                   </s-text>
                 </s-banner>
               ) : null}
@@ -1944,10 +1947,25 @@ export default function ReportingPage() {
                   detail="Surplus adds to the pool; shortfall reduces it."
                 />
                 <MetricCard
-                  label="Donation pool available"
+                  label="Available donation capacity"
+                  value={formatMoney(summary.track1.availableDonationCapacity ?? summary.track1.donationPool)}
+                  detail="Profit capacity remaining after costs, fees, artist payouts, tax reserve, and true-ups."
+                />
+                <MetricCard
+                  label="Requested cause donation"
+                  value={formatMoney(summary.track1.requestedDonation ?? summary.track1.donationPool)}
+                  detail="Total directed by product and artist cause percentages before the capacity cap."
+                />
+                <MetricCard
+                  label="Retained by shop"
+                  value={formatMoney(summary.track1.retainedByShop ?? "0")}
+                  detail="Available profit not committed through cause routing."
+                />
+                <MetricCard
+                  label="Final donation pool"
                   value={formatMoney(summary.track1.donationPool)}
-                  tone={donationPoolIsNegative ? "critical" : "success"}
-                  detail="Final Track 1 amount available for cause allocations."
+                  tone="success"
+                  detail="Committed cause amount, capped so allocations cannot exceed available capacity."
                 />
               </div>
               <div style={{ display: "grid", gap: "0.45rem" }}>
@@ -2006,6 +2024,7 @@ export default function ReportingPage() {
                 <s-table-header listSlot="primary">Cause</s-table-header>
                 <s-table-header listSlot="inline">501(c)3</s-table-header>
                 <s-table-header listSlot="labeled" format="currency">Allocated</s-table-header>
+                <s-table-header listSlot="labeled" format="currency">Tax adjustment</s-table-header>
                 <s-table-header listSlot="labeled" format="currency">Disbursed</s-table-header>
                 <s-table-header listSlot="labeled" format="currency">Remaining</s-table-header>
               </s-table-header-row>
@@ -2017,6 +2036,7 @@ export default function ReportingPage() {
                     <s-table-cell></s-table-cell>
                     <s-table-cell></s-table-cell>
                     <s-table-cell></s-table-cell>
+                    <s-table-cell></s-table-cell>
                   </s-table-row>
                 ) : (
                   allocationRows.flatMap((allocation) => [
@@ -2024,6 +2044,7 @@ export default function ReportingPage() {
                       <s-table-cell>{allocation.causeName}</s-table-cell>
                       <s-table-cell>{allocation.is501c3 ? "Yes" : "No"}</s-table-cell>
                       <s-table-cell>{formatMoney(allocation.allocated)}</s-table-cell>
+                      <s-table-cell>{formatMoney(allocation.adjustments)}</s-table-cell>
                       <s-table-cell>{formatMoney(allocation.disbursed)}</s-table-cell>
                       <s-table-cell>{formatMoney(allocation.remaining)}</s-table-cell>
                     </s-table-row>,
@@ -2350,7 +2371,7 @@ export default function ReportingPage() {
               <s-section id="log-disbursement" heading="Log disbursement">
                 <div style={{ display: "grid", gap: "0.75rem" }}>
                   <s-text color="subdued">
-                    Record funds paid out to a Cause for this closed period. Allocated amounts auto-apply to the oldest outstanding closed balances first.
+                    Record funds paid out to a Cause for this closed period. Payments apply only to obligations earned before the paid date; purchases on or after that date remain available for future disbursement. Any excess is an extra contribution.
                   </s-text>
                   {disbursementCauseOptions.length === 0 ? (
                     <s-banner tone="info">

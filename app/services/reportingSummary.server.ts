@@ -9,9 +9,10 @@ import {
   computeEstimatedTaxReserve,
   normalizeTaxDeductionMode,
 } from "./taxReserve.server";
+import { capCauseAllocations, computeDonationPool } from "./donationPool.server";
+import { adjustAllocationForLineChange } from "./allocationAdjustment.server";
 
 const ZERO = new Prisma.Decimal(0);
-const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
 export const ALL_TIME_PERIOD_ID = "all-time";
 
 type CauseAllocationDetail = {
@@ -43,27 +44,6 @@ function addAllocation(
     ...current,
     allocated: current.allocated.add(allocation.allocated),
   });
-}
-
-function computeAdjustedAllocationAmount({
-  baseAmount,
-  lineNetContribution,
-  lineAdjustmentTotal,
-}: {
-  baseAmount: Prisma.Decimal;
-  lineNetContribution: Prisma.Decimal;
-  lineAdjustmentTotal: Prisma.Decimal;
-}) {
-  if (lineNetContribution.equals(0) || lineAdjustmentTotal.equals(0)) {
-    return baseAmount;
-  }
-
-  const ratio = lineAdjustmentTotal.div(lineNetContribution);
-  if (ratio.abs().greaterThan(ADJUSTMENT_RATIO_GUARD)) {
-    return baseAmount;
-  }
-
-  return baseAmount.add(baseAmount.mul(ratio));
 }
 
 export type ReportingSummaryResult = Awaited<ReturnType<typeof buildReportingSummary>>;
@@ -220,6 +200,10 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           allocated: true,
           taxReserveDeduction: true,
           disbursed: true,
+          adjustments: {
+            where: { shopId },
+            select: { amount: true },
+          },
         },
       }),
       db.businessExpense.aggregate({
@@ -559,6 +543,15 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
   let netContributionAdjustments = ZERO;
   let taxableContributionAdjustments = ZERO;
   let totalNetContribution = ZERO;
+  const allocationAdjustmentReviewMap = new Map<string, {
+    snapshotId: string;
+    shopifyLineItemId: string;
+    orderNumber: string | null;
+    productTitle: string;
+    variantTitle: string;
+    reason: "ZERO_NET_CONTRIBUTION" | "EXTREME_ADJUSTMENT_RATIO";
+    ratio: string | null;
+  }>();
 
   for (const line of snapshotLines) {
     const adjustmentTotal = line.adjustments.reduce((sum, adj) => sum.add(adj.netContribAdj), ZERO);
@@ -585,11 +578,23 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
     totalNetContribution = totalNetContribution.add(adjustedLineNetContribution);
 
     for (const allocation of line.causeAllocations) {
-      const adjusted = computeAdjustedAllocationAmount({
+      const adjustmentResult = adjustAllocationForLineChange({
         baseAmount: allocation.amount,
         lineNetContribution: line.netContribution,
         lineAdjustmentTotal: adjustmentTotal,
       });
+      const adjusted = adjustmentResult.amount;
+      if (adjustmentResult.reviewRequired && adjustmentResult.reviewReason) {
+        allocationAdjustmentReviewMap.set(line.shopifyLineItemId, {
+          snapshotId: line.snapshot.id,
+          shopifyLineItemId: line.shopifyLineItemId,
+          orderNumber: line.snapshot.orderNumber ?? null,
+          productTitle: line.productTitle,
+          variantTitle: line.variantTitle,
+          reason: adjustmentResult.reviewReason,
+          ratio: adjustmentResult.ratio?.toString() ?? null,
+        });
+      }
 
       addAllocation(allocationMap, {
         causeId: allocation.causeId,
@@ -626,11 +631,11 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         allocated: ZERO,
       };
       current.allocated = current.allocated.add(
-        computeAdjustedAllocationAmount({
+        adjustAllocationForLineChange({
           baseAmount: allocation.payoutAmount,
           lineNetContribution: line.netContribution,
           lineAdjustmentTotal: adjustmentTotal,
-        }),
+        }).amount,
       );
       artistAllocationMap.set(allocation.artistId, current);
     }
@@ -649,6 +654,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         allocated: allocation.allocated,
         taxReserveDeduction: allocation.taxReserveDeduction,
         disbursed: allocation.disbursed,
+        adjustments: allocation.adjustments.reduce((sum, adjustment) => sum.add(adjustment.amount), ZERO),
       }))
     : Array.from(allocationMap.values()).map((allocation) => ({
         causeId: allocation.causeId,
@@ -657,6 +663,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         allocated: allocation.allocated,
         taxReserveDeduction: ZERO,
         disbursed: ZERO,
+        adjustments: ZERO,
       }));
 
   const useClosedArtistAllocations = selectedPeriod.status === "CLOSED" && closedArtistAllocations.length > 0;
@@ -673,8 +680,12 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         artistName: allocation.artistName,
         creditName: allocation.creditName,
         allocated: allocation.allocated,
-        paid: ZERO,
-      }));
+      paid: ZERO,
+    }));
+  const totalArtistPayout = artistAllocationRows.reduce(
+    (sum, allocation) => sum.add(allocation.allocated),
+    ZERO,
+  );
 
   if (carryForwardTrueUps.length > 0) {
     const allocationMapWithCarryForward = new Map(
@@ -748,6 +759,29 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
       shop?.taxDeductionMode,
     );
   }
+  const carryForwardSurplus = carryForwardTrueUps.reduce(
+    (sum, trueUp) => (trueUp.delta.greaterThan(ZERO) ? sum.add(trueUp.delta) : sum),
+    ZERO,
+  );
+  const carryForwardShortfall = carryForwardTrueUps.reduce(
+    (sum, trueUp) => (trueUp.delta.lessThan(ZERO) ? sum.add(trueUp.delta.abs()) : sum),
+    ZERO,
+  );
+  const requestedDonation = allocationRows.reduce(
+    (sum, allocation) => sum.add(allocation.allocated),
+    ZERO,
+  );
+  const poolResult = computeDonationPool({
+    totalNetContribution,
+    shopifyCharges,
+    externalSettlementFees,
+    artistPayouts: totalArtistPayout,
+    estimatedTaxReserve: taxEstimate.estimatedTaxReserve,
+    taxTrueUpSurplus: carryForwardSurplus,
+    taxTrueUpShortfall: carryForwardShortfall,
+    requestedDonation,
+  });
+  allocationRows = capCauseAllocations(allocationRows, poolResult.donationPool);
   for (const allocation of allocationRows) {
     if (allocation.taxReserveDeduction.lessThanOrEqualTo(ZERO)) continue;
     const details = allocationDetailMap.get(allocation.causeId) ?? [];
@@ -763,14 +797,6 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
     Prisma.Decimal.ROUND_FLOOR,
   );
   const widgetTaxSuppressed = taxableExposure.lessThanOrEqualTo(0);
-  const carryForwardSurplus = carryForwardTrueUps.reduce(
-    (sum, trueUp) => (trueUp.delta.greaterThan(ZERO) ? sum.add(trueUp.delta) : sum),
-    ZERO,
-  );
-  const carryForwardShortfall = carryForwardTrueUps.reduce(
-    (sum, trueUp) => (trueUp.delta.lessThan(ZERO) ? sum.add(trueUp.delta.abs()) : sum),
-    ZERO,
-  );
   const receiptStorage = createReceiptStorage();
   const disbursementRows = await Promise.all(
     disbursements.map(async (disbursement) => ({
@@ -971,11 +997,6 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
     };
   });
 
-  const totalArtistPayout = artistAllocationRows.reduce(
-    (sum, allocation) => sum.add(allocation.allocated),
-    ZERO,
-  );
-
   return {
     periods: [{
       id: ALL_TIME_PERIOD_ID,
@@ -1020,7 +1041,10 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
         estimatedTaxReserve: taxEstimate.estimatedTaxReserve.toString(),
         taxableContribution: taxableContribution.toString(),
         taxableBase: taxEstimate.taxableBase.toString(),
-        donationPool: totalNetContribution.sub(shopifyCharges).sub(externalSettlementFees).sub(totalArtistPayout).sub(taxEstimate.estimatedTaxReserve).add(carryForwardSurplus).sub(carryForwardShortfall).toString(),
+        availableDonationCapacity: poolResult.availableDonationCapacity.toString(),
+        requestedDonation: poolResult.requestedDonation.toString(),
+        donationPool: poolResult.donationPool.toString(),
+        retainedByShop: poolResult.retainedByShop.toString(),
         taxTrueUpSurplusApplied: carryForwardSurplus.toString(),
         taxTrueUpShortfallApplied: carryForwardShortfall.toString(),
         artistPayoutTotal: totalArtistPayout.toString(),
@@ -1030,6 +1054,11 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           is501c3: allocation.is501c3,
           allocated: allocation.allocated.toString(),
           disbursed: allocation.disbursed.toString(),
+          adjustments: allocation.adjustments.toString(),
+          adjustedOutstanding: Prisma.Decimal.max(
+            ZERO,
+            allocation.allocated.sub(allocation.adjustments).sub(allocation.disbursed),
+          ).toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR).toString(),
           details: (allocationDetailMap.get(allocation.causeId) ?? []).map((detail) => ({
             kind: detail.kind,
             label: detail.label ?? null,
@@ -1101,6 +1130,7 @@ export async function buildReportingSummary(shopId: string, requestedPeriodId?: 
           orderNumber: item.snapshot.orderNumber ?? "Unnumbered order",
         })),
       },
+      allocationAdjustmentReviews: Array.from(allocationAdjustmentReviewMap.values()),
       disbursements: disbursementRows,
       causePayables,
       artistAllocations: artistAllocationRows.map((allocation) => ({

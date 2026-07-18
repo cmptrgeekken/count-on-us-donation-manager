@@ -5,6 +5,7 @@ import { syncShopifyCharges } from "../services/chargeSyncService.server";
 import { fullSync, incrementalSync, syncCollection } from "../services/catalogSync.server";
 import { processOrderUpdate, processRefund } from "../services/adjustmentService.server";
 import { runFinancialBackfill } from "../services/financialBackfill.server";
+import { reconcileExistingDisbursementsForShop } from "../services/disbursementReconciliation.server";
 import { runReconciliation } from "../services/reconciliationService.server";
 import { createReportingPeriodFromPayout } from "../services/reportingPeriodService.server";
 import { refreshTaxOffsetCacheForShop } from "../services/reportingService.server";
@@ -32,6 +33,7 @@ const QUEUES = [
   "reporting.tax-offset.shop",
   "reporting.recalculate",
   "financial.backfill",
+  "disbursements.reconcile-existing",
   "shop.delete",
   "webhook.compliance",
   "catalog.sync",
@@ -387,6 +389,16 @@ export async function registerAllProcessors(boss: PgBoss): Promise<void> {
         },
       });
       throw error;
+    }
+  });
+
+  await boss.work("disbursements.reconcile-existing", async () => {
+    const shops = await prisma.shop.findMany({
+      where: { shopId: { not: "" } },
+      select: { shopId: true },
+    });
+    for (const shop of shops) {
+      await reconcileExistingDisbursementsForShop(shop.shopId, prisma);
     }
   });
 

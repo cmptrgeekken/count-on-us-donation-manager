@@ -212,6 +212,10 @@ export async function buildPublicTransparencyPage(
           is501c3: true,
           allocated: true,
           disbursed: true,
+          adjustments: {
+            where: { shopId },
+            select: { amount: true },
+          },
         },
       },
       disbursements: {
@@ -382,7 +386,14 @@ export async function buildPublicTransparencyPage(
     let periodPending = 0;
 
     for (const allocation of period.causeAllocations) {
-      const pending = Math.max(0, decimalToNumber(allocation.allocated) - decimalToNumber(allocation.disbursed));
+      const adjustmentTotal = (allocation.adjustments ?? []).reduce(
+        (sum, adjustment) => sum + decimalToNumber(adjustment.amount),
+        0,
+      );
+      const pending = Math.max(
+        0,
+        decimalToNumber(allocation.allocated) - adjustmentTotal - decimalToNumber(allocation.disbursed),
+      );
       periodPending += pending;
 
       const existing =
@@ -463,18 +474,6 @@ export async function buildPublicTransparencyPage(
   if (!showReconciliation) hiddenSections.push("reconciliation");
 
   const grossSales = sumValues(snapshotLines, (line) => line.subtotal);
-  const totalNetContribution = snapshotLines.reduce(
-    (sum, line) =>
-      sum
-        .add(new Prisma.Decimal(line.netContribution?.toString() ?? 0))
-        .add(
-          line.adjustments.reduce(
-            (adjustmentSum, adjustment) => adjustmentSum.add(new Prisma.Decimal(adjustment.netContribAdj?.toString() ?? 0)),
-            new Prisma.Decimal(0),
-          ),
-        ),
-    new Prisma.Decimal(0),
-  );
   const itemCount = snapshotLines.reduce((sum, line) => sum + (Number.isFinite(line.quantity) ? line.quantity : 0), 0);
   const laborCost = sumValues(snapshotLines, (line) => line.laborCost) + sumValues(snapshotLines, (line) => sumValues(line.adjustments, (adjustment) => adjustment.laborAdj));
   const materialCost =
@@ -488,27 +487,21 @@ export async function buildPublicTransparencyPage(
     sumValues(snapshotLines, (line) => sumValues(line.adjustments, (adjustment) => adjustment.equipmentAdj));
   const podCost = sumValues(snapshotLines, (line) => line.podCost);
   const mistakeBuffer = sumValues(snapshotLines, (line) => line.mistakeBufferAmount);
-  const shippingPostage = Math.abs(
-    sumValues(shopifyChargeTransactions, (transaction) =>
-      transaction.transactionType === "shipping_fee" ? transaction.amount : 0,
-    ),
+  const shippingPostage = sumValues(shopifyChargeTransactions, (transaction) =>
+    transaction.transactionType === "shipping_fee" ? transaction.amount : 0,
   );
-  const platformFees = Math.abs(
-    sumValues(shopifyChargeTransactions, (transaction) =>
+  const platformFees = sumValues(shopifyChargeTransactions, (transaction) =>
       transaction.transactionType === "subscription_fee" || transaction.transactionType === "app_fee"
         ? transaction.amount
         : 0,
-    ),
   );
-  const shopifyFees = Math.abs(
-    sumValues(shopifyChargeTransactions, (transaction) =>
+  const shopifyFees = sumValues(shopifyChargeTransactions, (transaction) =>
       !transaction.transactionType ||
       transaction.transactionType === "payment_fee" ||
       transaction.transactionType === "transaction_fee" ||
       transaction.transactionType === "processing_fee"
         ? transaction.amount
         : 0,
-    ),
   );
   const externalMarketplaceFees = Math.abs(
     decimalToNumber(externalSettlementTotals._sum.feeAmount ?? new Prisma.Decimal(0)),
@@ -567,7 +560,10 @@ export async function buildPublicTransparencyPage(
     platformFees +
     taxBuffer +
     marketingReserve;
-  const publicDonationPool = grossSales - publicCostsAndReserves;
+  const availableDonationCapacity = Math.max(grossSales - publicCostsAndReserves, 0);
+  const requestedDonation = Math.max(totalDonated + totalPending, 0);
+  const publicDonationPool = Math.min(requestedDonation, availableDonationCapacity);
+  const retainedByShop = Math.max(availableDonationCapacity - publicDonationPool, 0);
   const remainingFundsToDonate = Math.max(publicDonationPool - totalDonated, 0);
   const displayPendingTotal = showPending ? Math.min(totalPending, remainingFundsToDonate) : 0;
   const pendingScale = totalPending > 0 ? displayPendingTotal / totalPending : 0;
@@ -619,7 +615,10 @@ export async function buildPublicTransparencyPage(
             salesTaxCollected: formatMoneyValue(salesTaxCollected),
             donationPoolAfterProductCosts: formatMoneyValue(donationPoolAfterProductCosts),
             additionalPublicDeductions: formatMoneyValue(additionalPublicDeductions),
+            availableDonationCapacity: formatMoneyValue(availableDonationCapacity),
+            requestedDonation: formatMoneyValue(requestedDonation),
             netDonationPool: formatMoneyValue(publicDonationPool),
+            retainedByShop: formatMoneyValue(retainedByShop),
             donationsMade: formatMoneyValue(totalDonated),
             remainingFundsToDonate: formatMoneyValue(remainingFundsToDonate),
             donationsPendingDisbursement: formatMoneyValue(displayPendingTotal),
@@ -655,7 +654,10 @@ export async function buildPublicTransparencyPage(
                 buildMoneyRow("Sales after collected tax", salesAfterCollectedTax, "positive"),
                 buildMoneyRow("Donation pool after sales tax and product costs", donationPoolAfterProductCosts, "positive"),
                 buildMoneyRow("Less fees, shipping, and reserves", additionalPublicDeductions, "negative"),
-                buildMoneyRow("Public donation pool", publicDonationPool, "positive"),
+                buildMoneyRow("Available donation capacity", availableDonationCapacity, "positive"),
+                buildMoneyRow("Requested cause donation", requestedDonation, "neutral"),
+                buildMoneyRow("Retained by shop", retainedByShop, "neutral"),
+                buildMoneyRow("Final public donation pool", publicDonationPool, "positive"),
                 buildMoneyRow("Donations made", totalDonated, "positive"),
                 buildMoneyRow("Remaining funds to donate", remainingFundsToDonate, "neutral"),
               ],

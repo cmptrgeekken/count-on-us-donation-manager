@@ -26,7 +26,6 @@
     "seed:demo": "node ./scripts/seed-dev.mjs --preset=demo-store",
     "export:catalog": "node ./scripts/export-catalog-data.mjs",
     "export:financial": "node ./scripts/export-financial-data.mjs",
-    "seed:import:catalog": "node ./scripts/seed-catalog-import.mjs",
     "backfill:financial": "node ./scripts/backfill-financial-data.mjs",
     "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
     "test": "vitest run",

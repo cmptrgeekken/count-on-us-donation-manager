@@ -50,7 +50,7 @@ npm run seed:dev -- --shop=your-dev-store.myshopify.com --reset
 For catalog and financial export imports, use the dev-only catalog importer:
 
 ```shell
-npm run seed:import:catalog -- --file=seed-imports/catalog.json --shop=your-dev-store.myshopify.com --reset-shop
+npm run seed:dev -- --shop=your-dev-store.myshopify.com --reset
 ```
 
 See [docs/seed-data.md](./docs/seed-data.md) for defaults, CSV import options, and advanced examples.

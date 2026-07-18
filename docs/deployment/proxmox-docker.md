@@ -175,7 +175,13 @@ Prefer backups created by `scripts/backup-postgres.sh`, because it runs `pg_dump
 FILTER_UNSUPPORTED_PG_SETTINGS=false bash scripts/restore-postgres.sh backups/postgres/countonus-YYYYMMDDTHHMMSSZ.sql.gz
 ```
 
-## Production catalog export/import
+## Production catalog export
+
+The standalone catalog/CSV importer has been removed because its duplicate cost
+engine could diverge from production order calculations. Catalog exports remain
+available for diagnostics and backups, but must not be used to create financial
+snapshots. Use the production financial backfill or the admin **Imports &
+rebuild** workflow instead.
 
 The production app image includes the catalog export and import scripts. Run them
 through the `app` service so they use the same Node, Prisma client, and
@@ -261,49 +267,6 @@ Before importing into production, take a database backup:
 bash scripts/backup-postgres.sh
 ```
 
-Dry-run the import inside the production app container:
-
-```sh
-APP_ENV_FILE=.env.production docker compose \
-  --project-name count-on-us \
-  --env-file .env.production \
-  -f compose.production.yml \
-  exec -T app sh -c 'cat > /tmp/catalog.json' < seed-imports/catalog.json
-
-APP_ENV_FILE=.env.production docker compose \
-  --project-name count-on-us \
-  --env-file .env.production \
-  -f compose.production.yml \
-  exec app npm run seed:import:catalog -- \
-    --file=/tmp/catalog.json \
-    --shop=target-store.myshopify.com \
-    --shop-domain=target-store.myshopify.com \
-    --normalize-product-status \
-    --reset-shop \
-    --dry-run
-```
-
-Run the import after the dry run looks correct:
-
-```sh
-APP_ENV_FILE=.env.production docker compose \
-  --project-name count-on-us \
-  --env-file .env.production \
-  -f compose.production.yml \
-  exec app npm run seed:import:catalog -- \
-    --file=/tmp/catalog.json \
-    --shop=target-store.myshopify.com \
-    --shop-domain=target-store.myshopify.com \
-    --normalize-product-status \
-    --reset-shop
-```
-
-Use `--reset-shop` for a one-time bootstrap into a fresh target shop and for
-safe retries after a failed import. Without it, the importer merges Shopify
-products/variants by Shopify ID, but library/configuration rows such as
-materials, equipment, templates, template lines, and Causes are inserted as new
-rows and can duplicate existing imported data.
-
 ## Production financial backfill
 
 Use the financial backfill script for historical orders, payout/fee history, and
@@ -360,41 +323,9 @@ reporting periods. Pass `--create-monthly-periods` only when Shopify charge sync
 does not create payout-backed reporting periods and you intentionally want
 synthetic monthly periods for the backfill window.
 
-For a deliberate migration that includes historical order CSVs already exported
-from another environment, stream those CSVs into `/tmp` the same way:
-
-```sh
-APP_ENV_FILE=.env.production docker compose \
-  --project-name count-on-us \
-  --env-file .env.production \
-  -f compose.production.yml \
-  exec -T app sh -c 'cat > /tmp/orders.csv' < seed-imports/orders.csv
-```
-
-Then pass the same catalog importer flags used locally, for example
-`--orders-csv=/tmp/orders.csv` and
-`--order-line-map=/tmp/order-line-map.json`. Keep this as a fallback migration
-path: the preferred production backfill is the queued `financial.backfill` job
-above because it runs the app's current reconciliation, cost engine, charge sync,
-and reporting-period services.
-
-For a charges/payment-transactions-only CSV import, `--file` is optional:
-
-```sh
-APP_ENV_FILE=.env.production docker compose \
-  --project-name count-on-us \
-  --env-file .env.production \
-  -f compose.production.yml \
-  exec app npm run seed:import:catalog -- \
-    --shop=target-store.myshopify.com \
-    --shop-domain=target-store.myshopify.com \
-    --charges-csv=/tmp/charges_export.csv \
-    --payment-transactions-csv=/tmp/payment_transactions_export_1.csv \
-    --dry-run
-```
-
-Historical order CSVs still require `--file`, because snapshot rows need catalog
-data for variant matching and cost derivation.
+For deliberate CSV migrations, use the authenticated admin **Imports & rebuild**
+workflow. Historical order rows processed there use `createSnapshot()` and the
+same cost engine as webhook orders.
 
 ## Rollback
 
