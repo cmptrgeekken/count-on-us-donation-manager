@@ -149,7 +149,8 @@ export async function reconcileExistingDisbursementsForShop(
       );
       await tx.causeAllocationAdjustment.upsert({
         where: {
-          causeAllocationId_type_sourceKey: {
+          shopId_causeAllocationId_type_sourceKey: {
+            shopId,
             causeAllocationId: allocation.id,
             type: "RETROACTIVE_TAX_BUFFER",
             sourceKey: "date-bounded-v1",

@@ -91,6 +91,14 @@ describe("reconcileCauseDisbursements", () => {
 
     expect(result.adjustmentCount).toBe(1);
     expect(upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        shopId_causeAllocationId_type_sourceKey: {
+          shopId: "shop-1",
+          causeAllocationId: "allocation-1",
+          type: "RETROACTIVE_TAX_BUFFER",
+          sourceKey: "date-bounded-v1",
+        },
+      },
       create: expect.objectContaining({
         shopId: "shop-1",
         causeAllocationId: "allocation-1",
