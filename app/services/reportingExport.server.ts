@@ -48,6 +48,7 @@ export function buildReportingPeriodCsv(summary: NonNullable<ReportingSummaryRes
     "metric",
     "value",
     "allocatedAmount",
+    "adjustmentAmount",
     "disbursedAmount",
     "remainingAmount",
     "currentOutstanding",
@@ -109,6 +110,27 @@ export function buildReportingPeriodCsv(summary: NonNullable<ReportingSummaryRes
       ...basePeriod,
       section: "track1",
       recordType: "metric",
+      metric: "availableDonationCapacity",
+      value: summary.track1.availableDonationCapacity,
+    },
+    {
+      ...basePeriod,
+      section: "track1",
+      recordType: "metric",
+      metric: "requestedDonation",
+      value: summary.track1.requestedDonation,
+    },
+    {
+      ...basePeriod,
+      section: "track1",
+      recordType: "metric",
+      metric: "retainedByShop",
+      value: summary.track1.retainedByShop,
+    },
+    {
+      ...basePeriod,
+      section: "track1",
+      recordType: "metric",
       metric: "donationPool",
       value: summary.track1.donationPool,
     },
@@ -134,11 +156,9 @@ export function buildReportingPeriodCsv(summary: NonNullable<ReportingSummaryRes
       causeName: allocation.causeName,
       is501c3: allocation.is501c3 ? "Yes" : "No",
       allocatedAmount: allocation.allocated,
+      adjustmentAmount: allocation.adjustments,
       disbursedAmount: allocation.disbursed,
-      remainingAmount: new Prisma.Decimal(allocation.allocated)
-        .sub(new Prisma.Decimal(allocation.disbursed))
-        .toDecimalPlaces(2, Prisma.Decimal.ROUND_FLOOR)
-        .toString(),
+      remainingAmount: allocation.adjustedOutstanding,
     })),
     ...summary.causePayables.flatMap<CsvRow>((payable) => [
       {
@@ -399,7 +419,10 @@ export function buildReportingPeriodPdf(summary: NonNullable<ReportingSummaryRes
   const lines = [
     `Reporting period: ${formatDate(summary.period.startDate)} to ${formatDate(summary.period.endDate)}`,
     `Status: ${summary.period.status}`,
-    `Donation pool: ${summary.track1.donationPool}`,
+    `Available donation capacity: ${summary.track1.availableDonationCapacity}`,
+    `Requested cause donation: ${summary.track1.requestedDonation}`,
+    `Retained by shop: ${summary.track1.retainedByShop}`,
+    `Final donation pool: ${summary.track1.donationPool}`,
     `Shopify charges: ${summary.track1.shopifyCharges}`,
     `External settlement fees: ${summary.track1.externalSettlementFees ?? "0"}`,
     `Artist payouts: ${summary.track1.artistPayoutTotal ?? "0"}`,

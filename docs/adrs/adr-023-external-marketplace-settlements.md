@@ -137,12 +137,17 @@ This avoids hiding Faire or other marketplace deductions inside Shopify charges 
 The donation pool calculation should conceptually become:
 
 ```text
-donationPool =
+availableDonationCapacity =
   totalNetContribution
   - Shopify charges
   - external settlement fees
   - artist payout obligations
+  - estimated tax reserve
   +/- tax true-up effects
+
+requestedDonation = sum of cause-directed allocations
+donationPool = max(0, min(requestedDonation, availableDonationCapacity))
+retainedByShop = max(availableDonationCapacity - donationPool, 0)
 ```
 
 The exact placement in existing summary contracts should follow ADR-002 and ADR-012, but the UI must not imply the fee came from Shopify.

@@ -214,7 +214,10 @@ describe("buildReportingSummary", () => {
     expect(result.summary?.track1.externalSettlementFees).toBe("12.5");
     expect(result.summary?.track1.artistPayoutTotal).toBe("11");
     expect(result.summary?.track1.estimatedTaxReserve).toBe("4");
-    expect(result.summary?.track1.donationPool).toBe("97.5");
+    expect(result.summary?.track1.availableDonationCapacity).toBe("97.5");
+    expect(result.summary?.track1.requestedDonation).toBe("76");
+    expect(result.summary?.track1.donationPool).toBe("76");
+    expect(result.summary?.track1.retainedByShop).toBe("21.5");
     expect(result.summary?.externalSettlements).toEqual([
       expect.objectContaining({
         id: "settlement-1",
@@ -273,6 +276,8 @@ describe("buildReportingSummary", () => {
     expect(allTimeResult.summary?.track1.taxableContribution).toBe("151");
     expect(allTimeResult.summary?.track1.taxableBase).toBe("151");
     expect(allTimeResult.summary?.track1.estimatedTaxReserve).toBe("37.75");
-    expect(allTimeResult.summary?.track1.donationPool).toBe("58.75");
+    expect(allTimeResult.summary?.track1.availableDonationCapacity).toBe("58.75");
+    expect(allTimeResult.summary?.track1.donationPool).toBe("37.25");
+    expect(allTimeResult.summary?.track1.retainedByShop).toBe("21.5");
   });
 });

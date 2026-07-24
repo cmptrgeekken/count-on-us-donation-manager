@@ -40,6 +40,12 @@ export async function startJobQueue(): Promise<void> {
   const { registerAllProcessors } = await import("./processors.server");
   await registerAllProcessors(jobQueue);
 
+  // Versioned singleton: repairs pre-existing application ledgers once after
+  // the date-bounded disbursement release, including across multiple replicas.
+  await jobQueue.send("disbursements.reconcile-existing", {}, {
+    singletonKey: "date-bounded-v1",
+  });
+
   // Recurring jobs
   await jobQueue.schedule("plan.detect.daily", "0 6 * * *", {});
   await jobQueue.schedule("reconciliation.daily", "0 3 * * *", {});

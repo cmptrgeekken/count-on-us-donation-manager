@@ -19,6 +19,7 @@ describe("listOutstandingCauseAllocations", () => {
             is501c3: true,
             allocated: decimal("100.00"),
             disbursed: decimal("76.043"),
+            adjustments: [{ amount: decimal("3.00") }],
             period: {
               startDate: new Date("2026-01-01T00:00:00.000Z"),
               endDate: new Date("2026-01-31T00:00:00.000Z"),
@@ -58,6 +59,8 @@ describe("listOutstandingCauseAllocations", () => {
       }),
     );
     expect(result).toHaveLength(1);
-    expect(result[0].remaining.toString()).toBe("23.95");
+    expect(result[0].adjustments.toString()).toBe("3");
+    expect(result[0].adjustedOutstanding.toString()).toBe("20.95");
+    expect(result[0].remaining.toString()).toBe("20.95");
   });
 });

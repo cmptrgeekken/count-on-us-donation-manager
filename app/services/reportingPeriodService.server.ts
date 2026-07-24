@@ -6,9 +6,10 @@ import {
   computeEstimatedTaxReserve,
   normalizeTaxDeductionMode,
 } from "./taxReserve.server";
+import { capCauseAllocations, computeDonationPool } from "./donationPool.server";
+import { adjustAllocationForLineChange } from "./allocationAdjustment.server";
 
 const ZERO = new Prisma.Decimal(0);
-const ADJUSTMENT_RATIO_GUARD = new Prisma.Decimal(10);
 
 type DbClient = typeof prisma;
 
@@ -74,27 +75,6 @@ function addArtistAllocation(
     ...current,
     allocated: current.allocated.add(input.allocated),
   });
-}
-
-function computeAdjustedAllocationAmount({
-  baseAmount,
-  lineNetContribution,
-  lineAdjustmentTotal,
-}: {
-  baseAmount: Prisma.Decimal;
-  lineNetContribution: Prisma.Decimal;
-  lineAdjustmentTotal: Prisma.Decimal;
-}) {
-  if (lineNetContribution.equals(0) || lineAdjustmentTotal.equals(0)) {
-    return baseAmount;
-  }
-
-  const adjustmentRatio = lineAdjustmentTotal.div(lineNetContribution);
-  if (adjustmentRatio.abs().greaterThan(ADJUSTMENT_RATIO_GUARD)) {
-    return baseAmount;
-  }
-
-  return baseAmount.add(baseAmount.mul(adjustmentRatio));
 }
 
 export async function createOrOpenReportingPeriod(
@@ -193,7 +173,7 @@ export async function materializeCauseAllocationsForPeriod(
   period: { id: string; startDate: Date; endDate: Date },
   db: DbClient = prisma,
 ) {
-  const [snapshotLines, shop, expenseSummary] = await Promise.all([db.orderSnapshotLine.findMany({
+  const [snapshotLines, shop, expenseSummary, chargeSummary, settlementSummary, appliedTrueUps] = await Promise.all([db.orderSnapshotLine.findMany({
     where: {
       shopId,
       snapshot: {
@@ -226,6 +206,18 @@ export async function materializeCauseAllocationsForPeriod(
           source: true,
         },
       },
+      artistAllocations: {
+        where: { payoutEnabled: true, payoutExclusionReason: null },
+        select: {
+          artistId: true,
+          payoutAmount: true,
+        },
+      },
+      snapshot: {
+        select: {
+          artistAttribution: { select: { artistId: true } },
+        },
+      },
     },
   }), db.shop?.findUnique
     ? db.shop.findUnique({
@@ -240,7 +232,35 @@ export async function materializeCauseAllocationsForPeriod(
         },
         _sum: { amount: true },
       })
-    : Promise.resolve({ _sum: { amount: null } })]);
+    : Promise.resolve({ _sum: { amount: null } }), db.shopifyChargeTransaction?.aggregate ? db.shopifyChargeTransaction.aggregate({
+      where: {
+        shopId,
+        OR: [
+          { periodId: period.id },
+          { periodId: null, processedAt: { gte: period.startDate, lt: period.endDate } },
+        ],
+      },
+      _sum: { amount: true },
+    }) : Promise.resolve({ _sum: { amount: null } }), db.orderSettlement?.aggregate ? db.orderSettlement.aggregate({
+      where: {
+        shopId,
+        status: "confirmed",
+        OR: [
+          { periodId: period.id },
+          {
+            periodId: null,
+            snapshot: {
+              currentForOrderRecord: { isNot: null },
+              createdAt: { gte: period.startDate, lt: period.endDate },
+            },
+          },
+        ],
+      },
+      _sum: { feeAmount: true },
+    }) : Promise.resolve({ _sum: { feeAmount: null } }), db.taxTrueUp?.findMany ? db.taxTrueUp.findMany({
+      where: { shopId, appliedPeriodId: period.id },
+      select: { delta: true },
+    }) : Promise.resolve([])]);
 
   const shopifyProductIds = Array.from(new Set(
     snapshotLines
@@ -311,23 +331,16 @@ export async function materializeCauseAllocationsForPeriod(
         causeId: allocation.causeId,
         causeName: allocation.causeName,
         is501c3: allocation.is501c3,
-        allocated: computeAdjustedAllocationAmount({
+        allocated: adjustAllocationForLineChange({
           baseAmount: allocation.amount,
           lineNetContribution: line.netContribution,
           lineAdjustmentTotal,
-        }),
+        }).amount,
       });
     }
   }
 
   const grossRows = Array.from(allocations.values());
-  const totalNetContribution = snapshotLines.reduce((sum, line) => {
-    const adjustmentTotal = line.adjustments.reduce(
-      (adjustmentSum, adjustment) => adjustmentSum.add(adjustment.netContribAdj),
-      ZERO,
-    );
-    return sum.add(line.netContribution).add(adjustmentTotal);
-  }, ZERO);
   const taxEstimate = computeEstimatedTaxReserve({
     taxableContribution: snapshotLines.reduce((sum, line) => sum
       .add(line.subtotal ?? ZERO)
@@ -350,7 +363,44 @@ export async function materializeCauseAllocationsForPeriod(
     taxEstimate.estimatedTaxReserve,
     normalizeTaxDeductionMode(shop?.taxDeductionMode),
   );
-  const rows = netRows.map((allocation) => ({
+  const totalNetContribution = snapshotLines.reduce((sum, line) => sum.add(line.netContribution).add(
+    line.adjustments.reduce((adjustmentSum, adjustment) => adjustmentSum.add(adjustment.netContribAdj), ZERO),
+  ), ZERO);
+  const artistPayouts = snapshotLines.reduce((sum, line) => sum.add(
+    (line.artistAllocations ?? []).reduce((artistSum, allocation) => {
+      if (line.snapshot?.artistAttribution?.artistId === allocation.artistId) return artistSum;
+      const adjustmentTotal = line.adjustments.reduce(
+        (adjustmentSum, adjustment) => adjustmentSum.add(adjustment.netContribAdj),
+        ZERO,
+      );
+      return artistSum.add(adjustAllocationForLineChange({
+        baseAmount: allocation.payoutAmount,
+        lineNetContribution: line.netContribution,
+        lineAdjustmentTotal: adjustmentTotal,
+      }).amount);
+    }, ZERO),
+  ), ZERO);
+  const taxTrueUpSurplus = appliedTrueUps.reduce(
+    (sum, trueUp) => trueUp.delta.greaterThan(ZERO) ? sum.add(trueUp.delta) : sum,
+    ZERO,
+  );
+  const taxTrueUpShortfall = appliedTrueUps.reduce(
+    (sum, trueUp) => trueUp.delta.lessThan(ZERO) ? sum.add(trueUp.delta.abs()) : sum,
+    ZERO,
+  );
+  const requestedDonation = netRows.reduce((sum, allocation) => sum.add(allocation.allocated), ZERO);
+  const pool = computeDonationPool({
+    totalNetContribution,
+    shopifyCharges: chargeSummary._sum.amount ?? ZERO,
+    externalSettlementFees: settlementSummary._sum.feeAmount ?? ZERO,
+    artistPayouts,
+    estimatedTaxReserve: taxEstimate.estimatedTaxReserve,
+    taxTrueUpSurplus,
+    taxTrueUpShortfall,
+    requestedDonation,
+  });
+  const cappedRows = capCauseAllocations(netRows, pool.donationPool);
+  const rows = cappedRows.map((allocation) => ({
     shopId,
     periodId: period.id,
     causeId: allocation.causeId,
@@ -483,14 +533,14 @@ export async function materializeArtistAllocationsForPeriod(
       artistId: allocation.artistId,
       artistName: allocation.artistName,
       creditName: allocation.creditName,
-      allocated: computeAdjustedAllocationAmount({
+      allocated: adjustAllocationForLineChange({
         baseAmount: allocation.payoutAmount,
         lineNetContribution: allocation.snapshotLine.netContribution,
         lineAdjustmentTotal: allocation.snapshotLine.adjustments.reduce(
           (sum, adjustment) => sum.add(adjustment.netContribAdj),
           ZERO,
         ),
-      }),
+      }).amount,
     });
   }
 

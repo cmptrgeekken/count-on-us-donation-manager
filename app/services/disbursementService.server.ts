@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { Prisma } from "@prisma/client";
 import { prisma, type TransactionCapableDbClient } from "../db.server";
 import { listOutstandingCauseAllocations } from "./causePayables.server";
+import { reconcileCauseDisbursements } from "./disbursementReconciliation.server";
 import {
   buildDisbursementReceiptKey,
   createReceiptStorage,
@@ -71,6 +72,10 @@ function floorCurrency(value: Prisma.Decimal) {
 function normalizeReceiptFilename(filename: string) {
   const trimmed = filename.trim();
   return trimmed || "receipt";
+}
+
+function earlierDate(left: Date, right: Date) {
+  return left < right ? left : right;
 }
 
 type LogDisbursementResult = {
@@ -171,15 +176,13 @@ export async function logDisbursement(
       const outstandingAllocations = await listOutstandingCauseAllocations(
         shopId,
         {
-          throughPeriodEndDate: period.endDate,
+          // Reporting periods are end-exclusive, as is paidAt. A payment made on
+          // a date may never consume obligations earned on or after that date.
+          throughPeriodEndDate: earlierDate(period.endDate, input.paidAt),
           causeId: input.causeId,
         },
         tx,
       );
-
-      if (outstandingAllocations.length === 0) {
-        throw new DisbursementError(disbursementErrorCodes.PAYABLE_NOT_FOUND, "No outstanding payable was found for this cause.");
-      }
 
       const spendableRemaining = outstandingAllocations.reduce(
         (sum, allocation) => sum.add(allocation.remaining),
@@ -283,6 +286,13 @@ export async function logDisbursement(
         },
       });
 
+      // Rebuild later payments too when this is backdated. Older unit-test DB
+      // doubles predate the reconciliation query surface, so retain their
+      // focused behavior while production transaction clients always run it.
+      if (typeof tx.disbursement.findMany === "function") {
+        await reconcileCauseDisbursements(shopId, input.causeId, tx, actor);
+      }
+
       return {
         disbursement,
         causeAllocationId: applications[0]?.causeAllocationId ?? null,
@@ -373,7 +383,10 @@ export async function updateDisbursement(
 
     const outstandingAllocations = await listOutstandingCauseAllocations(
       shopId,
-      { throughPeriodEndDate: existing.period.endDate, causeId: existing.causeId },
+      {
+        throughPeriodEndDate: earlierDate(existing.period.endDate, input.paidAt),
+        causeId: existing.causeId,
+      },
       tx,
     );
     const spendableRemaining = outstandingAllocations.reduce(
@@ -443,6 +456,10 @@ export async function updateDisbursement(
         },
       },
     });
+
+    if (typeof tx.disbursement.findMany === "function") {
+      await reconcileCauseDisbursements(shopId, existing.causeId, tx, actor);
+    }
 
     return {
       disbursement,

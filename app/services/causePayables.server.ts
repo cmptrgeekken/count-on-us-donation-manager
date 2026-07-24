@@ -22,6 +22,8 @@ export type OutstandingCauseAllocation = {
   is501c3: boolean;
   allocated: Prisma.Decimal;
   disbursed: Prisma.Decimal;
+  adjustments: Prisma.Decimal;
+  adjustedOutstanding: Prisma.Decimal;
   remaining: Prisma.Decimal;
 };
 
@@ -53,6 +55,10 @@ export async function listOutstandingCauseAllocations(
       is501c3: true,
       allocated: true,
       disbursed: true,
+      adjustments: {
+        where: { shopId },
+        select: { amount: true },
+      },
       period: {
         select: {
           startDate: true,
@@ -73,7 +79,20 @@ export async function listOutstandingCauseAllocations(
       is501c3: allocation.is501c3,
       allocated: allocation.allocated,
       disbursed: allocation.disbursed,
-      remaining: floorCurrency(allocation.allocated.sub(allocation.disbursed)),
+      adjustments: (allocation.adjustments ?? []).reduce(
+        (sum, adjustment) => sum.add(adjustment.amount),
+        ZERO,
+      ),
+      adjustedOutstanding: floorCurrency(
+        allocation.allocated
+          .sub((allocation.adjustments ?? []).reduce((sum, adjustment) => sum.add(adjustment.amount), ZERO))
+          .sub(allocation.disbursed),
+      ),
+      remaining: floorCurrency(
+        allocation.allocated
+          .sub((allocation.adjustments ?? []).reduce((sum, adjustment) => sum.add(adjustment.amount), ZERO))
+          .sub(allocation.disbursed),
+      ),
     }))
     .filter((allocation) => allocation.remaining.greaterThan(ZERO));
 }

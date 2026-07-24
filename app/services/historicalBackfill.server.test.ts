@@ -944,17 +944,17 @@ describe("historical backfill rebuild", () => {
       before: expect.objectContaining({
         causeAllocationTotal: "25",
         artistPayoutTotal: "5",
-        donationPool: "90",
+        donationPool: "25",
       }),
       after: expect.objectContaining({
-        causeAllocationTotal: "100",
+        causeAllocationTotal: "90",
         artistPayoutTotal: "15",
         donationPool: "90",
       }),
       delta: expect.objectContaining({
-        causeAllocationTotal: "75",
+        causeAllocationTotal: "65",
         artistPayoutTotal: "10",
-        donationPool: "0",
+        donationPool: "65",
       }),
     });
     expect(db.causeAllocation.updateMany).toHaveBeenCalledWith({

@@ -954,7 +954,10 @@ Returns full period detail including business expense summary and track 1/track 
     "status": "open",
     "track1": {
       "cumulativeNetContribution": "4821.50",
+      "availableDonationCapacity": "3410.00",
+      "requestedDonation": "3200.00",
       "donationPool": "3200.00",
+      "retainedByShop": "210.00",
       "shopifyCharges": "209.50",
       "taxReserve": "412.00",
       "causeAllocations": [...]

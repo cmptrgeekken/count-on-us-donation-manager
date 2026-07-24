@@ -15,7 +15,7 @@ const TENANT_SCOPED_MODELS = [
   "OrderRecord", "OrderLifecycle", "OrderRefundEvent", "OrderRefundLine", "OrderAdjustmentEvent",
   "OrderSnapshot", "OrderSnapshotLine",
   "LineCauseAllocation", "LineArtistAllocation", "Adjustment",
-  "ReportingPeriod", "CauseAllocation", "ArtistAllocation", "Disbursement",
+  "ReportingPeriod", "CauseAllocation", "CauseAllocationAdjustment", "ArtistAllocation", "Disbursement",
   "ArtistPayment", "ArtistPaymentApplication",
   "TaxTrueUp", "ShopifyChargeTransaction",
   "BusinessExpense", "TaxOffsetCache",
